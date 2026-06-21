@@ -82,6 +82,7 @@
 - 安裝相依：`pnpm install`
 - 啟動開發：`pnpm dev`
 - 建置：`pnpm build`
+- 正式啟動：`pnpm start`（production，需先 build）
 - 測試：`pnpm test`（⚠️ 測試框架於 T51 才建置，目前**尚無 test script**；屆時建議用 vitest。報價引擎等核心邏輯必須有單元測試）
 - Lint／格式化：`pnpm lint`（已可用）
 - 加 shadcn/ui 元件：`pnpm dlx shadcn@latest add <component>`
