@@ -182,6 +182,15 @@
 
 ---
 
+## 11.6 Supabase 雲端專案對接（環境變數）
+
+- ✅ **Supabase 雲端專案已開通**，`NEXT_PUBLIC_SUPABASE_URL`／`NEXT_PUBLIC_SUPABASE_ANON_KEY` 已由使用者本人寫入專案根目錄 `.env.local`（**Supabase 環境變數已安全配置完畢**）。
+- `.env.local` 已確認列在 `.gitignore`（`.env*` 規則涵蓋），不會被 Git 追蹤或推上雲端。
+- 依紅線規範，`.env*` 一律對 Claude Code 唯讀（`protect-env` hook 硬擋讀寫），本檔僅記錄狀態，不記錄金鑰實際值。
+- ⏭️ 下一步可開始接 Supabase client（`src/lib/supabase`）、`supabase gen types typescript`，銜接 T03 建表進度。
+
+---
+
 ## 12. M-1 規劃成果與新決策（incantochen）
 
 ### 12.1 品牌與定位（已定）
