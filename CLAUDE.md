@@ -18,6 +18,7 @@
 > ✅ **T05 Supabase Auth（Email OTP＋magic link）本機設定已完成（2026-06-25）**：`supabase/config.toml` 補上 `additional_redirect_urls` 萬用路徑、`[auth.email.template.magic_link]`；新增 `supabase/templates/magic_link.html`（顯示 6 碼 OTP＋指向自家 `/auth/confirm` 的連結，而非 Supabase 預設驗證端點）。本機 `signInWithOtp`→Mailpit 收信→`verify` 端到端測試通過。**production 設定待使用者手動到 Supabase Dashboard 配置**（見 `docs/work-log.md` T05 待辦），`/auth/confirm` 頁面本身留給 T06／T07。
 > ✅ **T15 戒指商品詳情頁骨架已完成（2026-06-25）**：`src/app/products/[slug]/page.tsx`（Server Component，從 Supabase 撈商品＋三層白名單並靜態呈現，找不到走 `notFound()`）；新增共用 `SiteHeader`／`SiteFooter` 並接進 `src/app/layout.tsx`。**範圍刻意不含**：配置器互動／即時換圖／即時計價／加入購物袋邏輯（T16–T20）、「關於這件作品」與「猜你喜歡」區塊（schema 無描述欄位、seed 僅 1 款商品，故未做）。Playwright 視覺驗證通過（正常 slug 顯示完整骨架、假 slug 正確 404、無 console error）。
 > ✅ **T16 配置器互動化已完成（2026-06-25）**：新增 client component `src/components/product-configurator.tsx`（chip 點擊切換選取＋數量 stepper），從 `page.tsx` 抽出。**價格刻意不隨選取連動**（留給 T18 報價引擎）。Playwright 點擊驗證通過（選中樣式正確切換、數量正確增減、無 console error）。
+> ✅ **T18 報價引擎（即時計價）已完成（2026-06-25）**：`product-configurator.tsx` 擴充，依 `docs/data-model.md` 公式 `unit_price = base_price + Σ(選中 price_delta)`、`小計 = unit_price × quantity` 即時計算；補回 wireframe 的「加價明細 ▾」展開面板（T15 當時刻意跳過，現在有真互動了補上）。Playwright 驗證：換選項後單價即時更新（25,000→29,000）、明細面板小計正確（29,000×2=58,000）、無 console error。T17（即時換圖）因依賴 T55/T56（3D 素材，使用者決定先擱置）暫緩。
 > 📌 **流程變更（M1 起）**：改用 feature branch＋PR，不再直接 push master；PR 連結給使用者看過、回覆「沒問題」後才 merge。
 
 ---
@@ -27,7 +28,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1 規劃**全數完成**；M0 全數完成（T01–T05、T43、T46、T52）。M1 進行中：T15（PDP 骨架）＋T16（配置器互動）完成。下一步：**T17 選項即時換圖**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1 規劃**全數完成**；M0 全數完成（T01–T05、T43、T46、T52）。M1 進行中：T15（PDP 骨架）＋T16（配置器互動）＋T18（報價引擎）完成。**T17 暫緩**（依賴 T55/T56 3D 素材，使用者決定先擱置，圖片用佔位圖頂著）。下一步：**T19/T20 加入購物車（寫快照）**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 

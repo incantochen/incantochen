@@ -106,18 +106,45 @@
 
 ---
 
-### 下次作業
-
 #### #T17 / M1 配置器 / 選項即時換圖
 **說明**：選項變動時主圖即時切換（搭配 T55 疊圖機制，T56 3D 素材未完成前先用現有 placeholder 邏輯延伸）。
 
 | 項目 | 內容 |
 |------|------|
-| 狀態 | ⬜ 未開始 |
-| 更新描述 | — |
-| 待辦 | 待 T56 素材或至少有暫定圖檔策略後再細化 |
+| 狀態 | ⏸️ 暫緩 |
+| 更新描述 | 與使用者討論過是否拆獨立小專案處理圖片素材（技術研究/規劃/執行），結論：維持 T55/T56 的 3D Blender 路線；也評估過用 AI 圖片生成模型（DALL-E／Imagen 等）代替，判定不適合——生成式模型無法做到「同一戒指模型、精準替換材質、像素級對齊」，AI 圖片生成較適合輔助生情境照（配戴/生活照），不適合主圖配置器。T17 真正依賴 T55/T56，兩者都還沒開始，先擱置，PDP 用佔位圖頂著。 |
+| 待辦 | 待 T56（3D 素材）／T55（疊圖機制）任一方有進度後再細化 |
 | 依賴 | T16 ✅、T55（尚未開始）、T56（尚未開始） |
 | 注意 | MVP 不做 3D 即時預覽；本任務範圍是「依選項換靜態合成圖」，非 3D 渲染 |
+
+---
+
+#### #T18 / M1 報價 / 報價引擎（即時計價）
+**說明**：把 T16 的選取狀態接上即時計價公式，price 隨點擊/數量變動。T17 暫緩後改做不依賴圖片素材的這個任務。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | `src/components/product-configurator.tsx`（修改）、`src/app/products/[slug]/page.tsx`（修改） |
+| 更新描述 | 1. `ConfiguratorOption.values` 加上 `priceDelta` 欄位；新增 `basePrice` prop。2. 公式依 `docs/data-model.md` §4.2 既有契約：`unit_price = base_price + Σ(已選 price_delta)`；`小計 = unit_price × quantity`。3. 把原本在 `page.tsx` 的靜態價格顯示移進 `ProductConfigurator`（因為要跟 `selected`/`quantity` state 連動，server component 無法持有這個 state）。4. 補回 wireframe 原有的「加價明細 ▾」展開面板（T15 時刻意跳過，因為當時沒有真互動可以撐這個面板；現在 T16/T18 都做完了，補上不算超範圍）。5. Playwright 驗證：選紅寶石(+3000)/18K白金(+1000)後單價由 25,000 即時變 29,000；數量改 2 後明細面板小計正確顯示 58,000（29,000×2）；無 console error。 |
+| 待辦 | （無，已完成）。伺服器端驗價（T41）仍是獨立任務——前端這裡的計算只供顯示，下單時一律後端依白名單重算。 |
+| 驗收 | `pnpm lint`／`tsc --noEmit` 通過；Playwright 截圖確認價格與明細數字正確。 |
+| 依賴 | T16 ✅ |
+
+---
+
+### 下次作業
+
+#### #T19 / M1 購物車 / 規格＋金額快照結構
+**說明**：把 T18 算出來的選取狀態與單價整理成 `config_snapshot`(JSON) 與 `unit_price_snapshot`，為 T20 加入購物車寫入做準備。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ⬜ 未開始 |
+| 更新描述 | — |
+| 待辦 | 1. 定義 `config_snapshot` 的 JSON 形狀（沿用 `docs/data-model.md` §4.2 範例：product_id／base_price／selections［含 option_type_code/option_value_code/label/price_delta］／line_unit_price）<br>2. 從 `ProductConfigurator` 現有的 `selected` state 組出這個結構 |
+| 依賴 | T18 ✅ |
+| 注意 | 快照下單當下釘住，後台日後調價不得影響已成立訂單——這個結構本身不複雜，但要對齊 schema 既有契約，不要自己另創格式 |
 
 ---
 

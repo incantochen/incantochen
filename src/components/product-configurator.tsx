@@ -5,7 +5,7 @@ import { useState } from "react"
 export type ConfiguratorOption = {
   id: string
   name: string
-  values: { id: string; label: string; isDefault: boolean }[]
+  values: { id: string; label: string; isDefault: boolean; priceDelta: number }[]
 }
 
 function defaultSelection(options: ConfiguratorOption[]) {
@@ -19,12 +19,66 @@ function defaultSelection(options: ConfiguratorOption[]) {
   return initial
 }
 
-export function ProductConfigurator({ options }: { options: ConfiguratorOption[] }) {
+export function ProductConfigurator({
+  basePrice,
+  options,
+}: {
+  basePrice: number
+  options: ConfiguratorOption[]
+}) {
   const [selected, setSelected] = useState(() => defaultSelection(options))
   const [quantity, setQuantity] = useState(1)
+  const [showBreakdown, setShowBreakdown] = useState(false)
+
+  const selectedValues = options.map((option) => {
+    const value = option.values.find((v) => v.id === selected[option.id])
+    return { option, value }
+  })
+  const unitPrice =
+    basePrice + selectedValues.reduce((sum, { value }) => sum + (value?.priceDelta ?? 0), 0)
+  const lineTotal = unitPrice * quantity
 
   return (
     <div>
+      <div className="flex items-baseline gap-3">
+        <div className="text-3xl font-medium text-primary">NT$ {unitPrice.toLocaleString()}</div>
+        <span className="text-sm text-ash">底價 NT$ {basePrice.toLocaleString()} 起</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => setShowBreakdown((v) => !v)}
+        className="mt-1 text-sm text-primary underline underline-offset-2"
+      >
+        加價明細 {showBreakdown ? "▴" : "▾"}
+      </button>
+      {showBreakdown && (
+        <div className="mt-2 rounded-lg border border-border px-3.5 py-3 text-sm">
+          <div className="flex justify-between py-0.5">
+            <span>底價</span>
+            <span>NT$ {basePrice.toLocaleString()}</span>
+          </div>
+          {selectedValues.map(({ option, value }) => (
+            <div key={option.id} className="flex justify-between py-0.5">
+              <span>
+                {option.name}：{value?.label}
+              </span>
+              <span>{value?.priceDelta ? `+ NT$ ${value.priceDelta.toLocaleString()}` : "—"}</span>
+            </div>
+          ))}
+          <div className="flex justify-between py-0.5">
+            <span>數量 × {quantity}</span>
+            <span>—</span>
+          </div>
+          <hr className="my-2 h-px border-0 bg-secondary-400/50" />
+          <div className="flex justify-between font-medium">
+            <span>小計</span>
+            <span>NT$ {lineTotal.toLocaleString()}</span>
+          </div>
+        </div>
+      )}
+
+      <hr className="my-6 h-px border-0 bg-secondary-400/50" />
+
       {options.map((option, index) => (
         <div key={option.id} className="py-4">
           <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">

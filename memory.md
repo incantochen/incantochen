@@ -33,7 +33,9 @@
 - ✅ **M0 全數完成；M1 開工，T15 戒指商品詳情頁骨架完成**（2026-06-25，先進 plan mode 核准後執行）：`src/app/products/[slug]/page.tsx`（Server Component，撈商品＋三層白名單靜態呈現）＋共用 `SiteHeader`／`SiteFooter`。wireframe 原訂位置 `docs/wireframe/` 實際不存在，改用備份資料夾的 HTML demo（`backup/_backup_docs_20260624_235506/proj-docs/Demo/Demo_0623/product.html`）當版面參考。刻意不做：配置器互動（T16-T20 範圍）、「關於這件作品」與「猜你喜歡」（schema 無描述欄位、seed 僅 1 款商品，缺真實內容不杜撰）。Playwright 截圖驗證通過（正常與 404 兩種情境）。
 - ✅ **T16 配置器互動化完成**（2026-06-25）：新增 client component `src/components/product-configurator.tsx`（chip 點擊切換選取＋數量 stepper，狀態管理 `useState`）。價格刻意不隨選取連動，留給 T18。Playwright 點擊驗證通過。
 - 📌 **流程變更（M1 起）**：改用 feature branch＋PR，不再直接 push master；PR 連結給使用者看過、回覆「沒問題」後才 merge（細節見記憶 `git-workflow-incantochen-pr-review`）。
-- ⏭️ **下一步：T17 選項即時換圖。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
+- ✅ **T18 報價引擎完成**（2026-06-25）：`product-configurator.tsx` 擴充即時計價（`unit_price = base_price + Σ price_delta`、`小計 = unit_price × quantity`），補回「加價明細」展開面板。Playwright 驗證價格即時正確更新。
+- 📌 **T17（即時換圖）暫緩**：依賴 T55/T56（3D 素材製作），使用者決定圖片處理維持 Blender/3D 路線（評估過 AI 圖片生成模型如 DALL-E/Imagen，判定不適合——無法做到同一戒指模型精準替換材質），先擱置，圖片用佔位圖頂著繼續開發其他骨架。
+- ⏭️ **下一步：T19/T20 加入購物車（寫快照）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---
 

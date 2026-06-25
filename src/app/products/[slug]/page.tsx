@@ -49,12 +49,6 @@ export default async function ProductDetailPage({
 
   const options = [...product.product_option].sort((a, b) => a.sort_order - b.sort_order)
 
-  const defaultPriceDelta = options.reduce((sum, option) => {
-    const defaultValue = option.product_option_value.find((value) => value.is_default)
-    return sum + (defaultValue?.price_delta ?? 0)
-  }, 0)
-  const startingPrice = product.base_price + defaultPriceDelta
-
   const categoryLabel = CATEGORY_LABELS[product.category]
 
   const configuratorOptions: ConfiguratorOption[] = options.map((option) => ({
@@ -66,6 +60,7 @@ export default async function ProductDetailPage({
         id: value.id,
         label: value.option_value.label,
         isDefault: value.is_default,
+        priceDelta: value.price_delta,
       })),
   }))
 
@@ -113,16 +108,9 @@ export default async function ProductDetailPage({
           </div>
           <h1 className="mt-2 font-heading text-[34px] text-ink">{product.name}</h1>
 
-          <div className="mt-4 flex items-baseline gap-3">
-            <div className="text-3xl font-medium text-primary">
-              NT$ {startingPrice.toLocaleString()}
-            </div>
-            <span className="text-sm text-ash">底價 NT$ {product.base_price.toLocaleString()} 起</span>
+          <div className="mt-4">
+            <ProductConfigurator basePrice={product.base_price} options={configuratorOptions} />
           </div>
-
-          <hr className="my-6 h-px border-0 bg-secondary-400/50" />
-
-          <ProductConfigurator options={configuratorOptions} />
         </div>
       </div>
     </div>
