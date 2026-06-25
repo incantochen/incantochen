@@ -17,6 +17,7 @@
 > 📌 **流程變更（M1 起）**：改用 feature branch＋PR，不再直接 push master；PR 連結給使用者看過、回覆「沒問題」後才 merge。
 > ✅ **T19/T20/T21 購物車（寫快照／讀取／改數量／刪除）已完成**：**關鍵架構**——`cart`／`cart_item` 的 RLS 對 anon/authenticated **讀寫全拒**，一律走 `src/lib/supabase/service-role.ts`（`import "server-only"` 防呆）。寫入前伺服器端用白名單重算 `unit_price_snapshot`／`config_snapshot`，**不採信前端價格**。改數量／刪除前先驗證 `cart_item` 所屬 `cart.guest_token` 與當前 cookie 一致（擁有權檢查，防亂猜 id 動到別人購物車）。訪客身份用 `guest_token` httpOnly cookie。新增環境變數 `SUPABASE_SERVICE_ROLE_KEY`（使用者本人填入本機＋Vercel，不可加 `NEXT_PUBLIC_` 前綴）。
 > ✅ **T06/T07 登入入口＋路由保護已完成（2026-06-25）**：`/login`（Email OTP 主＋一鍵重寄）、`/auth/confirm`（magic link 落地頁，**按鈕才消耗 token**，不在 `useEffect` 自動驗證）、`src/proxy.ts`（Next 16 慣例，取代 `middleware.ts`，必須**named export `proxy`** 而非 `middleware`，每請求刷新 session）、`src/lib/auth/require-user.ts`（`requireUser()` 共用保護機制，`/account` 為最小驗證用頁面，T08 會擴充非丟棄）。**關鍵發現**：①`member` 表只有 SELECT policy、無 INSERT policy，建會員 row 一樣要走 service role（`find-or-create-member.ts`）。②**雲端 production 實際 OTP 碼是 8 位數，不是本機 config.toml 設定的 6 位**——原本寫死 `/^\d{6}$/` 會擋掉真實使用者的驗證碼，已改成不假設固定長度。Playwright＋`admin.generateLink`（不寄真信，取得測試用 OTP/token_hash）端到端驗證：登入→`/account`顯示歡迎訊息→登出→重訪被導回 `/login`，雲端 `member` 表確認寫入，測試帳號已清除。
+> ✅ **T24 ECPay sandbox 設定已完成（2026-06-25）**：安裝官方 [ECPay-API-Skill](https://github.com/ECPay/ECPay-API-Skill) 到 `.claude/skills/ecpay`（綠界官方維護，AI 助手用知識庫，問 ECPay 串接問題會自動查到正確 API 規格，避免憑記憶亂猜）。**CheckMacValue 簽章演算法**已實作並對官方 8 組測試向量全數比對通過（金流 SHA256／物流 MD5 用不同金鑤跟演算法，不可混用）。**sandbox 連線測試成功**：用測試帳號 `MerchantID=3002607`（HashKey/HashIV 見 skill 內 `test-vectors/checkmacvalue.json`，官方公開非機密）對 `https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5` 送出真實請求，拿到正確的「選擇支付方式」付款頁（非錯誤頁）。**重要踩坑**：透過 Bash shell 命令列把中文字參數傳給 `curl` 會在編碼上失真，導致 CheckMacValue 核對失敗（純 ASCII 沒事）——改用 Node 原生 `fetch()`/`URLSearchParams` 直接送出（不透過 shell）就正常，**T25 實作真正串接時必須走這個路線，不要 shell out**。此環境對 `payment-stage.ecpay.com.tw`／`raw.githubusercontent.com` 走 IPv6 會被重置連線，要強制 IPv4（curl 加 `-4`／Node 設 `NODE_OPTIONS=--dns-result-order=ipv4first`）。範圍刻意不含：T23 建單／T25 付款頁整合／T26 回拋處理／T48 黑貓宅配（依賴 T22 結帳送出邏輯，留待之後個別開工）。
 
 ---
 
@@ -25,7 +26,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21 完成（登入＋路由保護→PDP→配置器→報價→購物車）。**T17 暫緩**（依賴 T55/T56 3D 素材，使用者決定先擱置，圖片用佔位圖頂著）。下一步：**T22 結帳頁（收件＋配送，可接「結帳即會員」了）**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T24 完成（登入＋路由保護→PDP→配置器→報價→購物車→ECPay sandbox）。T22 結帳頁 PR 待審。**T17 暫緩**（依賴 T55/T56 3D 素材，使用者決定先擱置，圖片用佔位圖頂著）。下一步：**T48 黑貓宅配串接 或 T57 客製例外同意**（皆為 T23 建單前置）。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 
