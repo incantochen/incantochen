@@ -12,10 +12,11 @@
 > ✅ **shadcn/ui 已初始化**（`components.json`、`src/components/ui/button.tsx`、`src/lib/utils.ts`）；**品牌色票**（Primary Emerald `#063B2F`、Secondary Gold `#C5A059`、中性色階）已寫入 `globals.css` 的 `@theme`，與 `docs/brand-guide.md` 一致；**雙軌字體已對接**：標題 `--font-head`＝EB Garamond＋Noto Serif TC，內文 `--font-body`＝Hanken Grotesk＋Noto Sans TC（`src/app/layout.tsx` 用 `next/font/google` 載入，已驗證字重支援）。
 > ⚠️ **下列技術棧雖已鎖定，但尚未安裝**：Supabase（client 與 CLI）、Zod、Resend、ECPay 串接、測試框架。動到它們時先安裝再使用，不要假設已存在、也不要憑空 import。
 > ✅ **資料庫 schema 已套用至雲端 production**（project-ref `wdmigbqdhernmrfpzzxk`）：`0001`（13 張表）＋`0002`（11 條 RLS policy）已 `db push`、雲端驗收通過；型別已生於 `src/types/database.types.ts`；commit `c124482`。後續改 schema 一律**新增** migration（已套用的不可改）。
-> ✅ **T43 dev seed 已完成並通過本機驗收（2026-06-25）**：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單）；`supabase db reset --local` 套用＋逐條查詢驗收全數通過（見 §7）。修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／verify-seed.sql 已移除該欄位引用。
+> ✅ **T43 dev seed 已完成，本機＋雲端 production 皆已套用（2026-06-25）**：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單）；`supabase db reset --local` 套用＋逐條查詢驗收全數通過（見 §7）。修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／verify-seed.sql 已移除該欄位引用。⚠️ **重要環境提醒**：`.env.local` 的 `NEXT_PUBLIC_SUPABASE_URL` 指向**雲端 production**（`wdmigbqdhernmrfpzzxk`），不是本機 `127.0.0.1:54321`——`pnpm dev` 實際打的是雲端資料庫，本機 `supabase db reset --local` 的資料只影響本機 stack，看不到。因此 seed 也已用 `supabase db query --linked --file supabase/seed.sql` 額外套用到雲端（seed.sql 本身用固定 UUID＋`ON CONFLICT DO NOTHING`，對任一端重複執行皆安全）。之後若改 seed 或加測試資料，兩邊都要各跑一次才會在 `pnpm dev` 看到。
 > ✅ **T04 部署到 Vercel＋CI 已完成（2026-06-25）**：repo 已 push 至 GitHub（`github.com/incantochen/incantochen`）並透過 Vercel GitHub App 連接專案 `jewelry-shop`；Supabase 環境變數已於 Vercel Dashboard 設定（Production/Preview/Development）；首次部署成功，production 網址 `https://jewelry-shop-delta.vercel.app`；已用空 commit push 驗證 CI 自動部署生效（push 後自動觸發新 production 部署）。
 > ✅ **T52 Staging 環境已完成（2026-06-25）**：`staging` 分支 push 後 Vercel 自動產生 Preview 部署（非 Production），穩定分支別名 `https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`，供日後 ECPay sandbox 等金流測試使用。
 > ✅ **T05 Supabase Auth（Email OTP＋magic link）本機設定已完成（2026-06-25）**：`supabase/config.toml` 補上 `additional_redirect_urls` 萬用路徑、`[auth.email.template.magic_link]`；新增 `supabase/templates/magic_link.html`（顯示 6 碼 OTP＋指向自家 `/auth/confirm` 的連結，而非 Supabase 預設驗證端點）。本機 `signInWithOtp`→Mailpit 收信→`verify` 端到端測試通過。**production 設定待使用者手動到 Supabase Dashboard 配置**（見 `docs/work-log.md` T05 待辦），`/auth/confirm` 頁面本身留給 T06／T07。
+> ✅ **T15 戒指商品詳情頁骨架已完成（2026-06-25）**：`src/app/products/[slug]/page.tsx`（Server Component，從 Supabase 撈商品＋三層白名單並靜態呈現，找不到走 `notFound()`）；新增共用 `SiteHeader`／`SiteFooter` 並接進 `src/app/layout.tsx`。**範圍刻意不含**：配置器互動／即時換圖／即時計價／加入購物袋邏輯（T16–T20）、「關於這件作品」與「猜你喜歡」區塊（schema 無描述欄位、seed 僅 1 款商品，故未做）。Playwright 視覺驗證通過（正常 slug 顯示完整骨架、假 slug 正確 404、無 console error）。
 
 ---
 
@@ -24,7 +25,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1 規劃**全數完成**。M0 資料層 T03＋T46＋T43 完成；T04 部署＋CI 完成。下一步：**T15 戒指商品詳情頁**（T05 會員登入可視排程彈性插入，見 `docs/work-log.md`）。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1 規劃**全數完成**；M0 全數完成（T01–T05、T43、T46、T52）。M1 已開工：T15 戒指商品詳情頁骨架完成。下一步：**T16 配置器 UI（互動）**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 
@@ -70,8 +71,9 @@
 > 採 `--src-dir`，程式碼放 `src/` 底下。
 > **以下為目標結構：目前只有 `src/app` 存在，其餘目錄由 Claude Code 做到對應任務時才建立。請依 repo 實際情況修正本節。**
 
-- `src/app` — 頁面與 route（含 API route handlers）
+- `src/app` — 頁面與 route（含 API route handlers）；✅ `products/[slug]/page.tsx`（T15，PDP 骨架）
 - `src/proxy.ts` — 路由攔截／授權進入點（Next.js 16，取代舊 `middleware.js`）
+- `src/components` — ✅ `site-header.tsx`／`site-footer.tsx`（T15，全站共用，已接進 `src/app/layout.tsx`）
 - `src/components/ui` — shadcn/ui 元件（✅ 已初始化，目前有 `button.tsx`；新增用 `pnpm dlx shadcn@latest add <component>`）
 - `src/lib` — 工具函式、Supabase client、報價引擎、ECPay 串接（✅ `utils.ts` 已建立，shadcn 用）
 - `src/lib/quote` — 報價引擎（選配加價計算），**伺服器端為準**

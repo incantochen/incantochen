@@ -77,18 +77,32 @@
 
 ---
 
+#### #T15 / M1 前台 / 戒指商品詳情頁（骨架）
+**說明**：以種子資料開發戒指商品詳情頁（PDP）骨架，路由 `/products/[slug]`，為配置器（T16）做地基。涉及多檔案＋設計決策，先進 plan mode 核准後執行。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | `src/app/products/[slug]/page.tsx`（新增）、`src/components/site-header.tsx`（新增）、`src/components/site-footer.tsx`（新增）、`src/app/layout.tsx`（修改，接入 header/footer） |
+| 更新描述 | 1. **Wireframe 落差**：`docs/wireframe/` 實際不存在（memory.md 記載有誤），改用使用者指出的備份 HTML demo `backup/_backup_docs_20260624_235506/proj-docs/Demo/Demo_0623/product.html` 當版面參考。2. 該 demo 是「完工狀態」（含配置器互動／即時換圖／即時計價／加入購物袋），T15 範圍縮小為骨架：麵包屑、圖片佔位（lucide `Gem` icon）、商品名稱／類別／預設選配價格、三組選項以**靜態 chip** 呈現（標出 `is_default`，無 `onClick`）、交期告知（`XX` 佔位，天數未定為已知待辦）、靜態「加入購物袋」按鈕。3. **刻意省略**「關於這件作品／材質與保養」「猜你喜歡」——`product` 表無描述欄位、seed 僅 1 款商品，不杜撰假內容/假商品卡。4. 資料撈取：Server Component 用 `createClient()`＋ Supabase 巢狀 `select`（`product_option → option_type` ＋ `product_option_value → option_value`）一次撈三層白名單；找不到商品走 `notFound()`。5. Tailwind token 與 wireframe CSS 變數高度重合（`--emerald`→`primary`、`--gold`→`secondary-400`、`paper/cloud/stone/ash/ink` 同名），幾乎無需另定顏色。6. 新增 `SiteHeader`／`SiteFooter` 共用元件接入 root layout，避免之後每頁重複搭（純靜態，無購物車數量／登入狀態，留給 T07/T08/T20/T21 接資料）。7. **環境問題排查**：`pnpm dev` 開發時 PDP 一直 404，原因是 `.env.local` 的 `NEXT_PUBLIC_SUPABASE_URL` 指向**雲端 production**而非本機，T43 seed 當時只下在本機 `supabase db reset --local`，雲端 `product` 表是空的；已用 `supabase db query --linked --file supabase/seed.sql` 把同一份 seed（固定 UUID＋`ON CONFLICT DO NOTHING`，重複執行安全）也套到雲端，問題排除。8. 用 Playwright（`npx playwright install chromium`，無 `chromium-cli` 故用 `_electron` 模式改寫的純 `chromium.launch()` 腳本）截圖驗證：正常 slug 顯示完整骨架且樣式正確、假 slug 正確回 404、無 console error。9. 修正一處小 bug：類別 eyebrow 標籤原寫 `categoryLabel.toUpperCase()`（中文呼叫 toUpperCase 無效，顯示「戒指 · 戒指」），改用 `product.category`（英文 code）+ CSS `uppercase` class，正確顯示「RING · 戒指」。 |
+| 待辦 | （無，已完成）。之後若要再加測試/示範資料，記得本機＋雲端都要各跑一次 seed（見 CLAUDE.md 頂部環境提醒）。 |
+| 驗收 | `pnpm lint` 通過、`tsc --noEmit` 無型別錯誤；Playwright 截圖確認 `/products/emerald-solitaire-ring` 正常渲染、`/products/not-a-real-slug` 回 404。 |
+| 依賴 | T43 ✅、T39 ✅（基礎部分） |
+
+---
+
 ### 下次作業
 
-#### #T15 / M1 前台 / 戒指商品詳情頁
-**說明**：以種子資料開發戒指商品詳情頁（PDP），路由 `/products/[slug]`，為配置器（T16）做地基。
+#### #T16 / M1 配置器 / 配置器 UI（戒指選項）
+**說明**：把 T15 的靜態選項 chip 變成可互動配置器——點擊切換選取、狀態管理。
 
 | 項目 | 內容 |
 |------|------|
 | 狀態 | ⬜ 未開始 |
 | 更新描述 | — |
-| 待辦 | 1. 先讀 `docs/brand-guide.md`、`docs/user-flow.md`、`docs/wireframe/` 對應頁面<br>2. 建立 `src/app/products/[slug]/page.tsx`，從 Supabase 抓商品資料（含選項白名單）<br>3. 呈現商品名稱、底價、主圖佔位（3D 素材 T56 尚未完成，先用 placeholder）<br>4. 確認品牌色票與字體已正確套用（globals.css @theme ✅）<br>5. 跑 lint，pnpm dev 確認無錯誤 |
-| 依賴 | T43 ✅（seed 驗收後）、T39 進行中（UI kit 樣式）、T02 ✅（Supabase client） |
-| 注意 | PDP 路由為 `/products/[slug]`（IA 定案）；配置器內嵌 PDP，無獨立 config route；商品圖 T56 未完成前用佔位圖，不阻塞開發 |
+| 待辦 | 1. 把 `src/app/products/[slug]/page.tsx` 的選項區塊抽成 client component（需要 `useState` 管理選取狀態）<br>2. chip 點擊切換選取樣式，三組選項各自獨立狀態<br>3. 數量 stepper（wireframe 已有版型參考）<br>4. 暫不含即時換圖（T17）與即時計價（T18），先把互動骨架打通 |
+| 依賴 | T15 ✅ |
+| 注意 | 白名單驗證仍以伺服器資料為準，前端互動只是 UI 狀態，不得讓使用者選到白名單外的值 |
 
 ---
 

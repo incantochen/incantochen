@@ -26,11 +26,12 @@
 - ✅ **M0 環境與骨架前置完成**（見 §11）：開發環境裝好、Next.js 16 專案骨架建立、`CLAUDE.md` 與 6 個 hooks 落地、首次 git commit 完成。
 - ✅ **DB migration 工具定案：Supabase CLI**（規範見 `docs/migration-guide.md`）——T03 前置已解。
 - ✅ **M0 資料層完成並套用雲端**：T03 建表＋T46 RLS 已 `db push` 至雲端 production（project-ref `wdmigbqdhernmrfpzzxk`，13 表＋11 policy，雲端驗收通過）；型別已生於 `src/types/database.types.ts`；commit `c124482`。欄位級規格見 `docs/data-model.md`。
-- ✅ **T43 dev seed 已完成並通過本機驗收**（2026-06-25）：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單），`supabase db reset --local` 套用＋驗收查詢全數通過。過程中修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／docs/verify-seed.sql 已移除該欄位引用。
+- ✅ **T43 dev seed 已完成，本機＋雲端 production 皆已套用**（2026-06-25）：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單），`supabase db reset --local` 套用＋驗收查詢全數通過；另用 `supabase db query --linked --file` 套用到雲端 production（因為 `.env.local` 接的是雲端，`pnpm dev` 看不到本機 seed）。過程中修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／docs/verify-seed.sql 已移除該欄位引用。⚠️ **環境提醒**：本機與雲端是兩份獨立資料，之後改 seed 兩邊都要各跑一次。
 - ✅ **T04 部署到 Vercel＋CI 已完成**（2026-06-25）：repo push 至 GitHub（`github.com/incantochen/incantochen`），透過 Vercel GitHub App 連接專案 `jewelry-shop`，env vars 已設定，首次部署成功且驗證 push 自動觸發部署（CI）生效。production：`https://jewelry-shop-delta.vercel.app`。
 - ✅ **T52 Staging 環境已完成**（2026-06-25）：`staging` 分支 push 後自動產生 Vercel Preview 部署，穩定別名 `https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`，留給日後 ECPay sandbox 測試用。
 - ✅ **T05 Auth（Email OTP＋magic link）本機設定已完成**（2026-06-25，先進 plan mode 核准後執行）：`supabase/config.toml`＋新增 `supabase/templates/magic_link.html`，本機端到端測試（觸發信→Mailpit 收信驗證內容→OTP 驗證換 token）全通過。**production 端尚待使用者手動到 Supabase Dashboard 設定**（Site URL／Redirect URLs／Magic Link 範本，見 `docs/work-log.md`）；`/auth/confirm` 頁面留給 T06／T07。
-- ⏭️ **下一步：T15 戒指商品詳情頁 → M1 戒指可配置並付款（於 Claude Code）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
+- ✅ **M0 全數完成；M1 開工，T15 戒指商品詳情頁骨架完成**（2026-06-25，先進 plan mode 核准後執行）：`src/app/products/[slug]/page.tsx`（Server Component，撈商品＋三層白名單靜態呈現）＋共用 `SiteHeader`／`SiteFooter`。wireframe 原訂位置 `docs/wireframe/` 實際不存在，改用備份資料夾的 HTML demo（`backup/_backup_docs_20260624_235506/proj-docs/Demo/Demo_0623/product.html`）當版面參考。刻意不做：配置器互動（T16-T20 範圍）、「關於這件作品」與「猜你喜歡」（schema 無描述欄位、seed 僅 1 款商品，缺真實內容不杜撰）。Playwright 截圖驗證通過（正常與 404 兩種情境）。
+- ⏭️ **下一步：T16 配置器 UI（互動）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---
 
