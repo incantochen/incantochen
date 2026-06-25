@@ -109,7 +109,11 @@ export default async function ProductDetailPage({
           <h1 className="mt-2 font-heading text-[34px] text-ink">{product.name}</h1>
 
           <div className="mt-4">
-            <ProductConfigurator basePrice={product.base_price} options={configuratorOptions} />
+            <ProductConfigurator
+              productId={product.id}
+              basePrice={product.base_price}
+              options={configuratorOptions}
+            />
           </div>
         </div>
       </div>

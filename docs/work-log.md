@@ -133,20 +133,32 @@
 
 ---
 
+#### #T19 / #T20 / M1 報價＋購物車 / 規格＋金額快照結構 ＋ 加入購物車（寫快照）
+**說明**：把 T18 算出來的選取狀態接成真的寫進 `cart`／`cart_item`。涉及 service role key（RLS 故意對前台全拒）與訪客身份識別，先進 plan mode 規劃。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | `src/lib/supabase/service-role.ts`（新增）、`src/app/products/[slug]/actions.ts`（新增）、`src/components/product-configurator.tsx`（修改）、`src/app/products/[slug]/page.tsx`（修改） |
+| 更新描述 | 1. **新建 service role client**（`service-role.ts`，`import "server-only"` 防呆，client component 誤用會編譯期報錯）——`cart`／`cart_item` 的 RLS policy 故意對 anon/authenticated 全拒，只有 service role 能寫，這是 schema 設計階段就定案的，不是本次新決策。2. **`addToCart` server action**：前端只送 `productId`／選中的 `product_option_value.id` 陣列／`quantity`，**完全不送價格**；action 內用既有 anon client 重新查 `product_option`/`product_option_value` 白名單，驗證每個必填選項恰好選一個值、用查到的 `price_delta` 重新算 `unit_price_snapshot`，組出符合 `docs/data-model.md` §4.2 契約的 `config_snapshot`（product_id/base_price/selections[]/line_unit_price）——對齊「伺服器端驗價」紅線精神，T41 是結帳流程的完整版本，這裡是資料寫入的第一道關卡。3. **訪客身份**：`guest_token` httpOnly cookie（90 天，sameSite lax）；find-or-create `cart`，再插入 `cart_item`。4. **新環境變數 `SUPABASE_SERVICE_ROLE_KEY`**：專案原本完全沒設定，使用者親自到 Supabase Dashboard 的 API Keys 頁面（介面改版過，不在原本的 Data API 頁籤下）拿到後，自己填進本機 `.env.local` 與 Vercel，全程未經過 Claude。5. 按鈕改用 `useTransition` 呼叫 server action，成功顯示「已加入購物袋」、失敗顯示錯誤訊息。6. 雙重驗證：Playwright 點擊後看到成功提示＋`guest_token` cookie 正確設定；另用 `supabase db query --linked` 直查雲端 production 的 `cart_item`，確認 `unit_price_snapshot`（伺服器重算的 27000，不是前端算的）與 `config_snapshot` 形狀完全正確。 |
+| 待辦 | （無，已完成）。會員車合併留給 T22「結帳即會員」；購物車頁面本身是 T21。 |
+| 驗收 | `pnpm lint`／`tsc --noEmit` 通過；Playwright＋雲端 DB 查詢雙重確認資料正確寫入且價格未被前端污染。 |
+| 依賴 | T18 ✅ |
+
+---
+
 ### 下次作業
 
-#### #T19 / M1 購物車 / 規格＋金額快照結構
-**說明**：把 T18 算出來的選取狀態與單價整理成 `config_snapshot`(JSON) 與 `unit_price_snapshot`，為 T20 加入購物車寫入做準備。
+#### #T21 / M1 購物車 / 購物車頁
+**說明**：讀剛剛寫進去的 `cart_item`，做出購物車頁面——項目列表、改數量、刪除、小計。
 
 | 項目 | 內容 |
 |------|------|
 | 狀態 | ⬜ 未開始 |
 | 更新描述 | — |
-| 待辦 | 1. 定義 `config_snapshot` 的 JSON 形狀（沿用 `docs/data-model.md` §4.2 範例：product_id／base_price／selections［含 option_type_code/option_value_code/label/price_delta］／line_unit_price）<br>2. 從 `ProductConfigurator` 現有的 `selected` state 組出這個結構 |
-| 依賴 | T18 ✅ |
-| 注意 | 快照下單當下釘住，後台日後調價不得影響已成立訂單——這個結構本身不複雜，但要對齊 schema 既有契約，不要自己另創格式 |
-
----
+| 待辦 | 1. 新建 `/cart` route，用 `guest_token` cookie 查 `cart`／`cart_item`（一樣得走 service role 或新增對應 RLS 思路——cart 對前台全拒，讀取也要走後端）<br>2. 項目列表呈現 `config_snapshot` 內容、單價、數量、小計<br>3. 改數量／刪除動作（同樣要走 server action＋service role） |
+| 依賴 | T19/T20 ✅ |
+| 注意 | 讀取也受同一條 RLS 紅線限制（cart 對 anon/authenticated 全拒），不能直接在 page.tsx 用 anon client 查 cart，要走 server action 或專用的讀取用 service role 呼叫 |
 
 ---
 

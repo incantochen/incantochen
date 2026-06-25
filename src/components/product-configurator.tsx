@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useTransition } from "react"
+import { addToCart } from "@/app/products/[slug]/actions"
 
 export type ConfiguratorOption = {
   id: string
@@ -20,15 +21,37 @@ function defaultSelection(options: ConfiguratorOption[]) {
 }
 
 export function ProductConfigurator({
+  productId,
   basePrice,
   options,
 }: {
+  productId: string
   basePrice: number
   options: ConfiguratorOption[]
 }) {
   const [selected, setSelected] = useState(() => defaultSelection(options))
   const [quantity, setQuantity] = useState(1)
   const [showBreakdown, setShowBreakdown] = useState(false)
+  const [isPending, startTransition] = useTransition()
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(
+    null,
+  )
+
+  function handleAddToCart() {
+    setFeedback(null)
+    startTransition(async () => {
+      const result = await addToCart({
+        productId,
+        productOptionValueIds: Object.values(selected),
+        quantity,
+      })
+      setFeedback(
+        result.ok
+          ? { type: "success", message: "已加入購物袋" }
+          : { type: "error", message: result.error },
+      )
+    })
+  }
 
   const selectedValues = options.map((option) => {
     const value = option.values.find((v) => v.id === selected[option.id])
@@ -136,10 +159,23 @@ export function ProductConfigurator({
 
       <button
         type="button"
-        className="mt-5 w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase hover:bg-primary-700"
+        disabled={isPending}
+        onClick={handleAddToCart}
+        className="mt-5 w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase hover:bg-primary-700 disabled:opacity-60"
       >
-        加入購物袋
+        {isPending ? "處理中…" : "加入購物袋"}
       </button>
+      {feedback && (
+        <p
+          className={
+            feedback.type === "success"
+              ? "mt-2 text-sm text-success"
+              : "mt-2 text-sm text-destructive"
+          }
+        >
+          {feedback.message}
+        </p>
+      )}
     </div>
   )
 }
