@@ -49,6 +49,20 @@
 
 ---
 
+#### #T52 / M0 流程 / Staging 環境（Vercel preview）
+**說明**：插隊任務，緊接 T04 驗證 Vercel 分支預覽機制，留給日後 ECPay sandbox 等金流測試用固定網址。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | git 分支 `staging` |
+| 更新描述 | 建立並 push `staging` 分支，確認 Vercel 自動產生 Preview（非 Production）部署；該分支有穩定別名（不隨每次部署變動），可作為金流回拋網址等固定測試端點。 |
+| 待辦 | （無，已完成） |
+| 驗收 | preview 穩定別名：`https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app` |
+| 依賴 | T04 ✅ |
+
+---
+
 ### 下次作業
 
 #### #T15 / M1 前台 / 戒指商品詳情頁
