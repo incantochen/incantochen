@@ -1,7 +1,8 @@
 # 專案記憶 memory.md
 
+> 文件更新日期：2026-06-24
 > 高端客製化寶石飾品電商平台 — 開發決策與狀態記錄
-> 最後更新：M-1 規劃全數完成（含 IA／Wireframe）；DB migration 工具定案 Supabase CLI；下一步進 M1/M0 開發（T03 建表＋T46 RLS）
+> 最後更新：M0 資料層完成——T03 建表＋T46 RLS 已套用至雲端 production（13 表＋11 policy）、型別已生、commit c124482；T43 dev seed 已完成並本機驗收通過（2026-06-25）；下一步 T15 戒指商品詳情頁
 > 用途：快速掌握專案脈絡與已定決策，避免重複討論。
 
 ---
@@ -24,29 +25,21 @@
 - ✅ **M-1 產品規劃全數完成**：競品分析／PRD／User Flow／Brand Guide／**IA／Wireframe** 皆已產出（見 §9、§12）。另有 homepage demo 作設計定稿參考。
 - ✅ **M0 環境與骨架前置完成**（見 §11）：開發環境裝好、Next.js 16 專案骨架建立、`CLAUDE.md` 與 6 個 hooks 落地、首次 git commit 完成。
 - ✅ **DB migration 工具定案：Supabase CLI**（規範見 `docs/migration-guide.md`）——T03 前置已解。
-- ⏭️ **下一步：進 M1/M0 開發——T03 依 ER 分 4 組建 13 張表 → T46 RLS → dev seed（於 Claude Code）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
+- ✅ **M0 資料層完成並套用雲端**：T03 建表＋T46 RLS 已 `db push` 至雲端 production（project-ref `wdmigbqdhernmrfpzzxk`，13 表＋11 policy，雲端驗收通過）；型別已生於 `src/types/database.types.ts`；commit `c124482`。欄位級規格見 `docs/data-model.md`。
+- ✅ **T43 dev seed 已完成並通過本機驗收**（2026-06-25）：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單），`supabase db reset --local` 套用＋驗收查詢全數通過。過程中修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／docs/verify-seed.sql 已移除該欄位引用。
+- ⏭️ **下一步：T15 戒指商品詳情頁 → M1 戒指可配置並付款（於 Claude Code）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---
 
 ## 3. 技術選型（已鎖定）
 
-| 層 | 選用 |
-|---|---|
-| 前端 | Next.js 16（App Router、Vercel 部署）＋ shadcn/ui＋Tailwind |
-| 函式庫 | React 19.2（隨 Next.js 16） |
-| 語言／工具 | TypeScript（strict＋noUncheckedIndexedAccess）、pnpm |
-| 資料庫／後端 | Supabase（Postgres） |
-| 會員登入 | Supabase Auth — **Magic link（免密碼）** |
-| 圖片儲存 | Supabase Storage |
-| 金流 | 綠界 ECPay |
-| 物流 | 綠界黑貓宅配（保價＋本人簽收，不開放超商） |
-| 電子發票 | 綠界 ECPay |
-| Email | Resend |
-| 3D 素材 | Blender（自學，免費） |
+> 詳細技術棧、版本策略、Next.js 16 注意事項見 `CLAUDE.md §2`，不在此重複。
 
-**成本**：MVP 基礎設施可 $0（Supabase/Vercel/Resend 免費方案）。固定成本僅網域（約 NT$500/年）＋綠界每筆抽成約 2.x%。正式收單前升 Supabase Pro（約 US$25/月，含備份）。
+**摘要**：Next.js 16 + React 19.2 + TypeScript (strict) + pnpm + Supabase (Postgres + Auth + Storage) + 綠界 ECPay（金流／物流／發票）+ Resend + Zod + Vercel 部署。
 
-**本機環境（M0 實裝）**：Node.js 24、pnpm 11、Git 2.54、Claude Code 2.1.185。專案路徑 `…\incantochen\jewelry-shop`。
+**本機環境**：Node.js 24、pnpm 11、Git 2.54、Claude Code 2.1.185。專案路徑 `…\incantochen\jewelry-shop`。
+
+**成本**：基礎設施 $0（免費方案）；固定僅網域（約 NT$500/年）＋綠界每筆 ~2.x%。正式收單前升 Supabase Pro（約 US$25/月）。
 
 ---
 
@@ -60,17 +53,12 @@
 
 ## 5. 資料模型（13 張表）
 
-**商品與選項**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue（可選值白名單）
-**會員與購物車**：Member、Cart、CartItem
-**訂單與金流**：Order、OrderItem、Payment
-**通知與狀態**：OrderStatusLog、Notification
+> 欄位級規格、三個核心設計、外鍵策略見 `CLAUDE.md §5` 與 `docs/data-model.md`，不在此重複。
+> ER 圖視覺參考：`docs/jewelry_mvp_ER.mermaid`（文字，隨時可讀）；`docs/jewelry_mvp_ER.pdf`（視覺版，需要時再開）。
 
-**三個核心設計**：
-1. **資料驅動配置器**：選項由資料決定，三層控制（類別 applies_to → 款式 ProductOption → 值白名單 ProductOptionValue）。戒指逐款限定寶石/戒圍，故白名單必留。
-2. **快照欄位**：CartItem/OrderItem 存 unit_price_snapshot＋config_snapshot(JSON)，下單當下釘住價格與規格，後台調價不影響已成立訂單。
-3. **Order 內嵌收件與物流**：MVP 不另開地址表/工單表，tracking_no 手動填。
+**13 張表**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue、Member、Cart、CartItem、orders、OrderItem、Payment、OrderStatusLog、Notification。
 
-詳見 `jewelry_mvp_ER.pdf`。
+**三個核心設計（摘要）**：① 資料驅動配置器（三層白名單）② 快照欄位釘住下單當下價格與規格 ③ Order 內嵌收件與物流（tracking_no 手動填）。
 
 ---
 
@@ -93,15 +81,11 @@
 
 ## 7. 安全／個資基線
 
-**技術基線**：最小化蒐集 ＋ RLS（T46）＋ 卡號不落地（綠界）＋ 後台 PII 遮罩與存取稽核（T64）＋ 應用層安全防護（T58：SQL 注入防護、Zod 驗證、安全標頭、XSS、magic link 防濫發）＋ 伺服器端驗價（T41）。
+> 完整安全規則、RLS 細節、金流冪等、登入防護見 `CLAUDE.md §6`，不在此重複。
 
-**管理配套**：個資告知/隱私權政策（T36）＋ 當事人個資權利處理流程（T63）。
+**兩條紅線（不可省）**：伺服器端驗價（T41）、資料庫備份（T34）。
 
-**不做**：欄位級加密（業界一般電商不做，符合常規）。
-
-**單人開發兩條紅線（不可省）**：伺服器端驗價（T41）、資料庫備份（T34）。
-
-**M0 新增的程式層強制護欄（Claude Code hooks，見 §11）**：.env/金鑰硬擋、DB migration 擋下需放行、毀滅性指令硬擋、收工前 lint/test 檢查、寫檔自動格式化、session 啟動注入紅線提醒。
+**關鍵決策摘要**：卡號不落地（綠界）、不做欄位級加密、有訂單會員刪除走匿名化（T63）、RLS ✅ 已套用（`0002`）、程式層護欄 ✅ 已設（6 個 hooks）。
 
 ---
 
@@ -130,7 +114,12 @@
 
 - `MVP開發任務清單.xlsx` — 70 任務（含 M-1 產品規劃）、里程碑總覽、待決策（最新主檔）
 - `MVP開發起步文件.md` — 技術選型／模組／資料模型／成本
-- `jewelry_mvp_ER.pdf` — 資料模型 ER 圖
+- `jewelry_mvp_ER.pdf` / `jewelry_mvp_ER.mermaid` — 資料模型 ER 圖（v2，已對齊 0001/0002）
+- `docs/data-model.md` — 13 張表欄位級定稿規格（T03/T46 依據）
+- `supabase/migrations/0001_initial_schema.sql` — 建 13 張表（T03）
+- `supabase/migrations/0002_enable_rls_and_policies.sql` — RLS 啟用與 policy（T46）
+- `src/types/database.types.ts` — Supabase 生成的 13 表型別（gen types --linked）
+- `docs/migration-runbook.md` — 首次 migration 套用 Runbook
 - `jewelry_semicustom_flow.pdf` — 半客製流程圖
 - `jewelry_system_architecture.mermaid` — 系統架構圖原始檔
 - `memory.md` — 本檔
@@ -144,7 +133,8 @@
 ## 10. 待辦／提醒
 
 - ✅ **已定：DB migration 工具＝Supabase CLI**（規範見 `docs/migration-guide.md`，含命名／一支一件事／回滾／正式套用流程／seed）。
-- ⏭️ 下一步：**進 M1/M0 開發——T03 依 ER 分 4 組建 13 張表 → T46 RLS → dev seed**（於 Claude Code；T03 前先裝 Supabase CLI、`supabase init`）。
+- ✅ **dev seed（T43）已完成**（2026-06-25，本機驗收通過）。⏭️ 下一步：**T15 戒指商品詳情頁 → M1 戒指可配置並付款**。
+- 🔭 **模組實作時待辦**：① 過期購物車清理作業（分批、可 dry-run；T20/T21）② 個資刪除走匿名化（T63）③ 商品後台只封存不硬刪＋刪前查引用＋狀態篩選器（T10，已記入任務清單）。
 - 📌 平行去辦：商業/營業登記、綠界特店申請（有審核前置時間）
 - ⚖️ 上線前：條款與七天例外用詞請律師審
 - 🔢 上架前才需定：戒指交期天數、各選項加價（含國際物流成本緩衝）、金屬價格管理方式
@@ -248,4 +238,4 @@
 - ✅ **DB migration 工具已定：Supabase CLI**（見 `docs/migration-guide.md`）。
 - ⚖️ **Flow 3 售後 19 項待確認**（律師＋會計合規），尤其 A、C 類。
 - 🎨 待製：logo／favicon／OG、3D 合成商品圖。
-- ⏭️ **下一步**：進 M1/M0 開發——T03 依 ER 分 4 組建 13 張表 → T46 RLS → dev seed。
+- ✅ **dev seed（T43）已完成並驗收通過**（2026-06-25）。⏭️ **下一步**：T15 戒指商品詳情頁 → M1。

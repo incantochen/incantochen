@@ -1,0 +1,149 @@
+erDiagram
+    %% incantochen MVP 資料模型 ER（13 張表）· v2 對齊 supabase/migrations/0001_initial_schema.sql · 變動詳見 docs/data-model.md
+    %% 三層白名單：OptionType.applies_to（類別）→ ProductOption（款式）→ ProductOptionValue（值白名單＋加價）
+    Product ||--o{ ProductOption : offers
+    OptionType ||--o{ ProductOption : "typed by"
+    OptionType ||--o{ OptionValue : "has values"
+    ProductOption ||--o{ ProductOptionValue : whitelists
+    OptionValue ||--o{ ProductOptionValue : "allowed as"
+    %% 會員與購物車（Cart 可屬會員或訪客 guest_token）
+    Member ||--o{ Cart : has
+    Cart ||--o{ CartItem : contains
+    Product ||--o{ CartItem : "snapshot in"
+    %% 訂單與金流（Order 實體表名 orders）
+    Member ||--o{ Order : places
+    Order ||--o{ OrderItem : contains
+    Product ||--o{ OrderItem : "snapshot in"
+    Order ||--o{ Payment : "paid by"
+    %% 通知與狀態
+    Order ||--o{ OrderStatusLog : tracks
+    Order ||--o{ Notification : triggers
+
+    Product {
+        uuid id PK
+        text slug UK
+        text name
+        enum category "product_category: ring/earring/bracelet/necklace"
+        numeric base_price "底價, numeric(12,0) NOT NULL >=0"
+        enum status "product_status: draft/active/archived"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    OptionType {
+        uuid id PK
+        text code UK "gem_color/metal_color/ring_size/length/earring_back"
+        text name
+        enum applies_to "option_applies_to: 層1 適用品類 or all"
+        text input_type "swatch/select/stepper"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    OptionValue {
+        uuid id PK
+        uuid option_type_id FK "ON DELETE CASCADE"
+        text code
+        text label "如 祖母綠 / 18K黃金 / #11"
+        int sort_order
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    ProductOption {
+        uuid id PK
+        uuid product_id FK "ON DELETE CASCADE"
+        uuid option_type_id FK "ON DELETE RESTRICT"
+        bool required
+        int sort_order
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    ProductOptionValue {
+        uuid id PK
+        uuid product_option_id FK "ON DELETE CASCADE"
+        uuid option_value_id FK "ON DELETE RESTRICT"
+        numeric price_delta "層3 加價, numeric(12,0) >=0 預設0"
+        bool is_default
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    Member {
+        uuid id PK "= auth.users.id（共用 PK, = auth.uid()）"
+        text email UK
+        text name
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    Cart {
+        uuid id PK
+        uuid member_id FK "可空：訪客, ON DELETE CASCADE"
+        uuid guest_token "訪客識別, 放 httpOnly cookie"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    CartItem {
+        uuid id PK
+        uuid cart_id FK "ON DELETE CASCADE"
+        uuid product_id FK "ON DELETE RESTRICT"
+        int quantity "行數量 >=1"
+        numeric unit_price_snapshot "快照單價, numeric(12,0) >=0"
+        jsonb config_snapshot "快照規格, 契約見 data-model 4.2"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    Order {
+        uuid id PK "實體表名 orders（Order 為保留字）"
+        uuid member_id FK "帳務不連動刪, ON DELETE RESTRICT"
+        text order_no UK
+        enum status "order_status: 待付款/已付款/製作中/已出貨/已完成/已取消/已退款"
+        text recipient_name "內嵌收件"
+        text recipient_phone
+        text shipping_address
+        text tracking_no "人工填"
+        numeric subtotal "numeric(12,0) >=0"
+        numeric shipping_fee "numeric(12,0) >=0 預設0"
+        numeric total_amount "numeric(12,0) >=0"
+        bool custom_consent "T57 客製例外同意"
+        timestamptz consent_at
+        text invoice_no "電子發票佔位 T42"
+        enum invoice_status "invoice_status: none/issued/allowance/voided"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    OrderItem {
+        uuid id PK
+        uuid order_id FK "ON DELETE RESTRICT"
+        uuid product_id FK "ON DELETE RESTRICT"
+        int quantity "行數量 >=1"
+        numeric unit_price_snapshot "快照單價, numeric(12,0) >=0"
+        jsonb config_snapshot "快照規格（不可變）"
+        timestamptz created_at
+    }
+    Payment {
+        uuid id PK
+        uuid order_id FK "ON DELETE RESTRICT"
+        text merchant_trade_no UK "我方交易號, 重試換新掛同一訂單"
+        text gateway_trade_no "綠界 TradeNo, 對帳/退刷"
+        text provider "ecpay"
+        enum status "payment_status: pending/paid/failed/refunded"
+        numeric amount "numeric(12,0) >0"
+        jsonb raw_callback "回拋/查詢原始內容, 稽核"
+        timestamptz paid_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    OrderStatusLog {
+        uuid id PK
+        uuid order_id FK "ON DELETE RESTRICT"
+        text from_status
+        text to_status
+        text note
+        timestamptz created_at
+    }
+    Notification {
+        uuid id PK
+        uuid order_id FK "ON DELETE RESTRICT"
+        text channel "email"
+        text type "與 order_id 組唯一鍵, 防重寄"
+        text status "sent/failed"
+        timestamptz sent_at
+        timestamptz created_at
+    }

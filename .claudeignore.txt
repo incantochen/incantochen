@@ -1,0 +1,9 @@
+.claudeignore
+
+node_modules/
+dist/
+build/
+.next/
+*.log
+package-lock.json
+yarn.lock
