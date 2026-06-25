@@ -161,18 +161,32 @@
 
 ---
 
+#### #T06 / #T07 / M1 會員 / 登入入口（Email OTP／Magic Link）＋ 登入狀態與路由保護
+**說明**：插隊任務（使用者要求先做完登入再回頭做 T22）。涉及 auth／session，先進 plan mode 規劃。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | `src/lib/auth/find-or-create-member.ts`、`src/lib/auth/require-user.ts`、`src/app/login/actions.ts`、`src/app/login/page.tsx`、`src/app/auth/confirm/actions.ts`、`src/app/auth/confirm/page.tsx`、`src/app/account/actions.ts`、`src/app/account/page.tsx`（新增）、`src/proxy.ts`（新增）、`src/components/site-header.tsx`（修改） |
+| 更新描述 | 1. **規格依據**確認真實案例：Notion 信件同時放 magic link＋備用驗證碼、Supabase 官方文件建議的樣板客製化方向、Outlook Safe Links 預先 GET 連結的已知問題與業界標準解法（落地頁需再按一次才消耗 token），三者疊起來就是這次的設計依據，不是憑空想的。2. **關鍵發現**：`member` 表（`supabase/migrations/0002...sql`）只有 `member_select_own` 這條 SELECT policy，沒有 INSERT policy，也沒有 `auth.users` insert trigger；驗證成功後建立 `public.member` row 一樣會被 RLS 擋，跟 T19/20/21 的 `cart` 一樣得走 service role（`find-or-create-member.ts`）。3. `src/proxy.ts` 是 Next.js 16 取代 `middleware.ts` 的新慣例：實測 `node_modules/next/dist/build/templates/middleware.js` 原始碼確認檔名比對邏輯（`page === '/proxy' \|\| page === '/src/proxy'`）與必須具名匯出 `proxy`（不是 `middleware`，否則拋 `ProxyMissingExportError`），不是憑空猜的。4. `/auth/confirm` 落地頁刻意**不在 `useEffect` 自動驗證**，必須等使用者按下按鈕才呼叫 `confirmMagicLink`，對齊 user-flow.md 的防呆需求。5. `/account` 只做最小版本（`requireUser()`＋歡迎訊息＋登出），會員中心本體留給 T08 擴充，不是用過即丟。6. **抓到一個真實 bug**：用 `supabase.auth.admin.generateLink` 產生測試用驗證碼時發現，**雲端 production 實際送出的 OTP 是 8 位數**，但 `verifyOtpCode` 跟 `/login` 表單原本寫死「剛好 6 位數字」（`/^\d{6}$/`、`maxLength={6}`）——這個假設來自本機 `supabase/config.toml` 的 `otp_length = 6`，但那只管本機，雲端 cloud 專案的實際值不同，跟 T05 當時學到的「本機設定≠雲端設定」是同一類陷阱。已改成不假設固定長度（`/^\d{4,10}$/`、`maxLength={10}`）。7. **驗證方法**：`.env.local` 接雲端 production，OTP 信會寄到真實信箱（無法像本機 Mailpit 直接讀信內容）；改用 `supabase.auth.admin.generateLink()`（service role，不寄真信）直接取得測試用 `email_otp`／`hashed_token`，對實際 `/login`、`/auth/confirm` 頁面跑 Playwright 全流程；另發現對全新 email 用 `admin.generateLink({type:"magiclink"})` 時 Supabase 會內部歸類成 `verification_type: "signup"`（不是 `magiclink`），對已存在的使用者才會正確回 `magiclink`——所以測試改用 `admin.createUser` 先建好測試帳號再產生連結。8. 驗證完成後用 `admin.listUsers`／`admin.deleteUser` 清掉所有 `t06-*@example.com` 測試帳號，production 資料庫沒有殘留垂圾資料。 |
+| 待辦 | （無，已完成）。 |
+| 驗收 | `pnpm lint`／`tsc --noEmit`／`pnpm build` 全通過（`proxy.ts` 在 build 輸出正確顯示為 `ƒ Proxy (Middleware)`）。Playwright 端到端：①未登入訪問 `/account` 導向 `/login`。②`/auth/confirm` 落地頁先顯示確認按鈕（未自動消耗 token），按下後才登入成功導向 `/`。③登入後 `/account` 正確顯示歡迎訊息（`member` row 經 DB 查詢確認已建立）。④登出後重訪 `/account` 又被導回 `/login`。 |
+| 依賴 | T05 ✅ |
+
+---
+
 ### 下次作業
 
 #### #T22 / M1 結帳 / 結帳頁（收件＋配送）
-**說明**：購物車頁已經有「前往結帳」按鈕（目前 disabled），T22 要把它接上真正的結帳頁。
+**說明**：購物車頁已經有「前往結帳」按鈕（目前 disabled），T22 要把它接上真正的結帳頁。T06/T07 已完成，「結帳即會員」現在有地基可以接了。
 
 | 項目 | 內容 |
 |------|------|
 | 狀態 | ⬜ 未開始 |
 | 更新描述 | — |
-| 待辦 | 1. 新建 `/checkout` route，收件資訊表單（姓名／電話／地址）＋配送方式<br>2. 「結帳即建會員」——這裡會用到 magic link（T05 已設定，但 T06/T07 登入 UI／session 還沒做），需要先確認這塊怎麼接<br>3. 把 `/cart` 頁面的「前往結帳」按鈕從 disabled 改成可點 |
-| 依賴 | T21 ✅；邏輯上也卡 T06/T07（登入）尚未完成 |
-| 注意 | 涉及會員建立／session，依規定要先進 plan mode；先確認 T06/T07 的狀態再評估 T22 範圍要不要先縮小（例如先做表單骨架，會員建立邏輯等 T06/T07 之後再接） |
+| 待辦 | 1. 新建 `/checkout` route，收件資訊表單（姓名／電話／地址）＋配送方式<br>2. 「結帳即建會員」：可直接重用 `src/lib/auth/find-or-create-member.ts`＋ T06 的 magic link／OTP 機制<br>3. 把 `/cart` 頁面的「前往結帳」按鈕從 disabled 改成可點 |
+| 依賴 | T21 ✅、T06/T07 ✅ |
+| 注意 | 涉及會員建立／session／金流前置，依規定要先進 plan mode |
 
 ## 📋 日誌範本（複製使用）
 

@@ -37,7 +37,8 @@
 - 📌 **T17（即時換圖）暫緩**：依賴 T55/T56（3D 素材製作），使用者決定圖片處理維持 Blender/3D 路線（評估過 AI 圖片生成模型如 DALL-E/Imagen，判定不適合——無法做到同一戒指模型精準替換材質），先擱置，圖片用佔位圖頂著繼續開發其他骨架。
 - ✅ **T19/T20 加入購物車（寫快照）完成**（2026-06-25，先進 plan mode 核准後執行）：新增 service role client＋`addToCart` server action。後端重新驗證白名單並重算價格，不採信前端數字；`cart`/`cart_item` 走 service role 寫入（RLS 故意對前端全拒）；訪客用 `guest_token` httpOnly cookie。新增環境變數 `SUPABASE_SERVICE_ROLE_KEY`（使用者本人填入本機＋Vercel）。Playwright＋雲端 DB 查詢驗證通過。
 - ✅ **T21 購物車頁完成**（2026-06-25，先進 plan mode 核准後執行）：`read-cart.ts`（讀取也走 service role，因為 RLS 連 SELECT 也對前台全拒）＋`cart/actions.ts`（改數量／刪除，新增「擁有權檢查」防止亂猜 id 動到別人購物車）＋`cart/page.tsx`／`cart-item-row.tsx`。結帳按鈕 disabled（留給 T22）。Playwright＋雲端 DB 雙重驗證通過。
-- ⏭️ **下一步：T22 結帳頁（收件＋配送）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
+- ✅ **T06/T07 登入入口＋路由保護完成**（2026-06-25，先進 plan mode 核准後執行）：`/login`（OTP 主）、`/auth/confirm`（magic link，按鈕才消耗 token）、`src/proxy.ts`（Next 16 用 `proxy` 具名匯出取代 `middleware.ts`）、`requireUser()` 共用保護機制＋最小驗證頁 `/account`。**重要發現**：`member` 表沒有 INSERT policy，建會員一樣要走 service role；**雲端 production 實際 OTP 是 8 位數**（不是本機設定的 6 位），原本寫死 6 位數驗證的 bug 已修正。用 `admin.generateLink` 產生測試用驗證碼/連結（不寄真信）做 Playwright 端到端驗證，測試帳號驗證後已清除。
+- ⏭️ **下一步：T22 結帳頁（收件＋配送），現在可以接「結帳即會員」了。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---
 
