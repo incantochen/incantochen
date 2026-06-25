@@ -91,18 +91,33 @@
 
 ---
 
+#### #T16 / M1 配置器 / 配置器 UI（戒指選項）
+**說明**：把 T15 的靜態選項 chip 變成可互動配置器——點擊切換選取、狀態管理。先進 plan mode 簡單規劃後執行。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | `src/components/product-configurator.tsx`（新增，client component）、`src/app/products/[slug]/page.tsx`（修改） |
+| 更新描述 | 1. 把選項 chip／數量 stepper／CTA 按鈕從 page.tsx 抽到新的 client component，定義乾淨的 `ConfiguratorOption` 型別（不直接帶 Supabase 生成型別進 client，page.tsx 負責把巢狀資料整理成這個形狀再傳入）。2. `selected` 用 `Record<optionId, valueId>`，初始值取各 option 的 `isDefault`；`quantity` 用 `useState(1)`，stepper `-` 在 1 時 disabled。3. **價格刻意不隨選取或數量連動**——維持 T15 的靜態 `startingPrice`，這是 tasks.csv 的任務切分（T18 報價引擎才負責即時計價），不是漏做。4. Playwright 驗證：點「藍寶石」「18K 白金」chip 後樣式正確切換選中（祖母綠/18K黃金正確取消選中）、戒圍維持預設未受影響、stepper +兩次數量正確變 3、無 console error。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint`／`tsc --noEmit` 通過；Playwright 點擊後截圖確認選取狀態與數量正確。 |
+| 依賴 | T15 ✅ |
+| 注意 | 白名單驗證仍以伺服器資料為準，前端互動只是 UI 狀態，不得讓使用者選到白名單外的值（目前資料來源即為白名單查詢結果，無繞過風險） |
+
+---
+
 ### 下次作業
 
-#### #T16 / M1 配置器 / 配置器 UI（戒指選項）
-**說明**：把 T15 的靜態選項 chip 變成可互動配置器——點擊切換選取、狀態管理。
+#### #T17 / M1 配置器 / 選項即時換圖
+**說明**：選項變動時主圖即時切換（搭配 T55 疊圖機制，T56 3D 素材未完成前先用現有 placeholder 邏輯延伸）。
 
 | 項目 | 內容 |
 |------|------|
 | 狀態 | ⬜ 未開始 |
 | 更新描述 | — |
-| 待辦 | 1. 把 `src/app/products/[slug]/page.tsx` 的選項區塊抽成 client component（需要 `useState` 管理選取狀態）<br>2. chip 點擊切換選取樣式，三組選項各自獨立狀態<br>3. 數量 stepper（wireframe 已有版型參考）<br>4. 暫不含即時換圖（T17）與即時計價（T18），先把互動骨架打通 |
-| 依賴 | T15 ✅ |
-| 注意 | 白名單驗證仍以伺服器資料為準，前端互動只是 UI 狀態，不得讓使用者選到白名單外的值 |
+| 待辦 | 待 T56 素材或至少有暫定圖檔策略後再細化 |
+| 依賴 | T16 ✅、T55（尚未開始）、T56（尚未開始） |
+| 注意 | MVP 不做 3D 即時預覽；本任務範圍是「依選項換靜態合成圖」，非 3D 渲染 |
 
 ---
 

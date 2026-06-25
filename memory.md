@@ -31,7 +31,9 @@
 - ✅ **T52 Staging 環境已完成**（2026-06-25）：`staging` 分支 push 後自動產生 Vercel Preview 部署，穩定別名 `https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`，留給日後 ECPay sandbox 測試用。
 - ✅ **T05 Auth（Email OTP＋magic link）本機設定已完成**（2026-06-25，先進 plan mode 核准後執行）：`supabase/config.toml`＋新增 `supabase/templates/magic_link.html`，本機端到端測試（觸發信→Mailpit 收信驗證內容→OTP 驗證換 token）全通過。**production 端尚待使用者手動到 Supabase Dashboard 設定**（Site URL／Redirect URLs／Magic Link 範本，見 `docs/work-log.md`）；`/auth/confirm` 頁面留給 T06／T07。
 - ✅ **M0 全數完成；M1 開工，T15 戒指商品詳情頁骨架完成**（2026-06-25，先進 plan mode 核准後執行）：`src/app/products/[slug]/page.tsx`（Server Component，撈商品＋三層白名單靜態呈現）＋共用 `SiteHeader`／`SiteFooter`。wireframe 原訂位置 `docs/wireframe/` 實際不存在，改用備份資料夾的 HTML demo（`backup/_backup_docs_20260624_235506/proj-docs/Demo/Demo_0623/product.html`）當版面參考。刻意不做：配置器互動（T16-T20 範圍）、「關於這件作品」與「猜你喜歡」（schema 無描述欄位、seed 僅 1 款商品，缺真實內容不杜撰）。Playwright 截圖驗證通過（正常與 404 兩種情境）。
-- ⏭️ **下一步：T16 配置器 UI（互動）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
+- ✅ **T16 配置器互動化完成**（2026-06-25）：新增 client component `src/components/product-configurator.tsx`（chip 點擊切換選取＋數量 stepper，狀態管理 `useState`）。價格刻意不隨選取連動，留給 T18。Playwright 點擊驗證通過。
+- 📌 **流程變更（M1 起）**：改用 feature branch＋PR，不再直接 push master；PR 連結給使用者看過、回覆「沒問題」後才 merge（細節見記憶 `git-workflow-incantochen-pr-review`）。
+- ⏭️ **下一步：T17 選項即時換圖。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---
 

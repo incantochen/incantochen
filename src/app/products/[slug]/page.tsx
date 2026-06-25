@@ -3,6 +3,7 @@ import { notFound } from "next/navigation"
 import { Gem } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import type { Database } from "@/types/database.types"
+import { ProductConfigurator, type ConfiguratorOption } from "@/components/product-configurator"
 
 type CategoryCode = Database["public"]["Enums"]["product_category"]
 
@@ -55,6 +56,18 @@ export default async function ProductDetailPage({
   const startingPrice = product.base_price + defaultPriceDelta
 
   const categoryLabel = CATEGORY_LABELS[product.category]
+
+  const configuratorOptions: ConfiguratorOption[] = options.map((option) => ({
+    id: option.id,
+    name: option.option_type.name,
+    values: [...option.product_option_value]
+      .sort((a, b) => a.option_value.sort_order - b.option_value.sort_order)
+      .map((value) => ({
+        id: value.id,
+        label: value.option_value.label,
+        isDefault: value.is_default,
+      })),
+  }))
 
   return (
     <div className="mx-auto max-w-[1240px] px-6 py-8">
@@ -109,43 +122,7 @@ export default async function ProductDetailPage({
 
           <hr className="my-6 h-px border-0 bg-secondary-400/50" />
 
-          {options.map((option, index) => {
-            const values = [...option.product_option_value].sort(
-              (a, b) => a.option_value.sort_order - b.option_value.sort_order,
-            )
-            return (
-              <div key={option.id} className="py-4">
-                <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
-                  {String(index + 1).padStart(1, "0")}. {option.option_type.name}
-                </label>
-                <div className="mt-2 flex flex-wrap gap-2.5">
-                  {values.map((value) => (
-                    <span
-                      key={value.id}
-                      className={
-                        value.is_default
-                          ? "inline-flex items-center gap-2 rounded-lg border border-primary px-3.5 py-2 text-sm ring-2 ring-secondary-400"
-                          : "inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm"
-                      }
-                    >
-                      {value.option_value.label}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
-
-          <div className="mt-4 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
-            ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong> 天，將於結帳再次告知。
-          </div>
-
-          <button
-            type="button"
-            className="mt-5 w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase hover:bg-primary-700"
-          >
-            加入購物袋
-          </button>
+          <ProductConfigurator options={configuratorOptions} />
         </div>
       </div>
     </div>
