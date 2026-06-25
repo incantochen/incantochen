@@ -27,6 +27,7 @@
 - ✅ **DB migration 工具定案：Supabase CLI**（規範見 `docs/migration-guide.md`）——T03 前置已解。
 - ✅ **M0 資料層完成並套用雲端**：T03 建表＋T46 RLS 已 `db push` 至雲端 production（project-ref `wdmigbqdhernmrfpzzxk`，13 表＋11 policy，雲端驗收通過）；型別已生於 `src/types/database.types.ts`；commit `c124482`。欄位級規格見 `docs/data-model.md`。
 - ✅ **T43 dev seed 已完成並通過本機驗收**（2026-06-25）：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單），`supabase db reset --local` 套用＋驗收查詢全數通過。過程中修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／docs/verify-seed.sql 已移除該欄位引用。
+- ✅ **T04 部署到 Vercel＋CI 已完成**（2026-06-25）：repo push 至 GitHub（`github.com/incantochen/incantochen`），透過 Vercel GitHub App 連接專案 `jewelry-shop`，env vars 已設定，首次部署成功且驗證 push 自動觸發部署（CI）生效。production：`https://jewelry-shop-delta.vercel.app`。
 - ⏭️ **下一步：T15 戒指商品詳情頁 → M1 戒指可配置並付款（於 Claude Code）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---

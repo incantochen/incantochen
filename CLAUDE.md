@@ -13,6 +13,7 @@
 > ⚠️ **下列技術棧雖已鎖定，但尚未安裝**：Supabase（client 與 CLI）、Zod、Resend、ECPay 串接、測試框架。動到它們時先安裝再使用，不要假設已存在、也不要憑空 import。
 > ✅ **資料庫 schema 已套用至雲端 production**（project-ref `wdmigbqdhernmrfpzzxk`）：`0001`（13 張表）＋`0002`（11 條 RLS policy）已 `db push`、雲端驗收通過；型別已生於 `src/types/database.types.ts`；commit `c124482`。後續改 schema 一律**新增** migration（已套用的不可改）。
 > ✅ **T43 dev seed 已完成並通過本機驗收（2026-06-25）**：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單）；`supabase db reset --local` 套用＋逐條查詢驗收全數通過（見 §7）。修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／verify-seed.sql 已移除該欄位引用。
+> ✅ **T04 部署到 Vercel＋CI 已完成（2026-06-25）**：repo 已 push 至 GitHub（`github.com/incantochen/incantochen`）並透過 Vercel GitHub App 連接專案 `jewelry-shop`；Supabase 環境變數已於 Vercel Dashboard 設定（Production/Preview/Development）；首次部署成功，production 網址 `https://jewelry-shop-delta.vercel.app`；已用空 commit push 驗證 CI 自動部署生效（push 後自動觸發新 production 部署）。
 
 ---
 
@@ -21,7 +22,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1 規劃**全數完成**。M0 資料層 T03＋T46＋T43 完成。下一步：**T15 戒指商品詳情頁**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1 規劃**全數完成**。M0 資料層 T03＋T46＋T43 完成；T04 部署＋CI 完成。下一步：**T15 戒指商品詳情頁**（T05 會員登入可視排程彈性插入，見 `docs/work-log.md`）。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 

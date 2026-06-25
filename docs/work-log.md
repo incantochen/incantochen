@@ -35,6 +35,20 @@
 
 ---
 
+#### #T04 / M0 基礎建設 / 部署到 Vercel 並打通 CI
+**說明**：插隊任務（M1 主線之外），在開始 T15 前先確保部署/CI 基礎設施就位，降低後期金流整合風險。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | GitHub repo `github.com/incantochen/incantochen`、Vercel 專案 `jewelry-shop` |
+| 更新描述 | 1. repo 原本無 git remote，新增 origin 並 push 既有 commit。2. `vercel link` 建立專案，但自動連接 GitHub 失敗兩次：先缺帳號層級 Login Connection，補上後仍缺 GitHub App 對該 repo 的存取授權（需在 GitHub Installed GitHub Apps 設定，非單純 OAuth 登入連線）；安裝 Vercel GitHub App 並勾選 Commit Comments、Consolidated Commit Status 權限後，`vercel git connect` 顯示 already connected（CLI 對「已連接」狀態回傳 exit code 1，屬已知 UX 瑕疵，非錯誤）。3. Supabase 環境變數（`NEXT_PUBLIC_SUPABASE_URL`／`NEXT_PUBLIC_SUPABASE_ANON_KEY`，特別注意要用 anon/public key、不可用 service_role/secret key）由使用者本人直接於 Vercel Dashboard 設定，未經過 Claude（依 `.env*` 紅線）。4. `vercel --prod` 完成首次部署成功。5. 用空 commit push 驗證 CI：30 秒內自動觸發新 production 部署，確認 git push 自動部署生效。 |
+| 待辦 | （無，已完成）。正式網域待 T35 上線階段再設定（目前用 Vercel 預設 `*.vercel.app` 子網域，與最終正式網址無關，可隨時換） |
+| 驗收 | production：`https://jewelry-shop-delta.vercel.app`（Ready） |
+| 依賴 | T01 ✅ |
+
+---
+
 ### 下次作業
 
 #### #T15 / M1 前台 / 戒指商品詳情頁
