@@ -147,20 +147,32 @@
 
 ---
 
+#### #T21 / M1 購物車 / 購物車頁
+**說明**：讀剛剛寫進去的 `cart_item`，做出購物車頁面——項目列表、改數量、刪除、小計。涉及 service role 讀取＋擁有權檢查，先進 plan mode 規劃。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | `src/lib/cart/read-cart.ts`（新增）、`src/app/cart/actions.ts`（新增）、`src/app/cart/page.tsx`（新增）、`src/components/cart-item-row.tsx`（新增）、`src/components/site-header.tsx`（修改） |
+| 更新描述 | 1. **讀取也要走 service role**——T19/T20 只處理了寫入，這次發現 `cart`／`cart_item` 的 RLS 是「啟用但完全不建 policy」，deny-by-default 對**所有操作**生效，連 SELECT 也不例外，所以 `read-cart.ts` 一樣得用 service role client。2. **新增 T19/T20 沒有的風險：擁有權檢查**——改數量／刪除收到的是 `cart_item.id`，如果不驗證歸屬，任何人猜到別人的 id 就能改/刪別人的購物車；`verifyOwnership()` 先查該 `cart_item` 所屬 `cart.guest_token`，跟當前請求的 cookie 比對一致才放行，不一致就回錯誤、不執行任何寫入。3. Wireframe 參考 `Demo_0623/cart.html`：兩欄版面（左品項列表＋右摘要面板 sticky），`config_snapshot.selections[].label` 串成 gemline 摘要文字。4. 「前往結帳」按鈕做成 `disabled`（`/checkout` 是 T22，避免連到 404）；header 購物袋數量徽章不做（非本任務範圍，需每頁查 DB）。5. `site-header.tsx` 的購物袋圖示連結從 `#` 改成 `/cart`。6. Playwright 全流程驗證：PDP 加入商品→開 `/cart` 確認顯示正確→點 `+` 改數量(2)，畫面與小計即時反映→點「移除」回到空車狀態；另外直查雲端 production 的 `cart_item` 數量，確認新建/改/刪都是真的反映在資料庫（不是只有前端樂觀更新），剩餘資料是更早 T19/T20 測試留下的舊資料，時間戳與 guest_token 都對得上。 |
+| 待辦 | （無，已完成）。 |
+| 驗收 | `pnpm lint`／`tsc --noEmit` 通過；Playwright 截圖＋雲端 DB 查詢雙重確認。 |
+| 依賴 | T19/T20 ✅ |
+
+---
+
 ### 下次作業
 
-#### #T21 / M1 購物車 / 購物車頁
-**說明**：讀剛剛寫進去的 `cart_item`，做出購物車頁面——項目列表、改數量、刪除、小計。
+#### #T22 / M1 結帳 / 結帳頁（收件＋配送）
+**說明**：購物車頁已經有「前往結帳」按鈕（目前 disabled），T22 要把它接上真正的結帳頁。
 
 | 項目 | 內容 |
 |------|------|
 | 狀態 | ⬜ 未開始 |
 | 更新描述 | — |
-| 待辦 | 1. 新建 `/cart` route，用 `guest_token` cookie 查 `cart`／`cart_item`（一樣得走 service role 或新增對應 RLS 思路——cart 對前台全拒，讀取也要走後端）<br>2. 項目列表呈現 `config_snapshot` 內容、單價、數量、小計<br>3. 改數量／刪除動作（同樣要走 server action＋service role） |
-| 依賴 | T19/T20 ✅ |
-| 注意 | 讀取也受同一條 RLS 紅線限制（cart 對 anon/authenticated 全拒），不能直接在 page.tsx 用 anon client 查 cart，要走 server action 或專用的讀取用 service role 呼叫 |
-
----
+| 待辦 | 1. 新建 `/checkout` route，收件資訊表單（姓名／電話／地址）＋配送方式<br>2. 「結帳即建會員」——這裡會用到 magic link（T05 已設定，但 T06/T07 登入 UI／session 還沒做），需要先確認這塊怎麼接<br>3. 把 `/cart` 頁面的「前往結帳」按鈕從 disabled 改成可點 |
+| 依賴 | T21 ✅；邏輯上也卡 T06/T07（登入）尚未完成 |
+| 注意 | 涉及會員建立／session，依規定要先進 plan mode；先確認 T06/T07 的狀態再評估 T22 範圍要不要先縮小（例如先做表單骨架，會員建立邏輯等 T06/T07 之後再接） |
 
 ## 📋 日誌範本（複製使用）
 

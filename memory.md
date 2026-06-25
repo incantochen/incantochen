@@ -36,7 +36,8 @@
 - ✅ **T18 報價引擎完成**（2026-06-25）：`product-configurator.tsx` 擴充即時計價（`unit_price = base_price + Σ price_delta`、`小計 = unit_price × quantity`），補回「加價明細」展開面板。Playwright 驗證價格即時正確更新。
 - 📌 **T17（即時換圖）暫緩**：依賴 T55/T56（3D 素材製作），使用者決定圖片處理維持 Blender/3D 路線（評估過 AI 圖片生成模型如 DALL-E/Imagen，判定不適合——無法做到同一戒指模型精準替換材質），先擱置，圖片用佔位圖頂著繼續開發其他骨架。
 - ✅ **T19/T20 加入購物車（寫快照）完成**（2026-06-25，先進 plan mode 核准後執行）：新增 service role client＋`addToCart` server action。後端重新驗證白名單並重算價格，不採信前端數字；`cart`/`cart_item` 走 service role 寫入（RLS 故意對前端全拒）；訪客用 `guest_token` httpOnly cookie。新增環境變數 `SUPABASE_SERVICE_ROLE_KEY`（使用者本人填入本機＋Vercel）。Playwright＋雲端 DB 查詢驗證通過。
-- ⏭️ **下一步：T21 購物車頁。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
+- ✅ **T21 購物車頁完成**（2026-06-25，先進 plan mode 核准後執行）：`read-cart.ts`（讀取也走 service role，因為 RLS 連 SELECT 也對前台全拒）＋`cart/actions.ts`（改數量／刪除，新增「擁有權檢查」防止亂猜 id 動到別人購物車）＋`cart/page.tsx`／`cart-item-row.tsx`。結帳按鈕 disabled（留給 T22）。Playwright＋雲端 DB 雙重驗證通過。
+- ⏭️ **下一步：T22 結帳頁（收件＋配送）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---
 

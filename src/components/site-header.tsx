@@ -37,7 +37,7 @@ export function SiteHeader() {
           <Link href="#" aria-label="會員" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
             <User className="size-[18px]" strokeWidth={1.4} />
           </Link>
-          <Link href="#" aria-label="購物袋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
+          <Link href="/cart" aria-label="購物袋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
             <ShoppingBag className="size-[18px]" strokeWidth={1.4} />
           </Link>
         </div>
