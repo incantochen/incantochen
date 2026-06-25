@@ -63,6 +63,20 @@
 
 ---
 
+#### #T05 / M0 會員 / Supabase Auth 設定（Email OTP 主＋Magic link 輔）
+**說明**：插隊任務（涉及 auth，先進 plan mode 核准後執行）。設定 Auth provider 讓 T06 登入 UI 開工前就位；範圍僅 redirect 白名單與 email 樣板，不含 `/auth/confirm` 頁面與登入 UI 本身。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 本機完成（2026-06-25）；⚠️ production 待使用者手動設定 |
+| 產出 | `supabase/config.toml`（修改）、`supabase/templates/magic_link.html`（新增） |
+| 更新描述 | 1. 修正 `additional_redirect_urls` 協定不一致 bug（原 `https://127.0.0.1:3000`，與 `site_url` 的 `http://` 不一致），改為 `["http://127.0.0.1:3000/**", "http://localhost:3000/**"]`。2. 新增 `[auth.email.template.magic_link]` 自訂樣板，內容顯示 6 碼 OTP（`{{ .Token }}`）＋連結改指向自家 `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email`（而非 Supabase 預設直接驗證的端點），符合 user-flow.md「連結落地頁須再按一次登入才消耗 token」的防護需求。3. `content_path` 路徑解析是相對於專案根目錄（cwd），不是相對於 `supabase/config.toml` 所在目錄——首次寫成 `./templates/...` 會找不到檔案，需寫 `./supabase/templates/...`（沿用既有 `invite` 註解範例的寫法）。4. `supabase stop`＋`start` 重啟套用設定。5. 端到端驗證：`POST /auth/v1/otp` 觸發信→Mailpit 確認信件主旨／OTP 碼／連結格式全部正確→`POST /auth/v1/verify` 用該 OTP 碼成功換得 access token。 |
+| 待辦 | **production（cloud project `wdmigbqdhernmrfpzzxk`）尚未設定，需使用者手動到 Supabase Dashboard**：① Authentication → URL Configuration：Site URL 設 `https://jewelry-shop-delta.vercel.app`，Redirect URLs 新增 `https://jewelry-shop-delta.vercel.app/**` 與 `https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app/**`。② Authentication → Emails → Magic Link：貼上 `supabase/templates/magic_link.html` 的內容（`{{ .SiteURL }}` 在雲端會自動解析成正式網址，不用改）。 |
+| 驗收 | 本機 Mailpit 收信內容：OTP 碼正確顯示、連結正確指向 `/auth/confirm`；`verify` API 成功換 token。production 端到端測試留待 T06（登入 UI／`/auth/confirm` 頁面）完成後再做。 |
+| 依賴 | T02 ✅ |
+
+---
+
 ### 下次作業
 
 #### #T15 / M1 前台 / 戒指商品詳情頁

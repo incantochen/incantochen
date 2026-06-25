@@ -15,6 +15,7 @@
 > ✅ **T43 dev seed 已完成並通過本機驗收（2026-06-25）**：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單）；`supabase db reset --local` 套用＋逐條查詢驗收全數通過（見 §7）。修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／verify-seed.sql 已移除該欄位引用。
 > ✅ **T04 部署到 Vercel＋CI 已完成（2026-06-25）**：repo 已 push 至 GitHub（`github.com/incantochen/incantochen`）並透過 Vercel GitHub App 連接專案 `jewelry-shop`；Supabase 環境變數已於 Vercel Dashboard 設定（Production/Preview/Development）；首次部署成功，production 網址 `https://jewelry-shop-delta.vercel.app`；已用空 commit push 驗證 CI 自動部署生效（push 後自動觸發新 production 部署）。
 > ✅ **T52 Staging 環境已完成（2026-06-25）**：`staging` 分支 push 後 Vercel 自動產生 Preview 部署（非 Production），穩定分支別名 `https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`，供日後 ECPay sandbox 等金流測試使用。
+> ✅ **T05 Supabase Auth（Email OTP＋magic link）本機設定已完成（2026-06-25）**：`supabase/config.toml` 補上 `additional_redirect_urls` 萬用路徑、`[auth.email.template.magic_link]`；新增 `supabase/templates/magic_link.html`（顯示 6 碼 OTP＋指向自家 `/auth/confirm` 的連結，而非 Supabase 預設驗證端點）。本機 `signInWithOtp`→Mailpit 收信→`verify` 端到端測試通過。**production 設定待使用者手動到 Supabase Dashboard 配置**（見 `docs/work-log.md` T05 待辦），`/auth/confirm` 頁面本身留給 T06／T07。
 
 ---
 
