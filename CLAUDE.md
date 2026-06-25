@@ -10,13 +10,14 @@
 
 > **目前實際狀態（隨開發更新）：** 已建立 Next.js 16.2.9 骨架（TypeScript、Tailwind、ESLint、App Router、`src/`、Turbopack、`@/*`），`pnpm dev` 可啟動。
 > ✅ **shadcn/ui 已初始化**（`components.json`、`src/components/ui/button.tsx`、`src/lib/utils.ts`）；**品牌色票**（Primary Emerald `#063B2F`、Secondary Gold `#C5A059`、中性色階）已寫入 `globals.css` 的 `@theme`，與 `docs/brand-guide.md` 一致；**雙軌字體已對接**：標題 `--font-head`＝EB Garamond＋Noto Serif TC，內文 `--font-body`＝Hanken Grotesk＋Noto Sans TC（`src/app/layout.tsx` 用 `next/font/google` 載入，已驗證字重支援）。
-> ⚠️ **下列技術棧雖已鎖定，但尚未安裝**：Supabase（client 與 CLI）、Zod、Resend、ECPay 串接、測試框架。動到它們時先安裝再使用，不要假設已存在、也不要憑空 import。
+> ⚠️ **下列技術棧雖已鎖定，但尚未安裝**：Resend、ECPay 串接、測試框架。動到它們時先安裝再使用，不要假設已存在、也不要憑空 import。（Supabase／Zod 已安裝）
 > ✅ **資料庫 schema 已套用至雲端 production**（project-ref `wdmigbqdhernmrfpzzxk`）：`0001`（13 張表）＋`0002`（11 條 RLS policy）已 `db push`、雲端驗收通過；型別已生於 `src/types/database.types.ts`；commit `c124482`。後續改 schema 一律**新增** migration（已套用的不可改）。
 > ✅ **M0 全數完成（2026-06-25）**：T01–T05、T43、T46、T52。**關鍵環境細節**：①`.env.local` 接的是**雲端 production**（非本機 `127.0.0.1:54321`），改 seed／測試資料兩邊都要各跑一次（本機 `db reset --local`＋雲端 `db query --linked --file`）。②Vercel env vars／Supabase secret 一律由使用者本人到對應 Dashboard 設定，不經過 Claude。③Production：`https://jewelry-shop-delta.vercel.app`；staging preview 別名：`https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`。④Auth(T05) **production 端設定尚待使用者手動處理**（Site URL／Redirect URLs／Magic Link 範本，見 `docs/work-log.md`）；`/auth/confirm` 頁面已在 T06/T07 完成。
 > ✅ **T15/T16/T18 戒指 PDP＋配置器＋報價引擎已完成**：`src/app/products/[slug]/page.tsx`＋`src/components/product-configurator.tsx`（client component：chip 選取／數量 stepper／即時計價，公式見 `docs/data-model.md` §4.2）。範圍不含「關於這件作品」／「猜你喜歡」（無真實內容不杜撰）、即時換圖 T17（暫緩，依賴 T55/T56 3D 素材）。
 > 📌 **流程變更（M1 起）**：改用 feature branch＋PR，不再直接 push master；PR 連結給使用者看過、回覆「沒問題」後才 merge。
 > ✅ **T19/T20/T21 購物車（寫快照／讀取／改數量／刪除）已完成**：**關鍵架構**——`cart`／`cart_item` 的 RLS 對 anon/authenticated **讀寫全拒**，一律走 `src/lib/supabase/service-role.ts`（`import "server-only"` 防呆）。寫入前伺服器端用白名單重算 `unit_price_snapshot`／`config_snapshot`，**不採信前端價格**。改數量／刪除前先驗證 `cart_item` 所屬 `cart.guest_token` 與當前 cookie 一致（擁有權檢查，防亂猜 id 動到別人購物車）。訪客身份用 `guest_token` httpOnly cookie。新增環境變數 `SUPABASE_SERVICE_ROLE_KEY`（使用者本人填入本機＋Vercel，不可加 `NEXT_PUBLIC_` 前綴）。
 > ✅ **T06/T07 登入入口＋路由保護已完成（2026-06-25）**：`/login`（Email OTP 主＋一鍵重寄）、`/auth/confirm`（magic link 落地頁，**按鈕才消耗 token**，不在 `useEffect` 自動驗證）、`src/proxy.ts`（Next 16 慣例，取代 `middleware.ts`，必須**named export `proxy`** 而非 `middleware`，每請求刷新 session）、`src/lib/auth/require-user.ts`（`requireUser()` 共用保護機制，`/account` 為最小驗證用頁面，T08 會擴充非丟棄）。**關鍵發現**：①`member` 表只有 SELECT policy、無 INSERT policy，建會員 row 一樣要走 service role（`find-or-create-member.ts`）。②**雲端 production 實際 OTP 碼是 8 位數，不是本機 config.toml 設定的 6 位**——原本寫死 `/^\d{6}$/` 會擋掉真實使用者的驗證碼，已改成不假設固定長度。Playwright＋`admin.generateLink`（不寄真信，取得測試用 OTP/token_hash）端到端驗證：登入→`/account`顯示歡迎訊息→登出→重訪被導回 `/login`，雲端 `member` 表確認寫入，測試帳號已清除。
+> ✅ **T22 結帳頁（收件＋配送）已完成（2026-06-25）**：`/checkout`（讀 T21 `getCart()`，空車導回 `/cart`）＋ `checkout-form.tsx`（Zod 驗證，`src/lib/checkout/schema.ts`）。**重要釐清**：結帳本身**不需要 OTP／magic link**——Email 只是輸入框，「結帳即會員」要到 T23 建立訂單時才在背景用 admin API 處理，使用者完全無感。已查證 ECPay 文件（[ECPay-API-Skill](https://github.com/ECPay/ECPay-API-Skill)）：①付款建立 API 不需收件人資料（消費者在綠界頁面自己填）；②黑貓宅配物流 API 需要**獨立的郵遞區號欄位**（`ReceiverZipCode`），已加進表單（`orders` 表暫無對應欄位，留給 T48 決定）。送出按鈕刻意 disabled（T23/T48/T57 未完成）。Playwright 驗證：空車導向、表單即時驗證（`onBlur`，因為按鈕本身 disabled 不能靠送出觸發）、已登入時 Email 自動帶入。
 
 ---
 
@@ -25,7 +26,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21 完成（登入＋路由保護→PDP→配置器→報價→購物車）。**T17 暫緩**（依賴 T55/T56 3D 素材，使用者決定先擱置，圖片用佔位圖頂著）。下一步：**T22 結帳頁（收件＋配送，可接「結帳即會員」了）**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳表單）。**T17 暫緩**（依賴 T55/T56 3D 素材，使用者決定先擱置，圖片用佔位圖頂著）。下一步：**T48 黑貓宅配串接 或 T57 客製例外同意**（兩者皆為 T23 建立訂單的前置）。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 

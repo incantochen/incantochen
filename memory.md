@@ -38,7 +38,8 @@
 - ✅ **T19/T20 加入購物車（寫快照）完成**（2026-06-25，先進 plan mode 核准後執行）：新增 service role client＋`addToCart` server action。後端重新驗證白名單並重算價格，不採信前端數字；`cart`/`cart_item` 走 service role 寫入（RLS 故意對前端全拒）；訪客用 `guest_token` httpOnly cookie。新增環境變數 `SUPABASE_SERVICE_ROLE_KEY`（使用者本人填入本機＋Vercel）。Playwright＋雲端 DB 查詢驗證通過。
 - ✅ **T21 購物車頁完成**（2026-06-25，先進 plan mode 核准後執行）：`read-cart.ts`（讀取也走 service role，因為 RLS 連 SELECT 也對前台全拒）＋`cart/actions.ts`（改數量／刪除，新增「擁有權檢查」防止亂猜 id 動到別人購物車）＋`cart/page.tsx`／`cart-item-row.tsx`。結帳按鈕 disabled（留給 T22）。Playwright＋雲端 DB 雙重驗證通過。
 - ✅ **T06/T07 登入入口＋路由保護完成**（2026-06-25，先進 plan mode 核准後執行）：`/login`（OTP 主）、`/auth/confirm`（magic link，按鈕才消耗 token）、`src/proxy.ts`（Next 16 用 `proxy` 具名匯出取代 `middleware.ts`）、`requireUser()` 共用保護機制＋最小驗證頁 `/account`。**重要發現**：`member` 表沒有 INSERT policy，建會員一樣要走 service role；**雲端 production 實際 OTP 是 8 位數**（不是本機設定的 6 位），原本寫死 6 位數驗證的 bug 已修正。用 `admin.generateLink` 產生測試用驗證碼/連結（不寄真信）做 Playwright 端到端驗證，測試帳號驗證後已清除。
-- ⏭️ **下一步：T22 結帳頁（收件＋配送），現在可以接「結帳即會員」了。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
+- ✅ **T22 結帳頁完成**（2026-06-25，先進 plan mode 核准後執行）：`/checkout`（讀 T21 `getCart()`）＋`checkout-form.tsx`（Zod 驗證，新增 `zod` 套件）。**重要釐清**：結帳本身不需要 OTP/magic link，Email 只是輸入框，「結帳即會員」要到 T23 建單時才在背景處理。依使用者要求查證 ECPay 文件（[ECPay-API-Skill](https://github.com/ECPay/ECPay-API-Skill)）：付款 API 不需收件人資料；黑貓宅配物流 API 需要獨立的郵遞區號欄位，已補進表單（`orders` 表暫無對應欄位，留 T48 決定）。送出按鈕 disabled（T23/T48/T57 未完成）。Playwright 驗證通過。
+- ⏭️ **下一步：T48 黑貓宅配串接 或 T57 客製例外同意（皆為 T23 建單前置）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
 
 ---
 
