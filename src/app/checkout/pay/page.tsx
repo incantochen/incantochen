@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { buildAioParams } from "@/lib/ecpay/aio-payment"
+import { generateMerchantTradeNo } from "@/lib/ecpay/merchant-trade-no"
 import { serverEnv } from "@/lib/env.server"
 import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit"
 
@@ -21,11 +22,19 @@ export default async function CheckoutPayPage({
     .from("orders")
     .select("*")
     .eq("order_no", orderNo)
-    .eq("status", "pending_payment")
     .maybeSingle()
 
   if (!order) {
     redirect("/checkout")
+  }
+
+  // 已付款 → 直接進成功頁（避免重送 ECPay）
+  if (order.status === "paid") {
+    redirect(`/checkout/success?order=${orderNo}`)
+  }
+
+  if (order.status !== "pending_payment") {
+    redirect("/")
   }
 
   const { data: orderItems } = await serviceRole
@@ -37,12 +46,41 @@ export default async function CheckoutPayPage({
     redirect("/checkout")
   }
 
+  // 冪等：復用現有 pending payment（頁面重整不重建），
+  // 付款失敗後 status 變 failed，下次進來才產生新 trade no
+  const { data: existingPending } = await serviceRole
+    .from("payment")
+    .select("merchant_trade_no")
+    .eq("order_id", order.id)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  let merchantTradeNo: string
+
+  if (existingPending) {
+    merchantTradeNo = existingPending.merchant_trade_no
+  } else {
+    merchantTradeNo = generateMerchantTradeNo(order.order_no)
+    const { error } = await serviceRole.from("payment").insert({
+      order_id: order.id,
+      merchant_trade_no: merchantTradeNo,
+      amount: order.total_amount,
+      provider: "ecpay",
+      status: "pending",
+    })
+    if (error) {
+      redirect("/checkout")
+    }
+  }
+
   const items = orderItems.map((item) => ({
     quantity: item.quantity,
     productName: item.product.name,
   }))
 
-  const params = buildAioParams(order, items, serverEnv.NEXT_PUBLIC_SITE_URL)
+  const params = buildAioParams(order, items, merchantTradeNo, serverEnv.NEXT_PUBLIC_SITE_URL)
 
   return (
     <main className="min-h-screen bg-paper flex items-center justify-center px-4">
