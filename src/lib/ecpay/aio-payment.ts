@@ -26,11 +26,12 @@ function buildItemName(items: OrderItemForPayment[]): string {
 export function buildAioParams(
   order: OrderRow,
   items: OrderItemForPayment[],
+  merchantTradeNo: string,
   siteUrl: string,
 ): Record<string, string> {
   const params: Record<string, string> = {
     MerchantID: serverEnv.ECPAY_MERCHANT_ID,
-    MerchantTradeNo: order.order_no.replace(/-/g, ""),
+    MerchantTradeNo: merchantTradeNo,
     MerchantTradeDate: formatTaiwanTradeDate(new Date()),
     PaymentType: "aio",
     TotalAmount: String(order.total_amount),
