@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useTransition } from "react"
 import { checkoutFormSchema } from "@/lib/checkout/schema"
+import { createOrder } from "@/app/checkout/actions"
 
 export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [email, setEmail] = useState(defaultEmail)
@@ -11,6 +12,8 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [shippingAddress, setShippingAddress] = useState("")
   const [customConsent, setCustomConsent] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [isPending, startTransition] = useTransition()
 
   function validate() {
     const result = checkoutFormSchema.safeParse({
@@ -36,13 +39,28 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
     return false
   }
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setSubmitError(null)
+    if (!validate()) return
+    startTransition(async () => {
+      const result = await createOrder({
+        email,
+        recipientName,
+        recipientPhone,
+        zipCode,
+        shippingAddress,
+        customConsent: customConsent as true,
+      })
+      // redirect() in server action throws internally — only reach here on error
+      if (!result.ok) {
+        setSubmitError(result.error)
+      }
+    })
+  }
+
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        validate()
-      }}
-    >
+    <form onSubmit={handleSubmit}>
       <div className="mb-4">
         <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">Email</label>
         <input
@@ -148,13 +166,18 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         )}
       </div>
 
+      {submitError && (
+        <p className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-sm text-destructive">
+          {submitError}
+        </p>
+      )}
+
       <button
         type="submit"
-        disabled
-        title="結帳功能即將推出（T23 建立訂單尚未完成）"
+        disabled={isPending}
         className="w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase disabled:opacity-50"
       >
-        前往付款
+        {isPending ? "處理中…" : "前往付款"}
       </button>
     </form>
   )
