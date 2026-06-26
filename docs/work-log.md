@@ -279,8 +279,6 @@
 
 ---
 
-### 下次作業
-
 #### #T26 / M1 金流 / ECPay 付款結果 Webhook（ReturnURL）
 **說明**：實作 `/api/ecpay/notify` server-to-server callback，驗證 CheckMacValue 並更新訂單狀態＋插入 Payment 記錄。
 
@@ -288,9 +286,98 @@
 |------|------|
 | 狀態 | ✅ 完成（2026-06-26） |
 | 產出 | `src/app/api/ecpay/notify/route.ts`（新增） |
-| 更新描述 | POST handler：① 解析 form data ② verifyCheckMacValue（SHA256，安全關卡）③ 查 orders by order_no（MerchantTradeNo 還原 hyphen）④ 冪等：payment 已 paid 直接回 1\|OK ⑤ RtnCode=1：upsert payment(paid) + orders.status pending_payment→paid ⑥ RtnCode≠1：upsert payment(failed) ⑦ 無論如何回 HTTP 200 text/plain，try/catch 防止 DB 錯誤回 500 導致 ECPay 重試。不需新增 migration（payment_status/order_status enum 已有 paid）。 |
-| 待辦 | 驗收：Vercel 部署後跑完整付款流程，Supabase Dashboard 確認 orders.status=paid、payment 表有記錄 |
+| 更新描述 | POST handler：① 解析 form data ② verifyCheckMacValue（SHA256，安全關卡）③ 查 orders by order_no（MerchantTradeNo 還原 hyphen）④ 冪等：payment 已 paid 直接回 1\|OK ⑤ RtnCode=1：upsert payment(paid) + orders.status pending_payment→paid ⑥ RtnCode≠1：upsert payment(failed) ⑦ 無論如何回 HTTP 200 text/plain，try/catch 防止 DB 錯誤回 500 導致 ECPay 重試。不需新增 migration。 |
+| 待辦 | （無，已完成） |
 | 依賴 | T25 ✅ |
+
+---
+
+#### #T27 / M1 金流 / 付款結果頁（成功／失敗）
+**說明**：付款完成後的落地頁：成功頁輪詢等 Webhook 更新、失敗頁提供重試。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `src/app/checkout/success/page.tsx`（改寫）、`src/app/checkout/success/order-status-check.tsx`（新增）、`src/app/checkout/failed/page.tsx`（新增）、`src/app/api/ecpay/order-result/route.ts`（修改） |
+| 更新描述 | 1. `/checkout/success`：Server Component 查 orders+member join。`paid` → 完整成功 UI（訂單號、Email 登入提示）；`pending_payment` → 渲染 `OrderStatusCheck`（Client Component，`router.refresh()` 每 3 秒，90 秒逾時後顯示 amber「將以 email 通知」）；其他 status → redirect `/`。2. `OrderStatusCheck`：`useRef(0)` + `startRef.current = Date.now()` 於 `useEffect` 初始化，避免 `useRef(Date.now())` 在 render 期間呼叫 impure function 導致 `react-hooks/purity` lint error。3. `/checkout/failed`：若 orders.status 已是 `paid` → redirect 成功頁；否則顯示失敗原因＋重試按鈕（回 `/checkout/pay?order=...`）。4. `order-result` route：付款失敗改 redirect `/checkout/failed?order=xxx`（原本是回 `/checkout/pay?error=payment_failed`，移除 pay 頁的 error banner）。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm build` ✅；branch `feature/t27-payment-result-pages`，PR merge commit。 |
+| 依賴 | T26 ✅ |
+
+---
+
+#### #T53 / M1 金流 / ECPay MerchantTradeNo 冪等性
+**說明**：防止同一訂單因重付或 Webhook 重試產生重複 MerchantTradeNo，確保金流冪等。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `src/lib/ecpay/merchant-trade-no.ts`（新增）、`src/app/checkout/pay/page.tsx`（改寫）、`src/app/api/ecpay/notify/route.ts`（改寫）、`src/lib/ecpay/aio-payment.ts`（修改） |
+| 更新描述 | 1. `generateMerchantTradeNo(orderNo)`：order_no 去 hyphen（17 字元）+ 2 隨機英數字元 = 19 字，在 ECPay 20 字上限內，每次付款嘗試都有唯一 trade no。2. `checkout/pay/page.tsx`：先查 orders.status（`paid` → redirect success）；再查 pending_payment 表，若存在 pending payment row 直接 reuse 其 merchantTradeNo；否則新建 payment row 並產生新 trade no → 傳給 `buildAioParams()`。3. `notify/route.ts`：改以 `merchant_trade_no` 為 lookup key（不再 parse order_no 字串）；UPDATE 加 `.eq("status","pending")` 競態守衛；INSERT fallback 加 23505 graceful handling。DB 已有 `payment.merchant_trade_no UNIQUE` + `uq_payment_one_paid_per_order` partial index，不需新 migration。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm build` ✅；branch `feature/t53-idempotency`，PR merge commit。 |
+| 依賴 | T26 ✅、T27 ✅ |
+
+---
+
+#### #T41 / M1 安全 / 伺服器端驗價＋金鑰隔離
+**說明**：建立訂單時在伺服器端依 DB 白名單重新計算金額，不信任 cart 快照；金額變動時走 R/S/Q 通知 loop 而非靜默建單。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `src/lib/quote/verify-prices.ts`（新增）、`src/lib/env.server.ts`（修改）、`src/lib/supabase/service-role.ts`（修改）、`src/app/checkout/actions.ts`（修改）、`src/components/checkout-form.tsx`（修改） |
+| 更新描述 | 1. **`verify-prices.ts`**：`import "server-only"`；Zod 驗 config_snapshot 形狀；DB 重查 `product.base_price`（必須 `status=active`，否則 throw）；查 `product_option` join whitelist（含 `option_value.label`）建立 price map；遍歷 selections 驗白名單，白名單外 throw；重建 `verifiedSelections`（用 DB 當下的 label/priceDelta，不沿用快照）與 `verifiedConfigSnapshot`；回傳 `priceChanged: boolean`（`verifiedUnitPrice !== unit_price_snapshot`）。2. **`env.server.ts`**：加入 `SUPABASE_SERVICE_ROLE_KEY: required()`，啟動時 fail-fast 驗證。3. **`service-role.ts`**：改用 `serverEnv.SUPABASE_SERVICE_ROLE_KEY`（不再 `process.env.XXX!`）。4. **`createOrder`（actions.ts）**：驗價後若 `changedItems.length > 0` → 批次更新 `cart_item.unit_price_snapshot + config_snapshot` → `revalidatePath("/cart")`／`"/checkout"` → 回傳 `{ ok: false, error: "商品金額已更新，請確認新金額後再次送出", priceUpdated: true }`，不建立訂單（**R/S/Q loop，對齊 user-flow.md：不靜默用新價建單**）。5. **`checkout-form.tsx`**：區分 `priceUpdated`（amber 警示 + `router.refresh()`，讓使用者看到新金額後再次送出）vs 硬錯誤（紅色，不 refresh）。**Blind spot 修正記錄**：初版實作「驗價後直接用新金額建單」，但 Ultraplan plan review 指出這違反 user-flow.md R/S/Q 節點設計（頁面顯示舊價、ECPay 收新價，體驗斷裂）。補上 mismatch 通知 loop 後，兩次送出之間使用者可看到更新後金額，ECPay 與頁面數字一致。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm build` ✅；branch `feature/t41-server-price-verify`，PR merge commit。 |
+| 依賴 | T23 ✅ |
+
+---
+
+### 下次作業
+
+#### #T58 / M1 安全 / 應用層安全防護
+**說明**：安全標頭、速率限制、輸入淨化等應用層防護。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ⬜ 未開始 |
+| 待辦 | 評估範圍：Content-Security-Policy、rate limiting（Vercel Edge / upstash）、常見 OWASP 防護 |
+| 依賴 | T41 ✅ |
+
+---
+
+#### #T51 / M1 測試 / 報價引擎單元測試
+**說明**：為 `verify-prices.ts` 等核心邏輯補上單元測試，需先建置測試框架（vitest）。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ⬜ 未開始 |
+| 待辦 | 安裝 vitest；覆蓋：白名單外選項 throw、base_price 重算、priceChanged 判斷 |
+| 依賴 | T41 ✅ |
+
+---
+
+#### #T30a / M1 Email / 下單確認信
+**說明**：建立訂單後寄送確認信給客人（需先安裝 Resend）。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ⬜ 未開始（⚠️ 需先 `pnpm add resend`） |
+| 待辦 | 安裝 Resend；設計 Email 範本；`createOrder` 成功後 fire-and-forget 寄信 |
+| 依賴 | T23 ✅ |
+
+---
+
+#### #T49 / M1 Email / 新訂單通知店家
+**說明**：新訂單成立後通知店家（和 T30a 共用 Resend，建議一起做）。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ⬜ 未開始（⚠️ 需先 `pnpm add resend`） |
+| 依賴 | T30a |
+
+---
 
 ## 📋 日誌範本（複製使用）
 
