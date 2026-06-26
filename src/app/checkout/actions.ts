@@ -165,6 +165,6 @@ export async function createOrder(
   // ⑧ Clear cart (CASCADE deletes cart_items)
   await serviceRole.from("cart").delete().eq("id", cart.id)
 
-  // ⑨ Redirect to success page
-  redirect(`/checkout/success?order=${orderNo}&email=${encodeURIComponent(email)}`)
+  // ⑨ Redirect to payment page
+  redirect(`/checkout/pay?order=${orderNo}`)
 }
