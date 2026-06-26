@@ -7,9 +7,9 @@ import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit"
 export default async function CheckoutPayPage({
   searchParams,
 }: {
-  searchParams: Promise<{ order?: string; error?: string }>
+  searchParams: Promise<{ order?: string }>
 }) {
-  const { order: orderNo, error } = await searchParams
+  const { order: orderNo } = await searchParams
 
   if (!orderNo) {
     redirect("/checkout")
@@ -49,12 +49,6 @@ export default async function CheckoutPayPage({
       <div className="max-w-md w-full text-center">
         <h1 className="font-head text-2xl text-ink mb-2">正在轉導至付款頁</h1>
         <p className="text-sm text-ash mb-8">請稍候，系統正在為您導向 ECPay 付款頁面...</p>
-
-        {error === "payment_failed" && (
-          <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            上次付款未完成或已取消，請重新付款
-          </div>
-        )}
 
         <form id="ecpay-form" action={serverEnv.ECPAY_PAYMENT_URL} method="POST">
           {Object.entries(params).map(([key, value]) => (
