@@ -10,10 +10,19 @@
 
 > **目前實際狀態（隨開發更新）：** 已建立 Next.js 16.2.9 骨架（TypeScript、Tailwind、ESLint、App Router、`src/`、Turbopack、`@/*`），`pnpm dev` 可啟動。
 > ✅ **shadcn/ui 已初始化**（`components.json`、`src/components/ui/button.tsx`、`src/lib/utils.ts`）；**品牌色票**（Primary Emerald `#063B2F`、Secondary Gold `#C5A059`、中性色階）已寫入 `globals.css` 的 `@theme`，與 `docs/brand-guide.md` 一致；**雙軌字體已對接**：標題 `--font-head`＝EB Garamond＋Noto Serif TC，內文 `--font-body`＝Hanken Grotesk＋Noto Sans TC（`src/app/layout.tsx` 用 `next/font/google` 載入，已驗證字重支援）。
-> ⚠️ **下列技術棧雖已鎖定，但尚未安裝**：Supabase（client 與 CLI）、Zod、Resend、ECPay 串接、測試框架。動到它們時先安裝再使用，不要假設已存在、也不要憑空 import。
+> ⚠️ **下列技術棧雖已鎖定，但尚未安裝**：Resend、ECPay 串接、測試框架。動到它們時先安裝再使用，不要假設已存在、也不要憑空 import。（Supabase／Zod 已安裝）
 > ✅ **資料庫 schema 已套用至雲端 production**（project-ref `wdmigbqdhernmrfpzzxk`）：`0001`（13 張表）＋`0002`（11 條 RLS policy）已 `db push`、雲端驗收通過；型別已生於 `src/types/database.types.ts`；commit `c124482`。後續改 schema 一律**新增** migration（已套用的不可改）。
-> ✅ **T43 dev seed 已完成並通過本機驗收（2026-06-25）**：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單）；`supabase db reset --local` 套用＋逐條查詢驗收全數通過（見 §7）。修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／verify-seed.sql 已移除該欄位引用。
-> ✅ **T04 部署到 Vercel＋CI 已完成（2026-06-25）**：repo 已 push 至 GitHub（`github.com/incantochen/incantochen`）並透過 Vercel GitHub App 連接專案 `jewelry-shop`；Supabase 環境變數已於 Vercel Dashboard 設定（Production/Preview/Development）；首次部署成功，production 網址 `https://jewelry-shop-delta.vercel.app`；已用空 commit push 驗證 CI 自動部署生效（push 後自動觸發新 production 部署）。
+> ✅ **M0 全數完成（2026-06-25）**：T01–T05、T43、T46、T52。**關鍵環境細節**：①`.env.local` 接的是**雲端 production**（非本機 `127.0.0.1:54321`），改 seed／測試資料兩邊都要各跑一次（本機 `db reset --local`＋雲端 `db query --linked --file`）。②Vercel env vars／Supabase secret 一律由使用者本人到對應 Dashboard 設定，不經過 Claude。③Production：`https://jewelry-shop-delta.vercel.app`；staging preview 別名：`https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`。④Auth(T05) **production 端設定尚待使用者手動處理**（Site URL／Redirect URLs／Magic Link 範本，見 `docs/work-log.md`）；`/auth/confirm` 頁面已在 T06/T07 完成。
+> ✅ **T15/T16/T18 戒指 PDP＋配置器＋報價引擎已完成**：`src/app/products/[slug]/page.tsx`＋`src/components/product-configurator.tsx`（client component：chip 選取／數量 stepper／即時計價，公式見 `docs/data-model.md` §4.2）。範圍不含「關於這件作品」／「猜你喜歡」（無真實內容不杜撰）、即時換圖 T17（暫緩，依賴 T55/T56 3D 素材）。
+> 📌 **流程變更（M1 起）**：改用 feature branch＋PR，不再直接 push master；PR 連結給使用者看過、回覆「沒問題」後才 merge。
+> ✅ **T19/T20/T21 購物車（寫快照／讀取／改數量／刪除）已完成**：**關鍵架構**——`cart`／`cart_item` 的 RLS 對 anon/authenticated **讀寫全拒**，一律走 `src/lib/supabase/service-role.ts`（`import "server-only"` 防呆）。寫入前伺服器端用白名單重算 `unit_price_snapshot`／`config_snapshot`，**不採信前端價格**。改數量／刪除前先驗證 `cart_item` 所屬 `cart.guest_token` 與當前 cookie 一致（擁有權檢查，防亂猜 id 動到別人購物車）。訪客身份用 `guest_token` httpOnly cookie。新增環境變數 `SUPABASE_SERVICE_ROLE_KEY`（使用者本人填入本機＋Vercel，不可加 `NEXT_PUBLIC_` 前綴）。
+> ✅ **T06/T07 登入入口＋路由保護已完成（2026-06-25）**：`/login`（Email OTP 主＋一鍵重寄）、`/auth/confirm`（magic link 落地頁，**按鈕才消耗 token**，不在 `useEffect` 自動驗證）、`src/proxy.ts`（Next 16 慣例，取代 `middleware.ts`，必須**named export `proxy`** 而非 `middleware`，每請求刷新 session）、`src/lib/auth/require-user.ts`（`requireUser()` 共用保護機制，`/account` 為最小驗證用頁面，T08 會擴充非丟棄）。**關鍵發現**：①`member` 表只有 SELECT policy、無 INSERT policy，建會員 row 一樣要走 service role（`find-or-create-member.ts`）。②**雲端 production 實際 OTP 碼是 8 位數，不是本機 config.toml 設定的 6 位**——原本寫死 `/^\d{6}$/` 會擋掉真實使用者的驗證碼，已改成不假設固定長度。Playwright＋`admin.generateLink`（不寄真信，取得測試用 OTP/token_hash）端到端驗證：登入→`/account`顯示歡迎訊息→登出→重訪被導回 `/login`，雲端 `member` 表確認寫入，測試帳號已清除。
+> ✅ **T22 結帳頁（收件＋配送）已完成（2026-06-25）**：`/checkout`（讀 T21 `getCart()`，空車導回 `/cart`）＋ `checkout-form.tsx`（Zod 驗證，`src/lib/checkout/schema.ts`）。**重要釐清**：結帳本身**不需要 OTP／magic link**——Email 只是輸入框，「結帳即會員」要到 T23 建立訂單時才在背景用 admin API 處理，使用者完全無感。已查證 ECPay 文件（[ECPay-API-Skill](https://github.com/ECPay/ECPay-API-Skill)）：①付款建立 API 不需收件人資料（消費者在綠界頁面自己填）；②黑貓宅配物流 API 需要**獨立的郵遞區號欄位**（`ReceiverZipCode`），已加進表單（`orders` 表暫無對應欄位，留給 T48 決定）。送出按鈕刻意 disabled（T23/T48/T57 未完成）。Playwright 驗證：空車導向、表單即時驗證（`onBlur`，因為按鈕本身 disabled 不能靠送出觸發）、已登入時 Email 自動帶入。
+> ✅ **T57 客製例外告知與同意已完成（2026-06-26）**：`checkout-form.tsx` 加入琥珀色「客製商品注意事項」區塊＋必填同意 checkbox；`checkoutFormSchema` 加入 `customConsent: z.literal(true)`（Zod v4）；`eslint.config.mjs` 加入 `.claude/**` ignore。同意時間戳記寫入（`consent_at`）留給 T23；⚖️ 法律文字為草稿佔位，上線前以律師審定版取代（T36）。`orders` 表原已有 `custom_consent`/`consent_at` 欄位，**無需新增 migration**。
+> ✅ **T23 建立訂單已完成（2026-06-26）**：`src/app/checkout/actions.ts`（`createOrder` server action：結帳即會員＋`order`/`order_item` 快照寫入＋清購物車＋redirect）、`src/app/checkout/success/page.tsx`（成功頁，顯示訂單號＋Email 登入提示）、`supabase/migrations/0003_add_zip_code_to_orders.sql`（`orders` 表加 `zip_code` 欄位，已 `db push` 至雲端）。T48 物流暫緩，`shipping_fee = 0` 佔位。
+> ✅ **購物車徽章已完成（2026-06-26）**：`SiteHeader` 的購物袋圖示右上角顯示紅色數字徽章（最高 `9+`）；`src/lib/cart/get-cart-count.ts`（service role 讀 guest_token cookie 取數量）；加入購物袋成功後 `router.refresh()` 即時更新。
+> ✅ **T24 ECPay sandbox 設定已完成（2026-06-26）**：安裝官方 ECPay-API-Skill 到 `.claude/skills/ecpay`（綠界官方維護知識庫）。**CheckMacValue 簽章演算法**已實作並對官方 8 組測試向量全數比對通過（金流 SHA256／物流 MD5 用不同金鑰與演算法，不可混用）。**sandbox 連線測試成功**：`MerchantID=3002607` 對 `payment-stage.ecpay.com.tw` 送出真實請求，收到正確付款頁。**關鍵踩坑**：①Bash shell 傳中文參數給 curl 會編碼失真導致 CheckMacValue 錯誤——必須用 Node `fetch()`/`URLSearchParams` 直送，不要 shell out。②此環境 IPv6 連 ECPay sandbox 會被重置，要強制 IPv4（`NODE_OPTIONS=--dns-result-order=ipv4first`）。
+> ✅ **T25 建立付款請求並導向 ECPay 已完成（2026-06-26）**：`src/lib/ecpay/check-mac-value.ts`（SHA256 CheckMacValue + timing-safe verify）、`src/lib/env.server.ts`（server-only ECPay 環境變數，分開 `env.ts` 不汙染前端）、`src/lib/ecpay/aio-payment.ts`（`buildAioParams()`：MerchantTradeNo 去 hyphen、Taiwan time、ItemName 截 200 字）、`src/app/checkout/pay/page.tsx`（SSR auto-submit form）、`src/components/ecpay-auto-submit.tsx`（Client Component useEffect 送 form，App Router dangerouslySetInnerHTML script 不執行）、`src/app/api/ecpay/order-result/route.ts`（POST handler 303 redirect，CheckMacValue 驗證留 T26）。**使用者須手動加到 `.env.local`**：`ECPAY_MERCHANT_ID=3002607`、`ECPAY_HASH_KEY=pwFHCqoQZGmho4w6`、`ECPAY_HASH_IV=EkRm7iFT261dpevs`、`ECPAY_PAYMENT_URL=https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5`、`NEXT_PUBLIC_SITE_URL=http://localhost:3000`。Vercel 正式上線時換正式金鑰＋URL。下一步：**T26 ECPay ReturnURL Webhook**（server-to-server，驗 CheckMacValue，更新 orders.status→paid，插入 payment 記錄）。
 
 ---
 
@@ -22,7 +31,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1 規劃**全數完成**。M0 資料層 T03＋T46＋T43 完成；T04 部署＋CI 完成。下一步：**T15 戒指商品詳情頁**（T05 會員登入可視排程彈性插入，見 `docs/work-log.md`）。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay sandbox）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。下一步：**T26 ECPay ReturnURL Webhook**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 
@@ -68,8 +77,9 @@
 > 採 `--src-dir`，程式碼放 `src/` 底下。
 > **以下為目標結構：目前只有 `src/app` 存在，其餘目錄由 Claude Code 做到對應任務時才建立。請依 repo 實際情況修正本節。**
 
-- `src/app` — 頁面與 route（含 API route handlers）
+- `src/app` — 頁面與 route（含 API route handlers）；✅ `products/[slug]/page.tsx`（T15，PDP 骨架）
 - `src/proxy.ts` — 路由攔截／授權進入點（Next.js 16，取代舊 `middleware.js`）
+- `src/components` — ✅ `site-header.tsx`／`site-footer.tsx`（T15，全站共用，已接進 `src/app/layout.tsx`）
 - `src/components/ui` — shadcn/ui 元件（✅ 已初始化，目前有 `button.tsx`；新增用 `pnpm dlx shadcn@latest add <component>`）
 - `src/lib` — 工具函式、Supabase client、報價引擎、ECPay 串接（✅ `utils.ts` 已建立，shadcn 用）
 - `src/lib/quote` — 報價引擎（選配加價計算），**伺服器端為準**
