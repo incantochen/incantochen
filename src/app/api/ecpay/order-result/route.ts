@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   }
 
   return Response.redirect(
-    new URL(`/checkout/pay?order=${orderNo}`, request.url),
+    new URL(`/checkout/pay?order=${orderNo}&error=payment_failed`, request.url),
     303,
   )
 }
