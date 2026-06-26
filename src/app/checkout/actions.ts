@@ -104,24 +104,25 @@ export async function createOrder(
   const totalAmount = subtotal + shippingFee
 
   // ⑤⑥ Insert order (retry once on order_no collision)
-  // zip_code is added via migration 0003; cast needed until `gen types` is re-run after db push
   async function insertOrder(no: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const payload: any = {
-      member_id: memberId,
-      order_no: no,
-      status: "pending_payment",
-      recipient_name: recipientName,
-      recipient_phone: recipientPhone,
-      zip_code: zipCode,
-      shipping_address: shippingAddress,
-      subtotal,
-      shipping_fee: shippingFee,
-      total_amount: totalAmount,
-      custom_consent: true,
-      consent_at: new Date().toISOString(),
-    }
-    return serviceRole.from("orders").insert(payload).select("id").single()
+    return serviceRole
+      .from("orders")
+      .insert({
+        member_id: memberId,
+        order_no: no,
+        status: "pending_payment",
+        recipient_name: recipientName,
+        recipient_phone: recipientPhone,
+        zip_code: zipCode,
+        shipping_address: shippingAddress,
+        subtotal,
+        shipping_fee: shippingFee,
+        total_amount: totalAmount,
+        custom_consent: true,
+        consent_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single()
   }
 
   let orderNo = generateOrderNo()
