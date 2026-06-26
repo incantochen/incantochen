@@ -270,10 +270,27 @@
 
 | 項目 | 內容 |
 |------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `src/lib/ecpay/check-mac-value.ts`、`src/lib/ecpay/aio-payment.ts`、`src/lib/env.server.ts`、`src/app/checkout/pay/page.tsx`、`src/app/api/ecpay/order-result/route.ts`、`src/components/ecpay-auto-submit.tsx`、`src/app/checkout/actions.ts`（修改）、`src/app/checkout/success/page.tsx`（修改）、`src/app/cart/page.tsx`（修改） |
+| 更新描述 | 1. **`src/lib/ecpay/check-mac-value.ts`**：SHA256 CheckMacValue 生成（`generateCheckMacValue`）＋ timing-safe 驗證（`verifyCheckMacValue`），`import "server-only"` 防呆，ecpayUrlEncode 依規格還原 7 個 .NET 特殊字元。2. **`src/lib/env.server.ts`**：server-only ECPay 環境變數（`ECPAY_MERCHANT_ID` / `ECPAY_HASH_KEY` / `ECPAY_HASH_IV` / `ECPAY_PAYMENT_URL` / `NEXT_PUBLIC_SITE_URL`），分開於 `env.ts` 公開變數，避免汙染前端 bundle。3. **`src/lib/ecpay/aio-payment.ts`**：`buildAioParams()` 組裝 AIO 參數——`MerchantTradeNo` 去掉 hyphen（`INC20260626XXXXXX`，ECPay 限英數字 20 字）、Taiwan time 格式日期、`ItemName` 截斷 200 字、計算並附加 `CheckMacValue`；`ReturnURL` 佔位指向 T26 webhook endpoint。4. **`src/app/checkout/pay/page.tsx`**：SSR Server Component，service role 查訂單＋order_item + products，呼叫 `buildAioParams()`，渲染含所有 hidden input 的 ECPay form。5. **`src/components/ecpay-auto-submit.tsx`**：Client Component，`useEffect` 觸發 `form.submit()`——App Router 的 Server Component 不執行 `dangerouslySetInnerHTML` 裡的 `<script>` 標籤，需 client component 繞過。6. **`src/app/api/ecpay/order-result/route.ts`**：POST handler，ECPay 付款後 browser redirect 到此，讀 `MerchantTradeNo`/`RtnCode`，`RtnCode=1` 導向成功頁，否則導回 `/checkout/pay?error=payment_failed`；CheckMacValue 驗證留給 T26 ReturnURL webhook（這裡只是前端 redirect，不是安全關卡）。7. `createOrder` 步驟⑨ 從直接 redirect 成功頁改為 redirect 到 `/checkout/pay?order=...`；購物車「前往結帳」按鈕從 `disabled` 改為 `<Link href="/checkout">`。**使用者需在 `.env.local` 加入** `ECPAY_MERCHANT_ID=3002607`、`ECPAY_HASH_KEY=pwFHCqoQZGmho4w6`、`ECPAY_HASH_IV=EkRm7iFT261dpevs`、`ECPAY_PAYMENT_URL=https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5`、`NEXT_PUBLIC_SITE_URL=http://localhost:3000`。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`tsc --noEmit` ✅；sandbox 端到端：加入購物車→結帳→自動跳 ECPay 沙盒付款頁→測試信用卡（4311-9522-2222-2222）→交易成功→導回 `/checkout/success` 顯示訂單號。branch `t25-ecpay-payment-redirect`，PR 待審 |
+| 依賴 | T23 ✅、T24 ✅ |
+
+---
+
+### 下次作業
+
+#### #T26 / M1 金流 / ECPay 付款結果 Webhook（ReturnURL）
+**說明**：實作 `/api/ecpay/notify` server-to-server callback，驗證 CheckMacValue 並更新訂單狀態＋插入 Payment 記錄。
+
+| 項目 | 內容 |
+|------|------|
 | 狀態 | ⬜ 未開始 |
 | 更新描述 | — |
-| 依賴 | T23 ✅、T24 ✅ |
-| 注意 | 涉及金流，依規定先進 plan mode；必須用 Node fetch() 直送（不 shell out），IPv4 強制（見 T24 踩坑） |
+| 待辦 | ReturnURL 需可公開存取（ngrok 或 Vercel staging），驗證 CheckMacValue、冪等處理（同一筆不重複更新）、orders.status 改 `paid`、插入 payment 記錄 |
+| 依賴 | T25 ✅ |
+| 注意 | 涉及金流，依規定先進 plan mode；ReturnURL 不能是 localhost |
 
 ## 📋 日誌範本（複製使用）
 
