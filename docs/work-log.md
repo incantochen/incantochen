@@ -175,18 +175,105 @@
 
 ---
 
-### 下次作業
+---
 
 #### #T22 / M1 結帳 / 結帳頁（收件＋配送）
-**說明**：購物車頁已經有「前往結帳」按鈕（目前 disabled），T22 要把它接上真正的結帳頁。T06/T07 已完成，「結帳即會員」現在有地基可以接了。
+**說明**：購物車頁已經有「前往結帳」按鈕（目前 disabled），T22 要把它接上真正的結帳頁。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-25） |
+| 產出 | `src/app/checkout/page.tsx`（新增）、`src/components/checkout-form.tsx`（新增）、`src/lib/checkout/schema.ts`（新增） |
+| 更新描述 | `/checkout`（讀 T21 `getCart()`，空車導回 `/cart`）＋`checkout-form.tsx`（Zod 驗證）。重要釐清：結帳本身不需要 OTP/magic link，Email 只是輸入框，「結帳即會員」留給 T23 在背景處理。依使用者要求查證 ECPay 文件：付款 API 不需收件人資料；黑貓宅配物流 API 需要獨立的郵遞區號欄位，已補進表單。送出按鈕 disabled（待 T23/T48/T57）。Playwright 驗證通過。 |
+| 待辦 | （無，已完成） |
+| 依賴 | T21 ✅、T06/T07 ✅ |
+
+---
+
+## 📅 2026-06-26
+
+### 本次作業
+
+#### #T57 / M1 法務 / 客製例外告知與同意（結帳）
+**說明**：結帳頁加入「客製商品注意事項」告知區塊與必填同意 checkbox，勾選才能繼續。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `src/lib/checkout/schema.ts`（修改）、`src/components/checkout-form.tsx`（修改）、`eslint.config.mjs`（修改） |
+| 更新描述 | 1. **無需新增 migration**：`orders` 表的 `0001_initial_schema.sql` 原已含 `custom_consent bool` 與 `consent_at timestamptz` 欄位（T57 標注），規劃時已預留。2. `checkoutFormSchema` 加入 `customConsent: z.literal(true, { message: "..." })`——Zod v4 的正確寫法是直接在第二個參數傳 `{ message }` 物件，不用 `errorMap`。3. `checkout-form.tsx` 加入 `customConsent` state（初始 `false`）；checkbox 改用 `onBlur={validate}` 觸發驗證（與其他欄位一致），避免 onChange 直接呼叫 validate 讀到 stale closure 的問題。4. 法律文字為草稿佔位，加 TODO 標注，上線前以律師審定版取代（T36）。5. 同意時間戳記寫入（`consent_at`）留給 T23 建立訂單時處理。6. 順帶修正 `eslint.config.mjs` 加入 `.claude/**` ignore，修正 pre-existing lint 錯誤（ECPay skill test 檔案用 CommonJS require() 被 TS-ESLint 擋）。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm tsc --noEmit` ✅；commit `f8e5c79`，merge commit `01f971d`。 |
+| 依賴 | T22 ✅ |
+
+---
+
+---
+
+#### #T23 / M1 訂單 / 建立訂單（待付款）
+**說明**：把結帳表單接上後端：建立 `orders`+`order_item`→靜默結帳即會員→清購物車→成功頁。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `supabase/migrations/0003_add_zip_code_to_orders.sql`（新增，已 db push）、`src/app/checkout/actions.ts`（新增）、`src/app/checkout/success/page.tsx`（新增）、`src/components/checkout-form.tsx`（修改，送出按鈕啟用） |
+| 更新描述 | 1. Migration 0003：`orders` 表加 `zip_code text`（nullable），已套用至雲端；`gen types` 重新生成，`as any` 移除。2. `createOrder` server action：① server-side Zod 驗證 ② service role 讀購物車 ③ 訪客「結帳即會員」（查 `member` 表 by email → 不存在則 `admin.createUser` 靜默建立）④ 計算金額（`shipping_fee=0` T48 暫緩）⑤ `order_no` 格式 `INC-YYYYMMDD-6隨機英數`，碰撞自動 retry ⑥ INSERT orders→order_item（快照複製，不重算）→DELETE cart（CASCADE 清 cart_items）⑦ redirect 至成功頁。3. `/checkout/success` 頁顯示訂單號＋「可用此 Email 登入查詢」提示。4. `checkout-form.tsx` 送出按鈕從 `disabled` 改為 `useTransition` 接 server action。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm tsc --noEmit` ✅；feat/t23-create-order rebase onto master → merge commit `e4bdc24` |
+| 依賴 | T22 ✅、T57 ✅ |
+
+---
+
+#### #購物車徽章 / Header / 購物袋圖示數量徽章
+**說明**：加入購物車後，header 購物袋圖示右上角顯示紅色數字徽章。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `src/lib/cart/get-cart-count.ts`（新增）、`src/components/site-header.tsx`（修改）、`src/components/product-configurator.tsx`（修改） |
+| 更新描述 | 1. `getCartCount()`：讀 `guest_token` cookie → service role 查 `cart_item` count（`count: "exact", head: true`）。2. `SiteHeader`：`CartIconWithBadge` async Server Component，數量 > 0 顯示紅色圓圈，>9 顯示 `9+`；以 `Suspense` 包裹，不阻礙頁面渲染，fallback 為無徽章購物袋。3. `ProductConfigurator`：`addToCart` 成功後加 `router.refresh()`，觸發 Server Component 重新讀取 → 徽章即時更新，client component state（選配/數量）不受影響。 |
+| 待辦 | （無） |
+| 驗收 | `pnpm lint` ✅、`pnpm tsc --noEmit` ✅；commit `0fd3682`，merge `bd5fc04` |
+| 依賴 | T20 ✅ |
+
+---
+
+#### #T24 / M1 金流 / ECPay sandbox 設定
+**說明**：安裝 ECPay 官方知識庫、實作 CheckMacValue 簽章、驗證 sandbox 連線。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `.claude/skills/ecpay`（安裝官方 ECPay-API-Skill）、CheckMacValue 實作與測試向量驗證 |
+| 更新描述 | 1. 安裝官方 ECPay-API-Skill 至 `.claude/skills/ecpay`，問 ECPay API 問題會自動查到正確規格。2. CheckMacValue 簽章演算法對官方 8 組測試向量全數通過（金流 SHA256／物流 MD5 不可混用）。3. sandbox 連線測試：`MerchantID=3002607` 送出請求，收到正確付款頁。**踩坑**：① Bash shell 傳中文參數給 curl 編碼失真→T25 必須用 Node `fetch()`/`URLSearchParams` 直送。② 此環境 IPv6 連 sandbox 會被重置→強制 IPv4（`NODE_OPTIONS=--dns-result-order=ipv4first`）。 |
+| 待辦 | （無，已完成） |
+| 依賴 | T02 ✅ |
+
+---
+
+### 下次作業
+
+#### #T48 / M1 金流 / 綠界黑貓宅配串接（保價＋本人簽收）
+**說明**：物流策略未定，暫緩。
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ⏸️ 暫緩（2026-06-26） |
+| 更新描述 | 物流策略尚未確定：① 直接用綠界 API 串台灣物流 ② 可能從飾品原產地直接宅配到消費者端。兩者運費計算方式差異大，待使用者確認後再細化。T23 建立訂單時 `shipping_fee` 先填 `0`（`orders` 表已有 `default 0`），不阻礙骨架打通。 |
+| 待辦 | 物流策略確認後再開工 |
+| 依賴 | T22 ✅ |
+
+---
+
+#### #T25 / M1 金流 / 建立付款請求並導向 ECPay
+**說明**：結帳成功後建立 ECPay 付款請求，產出 HTML form 並導向綠界付款頁。
 
 | 項目 | 內容 |
 |------|------|
 | 狀態 | ⬜ 未開始 |
 | 更新描述 | — |
-| 待辦 | 1. 新建 `/checkout` route，收件資訊表單（姓名／電話／地址）＋配送方式<br>2. 「結帳即建會員」：可直接重用 `src/lib/auth/find-or-create-member.ts`＋ T06 的 magic link／OTP 機制<br>3. 把 `/cart` 頁面的「前往結帳」按鈕從 disabled 改成可點 |
-| 依賴 | T21 ✅、T06/T07 ✅ |
-| 注意 | 涉及會員建立／session／金流前置，依規定要先進 plan mode |
+| 依賴 | T23 ✅、T24 ✅ |
+| 注意 | 涉及金流，依規定先進 plan mode；必須用 Node fetch() 直送（不 shell out），IPv4 強制（見 T24 踩坑） |
 
 ## 📋 日誌範本（複製使用）
 
