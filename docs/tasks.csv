@@ -34,7 +34,7 @@ T58,M1,安全,◆ 應用層安全防護,SQL 注入防護(參數化/RPC綁定)、
 T24,M1,金流,ECPay sandbox 設定,測試商店、金鑰、SDK,T02,1,45,P0,完成
 T25,M1,金流,建立付款請求並導向 ECPay,交易、CheckMacValue、導頁,"T23,T24",2.5,47.5,P0,完成
 T26,M1,金流,處理回拋並更新狀態,callback 驗證、更新 Payment／Order,T25,2.5,50,P0,完成
-T53,M1,金流,冪等性處理（防重複）,建單／回拋去重；雙通道處理,T26,1,51,P0,未開始
+T53,M1,金流,冪等性處理（防重複）,建單／回拋去重；雙通道處理｜✅ 完成（2026-06-26）：generateMerchantTradeNo；buildAioParams 接受外部 merchantTradeNo；/checkout/pay 預建 payment 記錄、復用 pending 冪等、已付款直導成功頁；webhook 以 merchant_trade_no 查 payment 表、UPDATE 防競態、fallback 處理 23505。,T26,1,51,P0,完成
 T27,M1,金流,付款結果頁,成功／失敗導引｜✅ 完成（2026-06-26）：/checkout/success 強化（DB 讀狀態，paid→完整訂單資訊，pending_payment→3s 輪詢最多 90s）；新增 /checkout/failed（失敗頁，重新付款入口；若訂單已 paid 自動跳轉成功頁）；order-result route 失敗改導向 /checkout/failed。,T26,1,52,P0,完成
 T30a,M1,通知,Email 下單確認（基本）,付款成功寄客人確認信,T26,1.5,53.5,P0,未開始
 T49,M1,通知,新訂單通知店家,有新單即 email／LINE 通知你本人,T26,0.5,54,P0,未開始
