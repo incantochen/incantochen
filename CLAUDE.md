@@ -1,6 +1,6 @@
 # CLAUDE.md — incantochen（高端半客製彩色寶石電商）
 
-> 文件更新日期：2026-06-25
+> 文件更新日期：2026-06-26
 
 > 給 Claude Code 的專案施工圖。每次對話開始自動載入。
 > 規劃文件（含 memory、任務清單）放在 `docs/`；本檔是「開發層」的對齊版本。
@@ -9,7 +9,7 @@
 > 📋 **工作日誌**：本次／下次作業記錄見 [`docs/work-log.md`](docs/work-log.md)
 
 > **目前實際狀態（隨開發更新）：** 已建立 Next.js 16.2.9 骨架（TypeScript、Tailwind、ESLint、App Router、`src/`、Turbopack、`@/*`），`pnpm dev` 可啟動。
-> ✅ **shadcn/ui 已初始化**（`components.json`、`src/components/ui/button.tsx`、`src/lib/utils.ts`）；**品牌色票**（Primary Emerald `#063B2F`、Secondary Gold `#C5A059`、中性色階）已寫入 `globals.css` 的 `@theme`，與 `docs/brand-guide.md` 一致；**雙軌字體已對接**：標題 `--font-head`＝EB Garamond＋Noto Serif TC，內文 `--font-body`＝Hanken Grotesk＋Noto Sans TC（`src/app/layout.tsx` 用 `next/font/google` 載入，已驗證字重支援）。
+> ✅ **T39 UI kit 基礎完成（2026-06-26）**：shadcn/ui 已初始化；品牌色票（Emerald/Gold 完整色階）與雙軌字體（`--font-head`＝EB Garamond＋Noto Serif TC，`--font-body`＝Hanken Grotesk＋Noto Sans TC）已寫入 `globals.css @theme`；`button.tsx` 改寫為品牌規格（11.5px、tracking .2em、uppercase、rounded-btn 2px，四個變體：solid/gold/outline/ghost）；`.eyebrow` 定義於 `@layer components`（11px、.34em、大寫、金色 secondary）。
 > ⚠️ **下列技術棧雖已鎖定，但尚未安裝**：Resend、ECPay 串接、測試框架。動到它們時先安裝再使用，不要假設已存在、也不要憑空 import。（Supabase／Zod 已安裝）
 > ✅ **資料庫 schema 已套用至雲端 production**（project-ref `wdmigbqdhernmrfpzzxk`）：`0001`（13 張表）＋`0002`（11 條 RLS policy）已 `db push`、雲端驗收通過；型別已生於 `src/types/database.types.ts`；commit `c124482`。後續改 schema 一律**新增** migration（已套用的不可改）。
 > ✅ **M0 全數完成（2026-06-25）**：T01–T05、T43、T46、T52。**關鍵環境細節**：①`.env.local` 接的是**雲端 production**（非本機 `127.0.0.1:54321`），改 seed／測試資料兩邊都要各跑一次（本機 `db reset --local`＋雲端 `db query --linked --file`）。②Vercel env vars／Supabase secret 一律由使用者本人到對應 Dashboard 設定，不經過 Claude。③Production：`https://jewelry-shop-delta.vercel.app`；staging preview 別名：`https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`。④Auth(T05) **production 端設定尚待使用者手動處理**（Site URL／Redirect URLs／Magic Link 範本，見 `docs/work-log.md`）；`/auth/confirm` 頁面已在 T06/T07 完成。
@@ -22,8 +22,11 @@
 > ✅ **T23 建立訂單已完成（2026-06-26）**：`src/app/checkout/actions.ts`（`createOrder` server action：結帳即會員＋`order`/`order_item` 快照寫入＋清購物車＋redirect）、`src/app/checkout/success/page.tsx`（成功頁，顯示訂單號＋Email 登入提示）、`supabase/migrations/0003_add_zip_code_to_orders.sql`（`orders` 表加 `zip_code` 欄位，已 `db push` 至雲端）。T48 物流暫緩，`shipping_fee = 0` 佔位。
 > ✅ **購物車徽章已完成（2026-06-26）**：`SiteHeader` 的購物袋圖示右上角顯示紅色數字徽章（最高 `9+`）；`src/lib/cart/get-cart-count.ts`（service role 讀 guest_token cookie 取數量）；加入購物袋成功後 `router.refresh()` 即時更新。
 > ✅ **T24 ECPay sandbox 設定已完成（2026-06-26）**：安裝官方 ECPay-API-Skill 到 `.claude/skills/ecpay`（綠界官方維護知識庫）。**CheckMacValue 簽章演算法**已實作並對官方 8 組測試向量全數比對通過（金流 SHA256／物流 MD5 用不同金鑰與演算法，不可混用）。**sandbox 連線測試成功**：`MerchantID=3002607` 對 `payment-stage.ecpay.com.tw` 送出真實請求，收到正確付款頁。**關鍵踩坑**：①Bash shell 傳中文參數給 curl 會編碼失真導致 CheckMacValue 錯誤——必須用 Node `fetch()`/`URLSearchParams` 直送，不要 shell out。②此環境 IPv6 連 ECPay sandbox 會被重置，要強制 IPv4（`NODE_OPTIONS=--dns-result-order=ipv4first`）。
-> ✅ **T25 建立付款請求並導向 ECPay 已完成（2026-06-26）**：`src/lib/ecpay/check-mac-value.ts`（SHA256 CheckMacValue + timing-safe verify）、`src/lib/env.server.ts`（server-only ECPay 環境變數，分開 `env.ts` 不汙染前端）、`src/lib/ecpay/aio-payment.ts`（`buildAioParams()`：MerchantTradeNo 去 hyphen、Taiwan time、ItemName 截 200 字）、`src/app/checkout/pay/page.tsx`（SSR auto-submit form）、`src/components/ecpay-auto-submit.tsx`（Client Component useEffect 送 form，App Router dangerouslySetInnerHTML script 不執行）、`src/app/api/ecpay/order-result/route.ts`（POST handler 303 redirect，CheckMacValue 驗證留 T26）。**使用者須手動加到 `.env.local`**：`ECPAY_MERCHANT_ID=3002607`、`ECPAY_HASH_KEY=pwFHCqoQZGmho4w6`、`ECPAY_HASH_IV=EkRm7iFT261dpevs`、`ECPAY_PAYMENT_URL=https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5`、`NEXT_PUBLIC_SITE_URL=http://localhost:3000`。Vercel 正式上線時換正式金鑰＋URL。下一步：**T37 電子發票** 或 **T08 會員中心訂單查詢**（依優先序）。
+> ✅ **T25 建立付款請求並導向 ECPay 已完成（2026-06-26）**：`src/lib/ecpay/check-mac-value.ts`（SHA256 CheckMacValue + timing-safe verify）、`src/lib/env.server.ts`（server-only ECPay 環境變數，分開 `env.ts` 不汙染前端）、`src/lib/ecpay/aio-payment.ts`（`buildAioParams()`：MerchantTradeNo 去 hyphen、Taiwan time、ItemName 截 200 字）、`src/app/checkout/pay/page.tsx`（SSR auto-submit form）、`src/components/ecpay-auto-submit.tsx`（Client Component useEffect 送 form，App Router dangerouslySetInnerHTML script 不執行）、`src/app/api/ecpay/order-result/route.ts`（POST handler 303 redirect，CheckMacValue 驗證留 T26）。**使用者須手動加到 `.env.local`**：`ECPAY_MERCHANT_ID=3002607`、`ECPAY_HASH_KEY=pwFHCqoQZGmho4w6`、`ECPAY_HASH_IV=EkRm7iFT261dpevs`、`ECPAY_PAYMENT_URL=https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5`、`NEXT_PUBLIC_SITE_URL=http://localhost:3000`。Vercel 正式上線時換正式金鑰＋URL。
 > ✅ **T26 ECPay ReturnURL Webhook 已完成（2026-06-26）**：`src/app/api/ecpay/notify/route.ts`（POST handler：CheckMacValue SHA256 驗章→冪等查 payment 表→RtnCode=1 更新 orders.status paid + upsert payment paid→RtnCode≠1 upsert payment failed→always 1|OK HTTP 200，外層 try/catch 防 500）。不需新增 migration。
+> ✅ **T27 付款結果頁已完成（2026-06-26）**：`/checkout/success`（server component：查 orders+member join；`paid` → 成功 UI；`pending_payment` → `order-status-check.tsx` client-side polling `router.refresh()` 每 3 秒最多 90 秒，逾時顯示 amber「將以 email 通知」）；`/checkout/failed`（失敗頁：已 `paid` → redirect success；否則顯示重試按鈕）。`useRef(0)` + `startRef.current = Date.now()` 於 useEffect 避免 react-hooks/purity lint error。`order-result` route 失敗時改 redirect `/checkout/failed?order=xxx`。
+> ✅ **T53 ECPay MerchantTradeNo 冪等性已完成（2026-06-26）**：`src/lib/ecpay/merchant-trade-no.ts`（`generateMerchantTradeNo(orderNo)`：去 hyphen 17 字元 + 2 隨機字元 = 19 字，ECPay 20 字上限內）；`checkout/pay/page.tsx` reuse 現有 `pending` payment row 或建新 unique trade no；`notify/route.ts` 以 `merchant_trade_no` 為 lookup key，UPDATE 加 `.eq("status","pending")` 競態守衛。
+> ✅ **T41 伺服器端驗價＋金鑰隔離已完成（2026-06-26）**：`src/lib/quote/verify-prices.ts`（Zod 驗 config_snapshot；DB 重查 base_price + option_value whitelist；重建 verifiedSelections/configSnapshot；回傳 `priceChanged: boolean`）；`env.server.ts` 加 `SUPABASE_SERVICE_ROLE_KEY: required()`（fail-fast）；`service-role.ts` 改用 `serverEnv.SUPABASE_SERVICE_ROLE_KEY`；`createOrder` 驗價後若有 `priceChanged` → 更新 cart_item 快照 → `revalidatePath` → 回傳 `{ ok: false, priceUpdated: true }` 不建單（R/S/Q loop，對齊 user-flow.md）；`checkout-form.tsx` 區分 amber 警示（priceUpdated）vs 紅色硬錯誤。**金額安全紅線完整實現：訂單金額 100% 以 DB 白名單重算，絕不信任 cart 快照。**
 
 ---
 
@@ -32,7 +35,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay sandbox）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。T25／T26 金流核心完成。下一步：**T37 電子發票** 或 **T08 會員中心訂單查詢**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24／T25／T26／**T27／T53／T41** 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay 金流→付款結果頁→冪等性→伺服器端驗價）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。M1 剩餘未完：**T58 應用層安全防護**、**T51 報價引擎單測**、**T30a Email 下單確認**、**T49 新訂單通知**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 
