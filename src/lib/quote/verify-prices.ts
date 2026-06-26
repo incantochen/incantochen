@@ -3,7 +3,6 @@ import { z } from "zod"
 import type { createServiceRoleClient } from "@/lib/supabase/service-role"
 import type { Json } from "@/types/database.types"
 
-// Mirrors the shape written by addToCart
 const selectionSchema = z.object({
   option_type_code: z.string(),
   option_value_code: z.string(),
@@ -22,9 +21,9 @@ export type VerifiedItem = {
   cartItemId: string
   productId: string
   quantity: number
-  configSnapshot: Json
   verifiedUnitPrice: number
-  changed: boolean
+  configSnapshot: Json   // rebuilt from DB, not copied from cart snapshot
+  priceChanged: boolean
 }
 
 type CartItemInput = {
@@ -44,14 +43,15 @@ export async function verifyCartPrices(
   const results: VerifiedItem[] = []
 
   for (const item of cartItems) {
-    // Validate config_snapshot shape with Zod
+    // Validate config_snapshot shape — cart snapshot is self-written but verifier
+    // must not assume it hasn't been tampered with
     const parsed = configSnapshotSchema.safeParse(item.config_snapshot)
     if (!parsed.success) {
-      throw new Error(`購物車項目設定損壞（item ${item.id}）`)
+      throw new Error(`購物車項目設定損壞，請重新加入商品`)
     }
     const config = parsed.data
 
-    // Re-fetch product base_price from DB (must still be active)
+    // Re-fetch current base_price; reject if product is inactive/missing
     const { data: product } = await serviceRole
       .from("product")
       .select("base_price")
@@ -63,13 +63,13 @@ export async function verifyCartPrices(
       throw new Error(`商品已下架或不存在，無法建立訂單`)
     }
 
-    // Re-fetch option prices via the whitelist
-    // product_option → option_type (code) + product_option_value → option_value (code) + price_delta
+    // Re-fetch option whitelist (same join as addToCart) — add label so we can
+    // rebuild a self-consistent configSnapshot with current DB data
     const { data: productOptions } = await serviceRole
       .from("product_option")
       .select(`
         option_type:option_type_id ( code ),
-        product_option_value ( price_delta, option_value:option_value_id ( code ) )
+        product_option_value ( price_delta, option_value:option_value_id ( code, label ) )
       `)
       .eq("product_id", config.product_id)
 
@@ -77,38 +77,62 @@ export async function verifyCartPrices(
       throw new Error(`無法取得商品選項，請稍後再試`)
     }
 
-    // Build Map: option_type_code → option_value_code → price_delta
-    const priceMap = new Map<string, Map<string, number>>()
+    // Map: option_type_code → option_value_code → { priceDelta, label }
+    const priceMap = new Map<string, Map<string, { priceDelta: number; label: string }>>()
     for (const po of productOptions) {
       const typeCode = po.option_type.code
-      const valueMap = new Map<string, number>()
+      const valueMap = new Map<string, { priceDelta: number; label: string }>()
       for (const pov of po.product_option_value) {
-        valueMap.set(pov.option_value.code, pov.price_delta)
+        valueMap.set(pov.option_value.code, {
+          priceDelta: pov.price_delta,
+          label: pov.option_value.label,
+        })
       }
       priceMap.set(typeCode, valueMap)
     }
 
-    // Recalculate verified unit price from current whitelist
+    // Recalculate price and rebuild selections using current DB data
     let verifiedUnitPrice = product.base_price
+    const verifiedSelections: {
+      option_type_code: string
+      option_value_code: string
+      label: string
+      price_delta: number
+    }[] = []
+
     for (const sel of config.selections) {
       const typeMap = priceMap.get(sel.option_type_code)
       if (!typeMap) {
         throw new Error(`選項類別「${sel.option_type_code}」不在此商品白名單，無法建立訂單`)
       }
-      const priceDelta = typeMap.get(sel.option_value_code)
-      if (priceDelta === undefined) {
+      const entry = typeMap.get(sel.option_value_code)
+      if (entry === undefined) {
         throw new Error(`選項值「${sel.option_value_code}」不在此商品白名單，無法建立訂單`)
       }
-      verifiedUnitPrice += priceDelta
+      verifiedUnitPrice += entry.priceDelta
+      verifiedSelections.push({
+        option_type_code: sel.option_type_code,
+        option_value_code: sel.option_value_code,
+        label: entry.label,
+        price_delta: entry.priceDelta,
+      })
+    }
+
+    // Rebuild configSnapshot entirely from DB — never carry forward stale snapshot values
+    const verifiedConfigSnapshot: Json = {
+      product_id: config.product_id,
+      base_price: product.base_price,
+      selections: verifiedSelections as unknown as Json[],
+      line_unit_price: verifiedUnitPrice,
     }
 
     results.push({
       cartItemId: item.id,
       productId: item.product_id,
       quantity: item.quantity,
-      configSnapshot: item.config_snapshot as Json,
       verifiedUnitPrice,
-      changed: verifiedUnitPrice !== item.unit_price_snapshot,
+      configSnapshot: verifiedConfigSnapshot,
+      priceChanged: verifiedUnitPrice !== item.unit_price_snapshot,
     })
   }
 

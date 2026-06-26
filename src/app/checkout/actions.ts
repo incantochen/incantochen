@@ -2,6 +2,7 @@
 import "server-only"
 
 import { redirect } from "next/navigation"
+import { revalidatePath } from "next/cache"
 import { cookies } from "next/headers"
 import { createClient } from "@/lib/supabase/server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
@@ -9,7 +10,7 @@ import { findOrCreateMember } from "@/lib/auth/find-or-create-member"
 import { checkoutFormSchema, type CheckoutFormValues } from "@/lib/checkout/schema"
 import { verifyCartPrices } from "@/lib/quote/verify-prices"
 
-type CreateOrderResult = { ok: false; error: string }
+type CreateOrderResult = { ok: false; error: string; priceUpdated?: true }
 
 function generateOrderNo(): string {
   const now = new Date()
@@ -103,6 +104,30 @@ export async function createOrder(
   } catch (e) {
     const msg = e instanceof Error ? e.message : "商品資訊有誤，請重新確認後再試"
     return { ok: false, error: msg }
+  }
+
+  // ④-b 若任何品項金額有變動：更新 cart 快照、提示使用者確認新金額後再送出
+  // （對齊 user-flow.md R/S/Q loop：不靜默建單，讓客人看到新金額再確認）
+  const changedItems = verifiedItems.filter((item) => item.priceChanged)
+  if (changedItems.length > 0) {
+    await Promise.all(
+      changedItems.map((item) =>
+        serviceRole
+          .from("cart_item")
+          .update({
+            unit_price_snapshot: item.verifiedUnitPrice,
+            config_snapshot: item.configSnapshot,
+          })
+          .eq("id", item.cartItemId),
+      ),
+    )
+    revalidatePath("/cart")
+    revalidatePath("/checkout")
+    return {
+      ok: false,
+      error: "商品金額已更新，請確認新金額後再次送出",
+      priceUpdated: true,
+    }
   }
 
   // ④ Calculate amounts from verified prices
