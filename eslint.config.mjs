@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Claude Code 設定目錄（非專案程式碼）
+    ".claude/**",
   ]),
 ]);
 
