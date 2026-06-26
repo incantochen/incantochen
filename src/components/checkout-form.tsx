@@ -1,10 +1,12 @@
 "use client"
 
 import { useState, useTransition } from "react"
+import { useRouter } from "next/navigation"
 import { checkoutFormSchema } from "@/lib/checkout/schema"
 import { createOrder } from "@/app/checkout/actions"
 
 export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
+  const router = useRouter()
   const [email, setEmail] = useState(defaultEmail)
   const [recipientName, setRecipientName] = useState("")
   const [recipientPhone, setRecipientPhone] = useState("")
@@ -13,6 +15,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [customConsent, setCustomConsent] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [priceUpdatedMessage, setPriceUpdatedMessage] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
   function validate() {
@@ -42,6 +45,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSubmitError(null)
+    setPriceUpdatedMessage(null)
     if (!validate()) return
     startTransition(async () => {
       const result = await createOrder({
@@ -54,7 +58,13 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       })
       // redirect() in server action throws internally — only reach here on error
       if (!result.ok) {
-        setSubmitError(result.error)
+        if (result.priceUpdated) {
+          // Prices changed — refresh server components so the page shows the new total
+          router.refresh()
+          setPriceUpdatedMessage(result.error)
+        } else {
+          setSubmitError(result.error)
+        }
       }
     })
   }
@@ -165,6 +175,13 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
           <p className="mt-1.5 text-sm text-destructive">{errors.customConsent}</p>
         )}
       </div>
+
+      {priceUpdatedMessage && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
+          <p className="font-medium mb-0.5">⚠️ 金額已更新</p>
+          <p>{priceUpdatedMessage}</p>
+        </div>
+      )}
 
       {submitError && (
         <p className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-sm text-destructive">
