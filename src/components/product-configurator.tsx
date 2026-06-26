@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useTransition } from "react"
+import { useRouter } from "next/navigation"
 import { addToCart } from "@/app/products/[slug]/actions"
 
 export type ConfiguratorOption = {
@@ -36,6 +37,7 @@ export function ProductConfigurator({
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(
     null,
   )
+  const router = useRouter()
 
   function handleAddToCart() {
     setFeedback(null)
@@ -50,6 +52,9 @@ export function ProductConfigurator({
           ? { type: "success", message: "已加入購物袋" }
           : { type: "error", message: result.error },
       )
+      if (result.ok) {
+        router.refresh() // re-render server components to update header cart badge
+      }
     })
   }
 
