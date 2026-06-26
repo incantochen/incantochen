@@ -286,11 +286,11 @@
 
 | 項目 | 內容 |
 |------|------|
-| 狀態 | ⬜ 未開始 |
-| 更新描述 | — |
-| 待辦 | ReturnURL 需可公開存取（ngrok 或 Vercel staging），驗證 CheckMacValue、冪等處理（同一筆不重複更新）、orders.status 改 `paid`、插入 payment 記錄 |
+| 狀態 | ✅ 完成（2026-06-26） |
+| 產出 | `src/app/api/ecpay/notify/route.ts`（新增） |
+| 更新描述 | POST handler：① 解析 form data ② verifyCheckMacValue（SHA256，安全關卡）③ 查 orders by order_no（MerchantTradeNo 還原 hyphen）④ 冪等：payment 已 paid 直接回 1\|OK ⑤ RtnCode=1：upsert payment(paid) + orders.status pending_payment→paid ⑥ RtnCode≠1：upsert payment(failed) ⑦ 無論如何回 HTTP 200 text/plain，try/catch 防止 DB 錯誤回 500 導致 ECPay 重試。不需新增 migration（payment_status/order_status enum 已有 paid）。 |
+| 待辦 | 驗收：Vercel 部署後跑完整付款流程，Supabase Dashboard 確認 orders.status=paid、payment 表有記錄 |
 | 依賴 | T25 ✅ |
-| 注意 | 涉及金流，依規定先進 plan mode；ReturnURL 不能是 localhost |
 
 ## 📋 日誌範本（複製使用）
 
