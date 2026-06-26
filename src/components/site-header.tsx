@@ -1,11 +1,27 @@
 import Link from "next/link"
+import { Suspense } from "react"
 import { Search, ShoppingBag, User } from "lucide-react"
+import { getCartCount } from "@/lib/cart/get-cart-count"
 
 const navLinks = [
   { label: "COLLECTIONS", href: "/collections/ring" },
   { label: "CUSTOM", href: "#" },
   { label: "ABOUT", href: "#" },
 ]
+
+async function CartIconWithBadge() {
+  const count = await getCartCount()
+  return (
+    <Link href="/cart" aria-label="購物袋" className="relative opacity-80 hover:text-secondary-400 hover:opacity-100">
+      <ShoppingBag className="size-[18px]" strokeWidth={1.4} />
+      {count > 0 && (
+        <span className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold leading-none text-white">
+          {count > 9 ? "9+" : count}
+        </span>
+      )}
+    </Link>
+  )
+}
 
 export function SiteHeader() {
   return (
@@ -37,9 +53,15 @@ export function SiteHeader() {
           <Link href="/login" aria-label="會員" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
             <User className="size-[18px]" strokeWidth={1.4} />
           </Link>
-          <Link href="/cart" aria-label="購物袋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
-            <ShoppingBag className="size-[18px]" strokeWidth={1.4} />
-          </Link>
+          <Suspense
+            fallback={
+              <Link href="/cart" aria-label="購物袋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
+                <ShoppingBag className="size-[18px]" strokeWidth={1.4} />
+              </Link>
+            }
+          >
+            <CartIconWithBadge />
+          </Suspense>
         </div>
       </div>
     </header>
