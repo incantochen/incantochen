@@ -2,6 +2,7 @@ import { redirect } from "next/navigation"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { buildAioParams } from "@/lib/ecpay/aio-payment"
 import { serverEnv } from "@/lib/env.server"
+import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit"
 
 export default async function CheckoutPayPage({
   searchParams,
@@ -67,11 +68,7 @@ export default async function CheckoutPayPage({
           </button>
         </form>
 
-        <script
-          dangerouslySetInnerHTML={{
-            __html: "document.getElementById('ecpay-form').submit();",
-          }}
-        />
+        <EcpayAutoSubmit formId="ecpay-form" />
       </div>
     </main>
   )
