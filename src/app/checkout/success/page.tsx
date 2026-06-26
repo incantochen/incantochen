@@ -3,9 +3,9 @@ import Link from "next/link"
 export default async function CheckoutSuccessPage({
   searchParams,
 }: {
-  searchParams: Promise<{ order?: string; email?: string }>
+  searchParams: Promise<{ order?: string }>
 }) {
-  const { order, email } = await searchParams
+  const { order } = await searchParams
 
   return (
     <main className="min-h-screen bg-paper flex items-center justify-center px-4">
@@ -30,18 +30,6 @@ export default async function CheckoutSuccessPage({
             <p className="font-mono text-lg font-medium text-ink">{order}</p>
           </div>
         )}
-
-        {email && (
-          <p className="mb-8 text-sm text-stone leading-relaxed">
-            若要查詢訂單進度，可使用{" "}
-            <span className="font-medium text-ink">{email}</span>{" "}
-            登入會員中心查看。
-          </p>
-        )}
-
-        <div className="mb-4 rounded-lg border border-border bg-cloud px-4 py-3 text-sm text-ash">
-          ⓘ 付款功能即將開啟（T25），我們會以 Email 通知您後續步驟。
-        </div>
 
         <Link
           href="/"

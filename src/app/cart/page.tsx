@@ -46,14 +46,12 @@ export default async function CartPage() {
             <div className="mt-3.5 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
               ⓘ 下單後訂製，交期將於結帳告知。
             </div>
-            <button
-              type="button"
-              disabled
-              title="結帳功能即將推出"
-              className="mt-3.5 w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase disabled:opacity-50"
+            <Link
+              href="/checkout"
+              className="mt-3.5 block w-full rounded-[2px] bg-primary px-8 py-4 text-center text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase"
             >
               前往結帳
-            </button>
+            </Link>
           </div>
         </div>
       )}
