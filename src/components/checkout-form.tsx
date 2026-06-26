@@ -9,6 +9,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [recipientPhone, setRecipientPhone] = useState("")
   const [zipCode, setZipCode] = useState("")
   const [shippingAddress, setShippingAddress] = useState("")
+  const [customConsent, setCustomConsent] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   function validate() {
@@ -18,6 +19,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       recipientPhone,
       zipCode,
       shippingAddress,
+      customConsent,
     })
     if (result.success) {
       setErrors({})
@@ -122,6 +124,28 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
 
       <div className="mb-5 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
         ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong> 天，將於結帳再次告知。
+      </div>
+
+      {/* T57 客製例外同意 — ⚖️ TODO: 以律師審定版取代下方文字（T36） */}
+      <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm">
+        <p className="mb-3 font-medium text-amber-900">⚠️ 客製商品注意事項</p>
+        <p className="mb-3 text-amber-800 leading-relaxed">
+          本商品為半客製品，依消費者保護法第 19 條但書，客製商品不適用七天猶豫期。
+          如有品質瑕疵或製作錯誤，仍可依規定申請退換。
+        </p>
+        <label className="flex cursor-pointer items-start gap-2.5">
+          <input
+            type="checkbox"
+            checked={customConsent}
+            onChange={(e) => setCustomConsent(e.target.checked)}
+            onBlur={validate}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+          />
+          <span className="text-amber-900">我已閱讀並同意上述說明</span>
+        </label>
+        {errors.customConsent && (
+          <p className="mt-1.5 text-sm text-destructive">{errors.customConsent}</p>
+        )}
       </div>
 
       <button

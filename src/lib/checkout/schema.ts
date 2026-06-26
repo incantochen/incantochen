@@ -9,6 +9,7 @@ export const checkoutFormSchema = z.object({
     .regex(/^[0-9-]{8,15}$/, "請輸入有效的電話號碼"),
   zipCode: z.string().regex(/^\d{3}(\d{2})?$/, "請輸入有效的郵遞區號（3 或 5 碼數字）"),
   shippingAddress: z.string().min(1, "請輸入地址"),
+  customConsent: z.literal(true, { message: "請勾選同意後再繼續" }),
 })
 
 export type CheckoutFormValues = z.infer<typeof checkoutFormSchema>
