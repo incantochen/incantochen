@@ -341,9 +341,15 @@
 
 | 項目 | 內容 |
 |------|------|
-| 狀態 | ⬜ 未開始 |
-| 待辦 | 評估範圍：Content-Security-Policy、rate limiting（Vercel Edge / upstash）、常見 OWASP 防護 |
-| 依賴 | T41 ✅ |
+| 狀態 | ✅ 完成（2026-06-27） |
+| 依賴 | T07 ✅、T18 ✅ |
+
+**完成內容**：
+- `next.config.ts`：Security headers 全站套用 — `X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`（camera/microphone/geolocation 封鎖）、`Content-Security-Policy`（dev 含 unsafe-eval，prod 移除）、`Strict-Transport-Security`（prod only）；`form-action` 白名單含 ECPay 兩個端點
+- `src/lib/rate-limit.ts`：Upstash Redis slidingWindow limiters — `otpEmailRatelimit`（5/15m）、`otpIpRatelimit`（10/10m）、`otpVerifyIpRatelimit`（30/1m）
+- `src/app/login/actions.ts`：`requestOtp` 加 email `trim().toLowerCase()` + Zod `.email()` 驗證 + IP+email 雙重速率限制；`verifyOtpCode` 加 IP 速率限制；IP 取得 fallback（cf-connecting-ip → x-forwarded-for → x-real-ip → null，null 時跳過 IP limit 避免共用 bucket 誤鎖）
+- `env.server.ts` 已有 `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`（前次 session 加入）
+- ⚠️ 上線前用 securityheaders.com 掃 staging URL 確認 CSP 無誤
 
 ---
 
@@ -352,8 +358,7 @@
 
 | 項目 | 內容 |
 |------|------|
-| 狀態 | ⬜ 未開始 |
-| 待辦 | 安裝 vitest；覆蓋：白名單外選項 throw、base_price 重算、priceChanged 判斷 |
+| 狀態 | ✅ 完成（2026-06-27） |
 | 依賴 | T41 ✅ |
 
 ---

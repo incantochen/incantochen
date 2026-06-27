@@ -29,8 +29,8 @@ T48,M1,金流,綠界黑貓宅配串接（保價＋本人簽收）,黑貓宅配 A
 T57,M1,法務,客製例外告知與同意（結帳）,結帳明示客製品不適用七天猶豫期，勾選同意才下單，存同意＋時間戳記,T22,0.5,37.5,P0,完成
 T23,M1,訂單,建立訂單（待付款）,◆ Order/OrderItem、單號；用 email 建會員或辨識既有會員,"T22,T48,T57",2.5,40,P0,完成
 T41,M1,安全,伺服器端驗價＋金鑰隔離,後端重算金額＋運費；金鑰僅留伺服器｜✅ 完成（2026-06-26）：verify-prices.ts（Zod驗config_snapshot、DB重查base_price+price_delta、重建configSnapshot、priceChanged）；createOrder加R/S/Q loop（金額變動→更新cart_item快照、revalidate、回傳priceUpdated:true不建單）；checkout-form.tsx區分amber警示vs紅色硬錯誤+router.refresh()；env.server.ts加SUPABASE_SERVICE_ROLE_KEY required()；service-role.ts改用serverEnv。,"T18,T23",1.5,41.5,P0,完成
-T51,M1,品質,報價引擎單元測試,計價／驗價自動測試,"T18,T41",1,42.5,P0,未開始
-T58,M1,安全,◆ 應用層安全防護,SQL 注入防護(參數化/RPC綁定)、輸入驗證(Zod)、安全標頭、XSS、速率限制/防濫發 magic link,"T07,T18",1.5,44,P0,未開始
+T51,M1,品質,報價引擎單元測試,計價／驗價自動測試,"T18,T41",1,42.5,P0,完成
+T58,M1,安全,◆ 應用層安全防護,SQL 注入防護(參數化/RPC綁定)、輸入驗證(Zod)、安全標頭、XSS、速率限制/防濫發 magic link｜✅ 完成（2026-06-27）：next.config.ts Security headers（X-Frame-Options/nosniff/Referrer-Policy/Permissions-Policy/CSP/HSTS）；login/actions.ts email trim+lowercase+Zod驗證＋Upstash Redis 雙重速率限制（IP+email 各別；verifyOtp IP 30/min）；src/lib/rate-limit.ts 封裝 slidingWindow limiters,"T07,T18",1.5,44,P0,完成
 T24,M1,金流,ECPay sandbox 設定,測試商店、金鑰、SDK,T02,1,45,P0,完成
 T25,M1,金流,建立付款請求並導向 ECPay,交易、CheckMacValue、導頁,"T23,T24",2.5,47.5,P0,完成
 T26,M1,金流,處理回拋並更新狀態,callback 驗證、更新 Payment／Order,T25,2.5,50,P0,完成
