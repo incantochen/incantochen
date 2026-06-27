@@ -3,9 +3,8 @@ import { Resend } from "resend"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 
-// Update this once your domain is verified in Resend Dashboard
-// For local testing, change to "onboarding@resend.dev"
-const FROM_EMAIL = "incantochen <orders@incantochen.com>"
+// TODO(T35): switch to verified custom domain (e.g. orders@incantochen.com) before go-live
+const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
 
 const selectionSchema = {
   parse(raw: unknown): { label: string; price_delta: number }[] {
