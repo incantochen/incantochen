@@ -7,14 +7,14 @@ const selectionSchema = z.object({
   option_type_code: z.string(),
   option_value_code: z.string(),
   label: z.string(),
-  price_delta: z.number(),
+  price_delta: z.number().finite(),
 })
 
 const configSnapshotSchema = z.object({
   product_id: z.string().uuid(),
-  base_price: z.number(),
+  base_price: z.number().finite(),
   selections: z.array(selectionSchema),
-  line_unit_price: z.number(),
+  line_unit_price: z.number().finite(),
 })
 
 export type VerifiedItem = {
@@ -63,6 +63,12 @@ export async function verifyCartPrices(
       throw new Error(`商品已下架或不存在，無法建立訂單`)
     }
 
+    // Guard against DB-side base_price corruption (NaN, Infinity, negative)
+    const rawBasePrice: unknown = product.base_price
+    if (typeof rawBasePrice !== "number" || !Number.isFinite(rawBasePrice) || rawBasePrice < 0) {
+      throw new Error(`商品定價資料異常，無法建立訂單`)
+    }
+
     // Re-fetch option whitelist (same join as addToCart) — add label so we can
     // rebuild a self-consistent configSnapshot with current DB data
     const { data: productOptions } = await serviceRole
@@ -83,8 +89,13 @@ export async function verifyCartPrices(
       const typeCode = po.option_type.code
       const valueMap = new Map<string, { priceDelta: number; label: string }>()
       for (const pov of po.product_option_value) {
+        // Guard against DB-side price_delta corruption (null, NaN, Infinity, string)
+        const rawPriceDelta: unknown = pov.price_delta
+        if (typeof rawPriceDelta !== "number" || !Number.isFinite(rawPriceDelta)) {
+          throw new Error(`選項定價資料異常，無法建立訂單`)
+        }
         valueMap.set(pov.option_value.code, {
-          priceDelta: pov.price_delta,
+          priceDelta: rawPriceDelta,
           label: pov.option_value.label,
         })
       }
@@ -92,7 +103,7 @@ export async function verifyCartPrices(
     }
 
     // Recalculate price and rebuild selections using current DB data
-    let verifiedUnitPrice = product.base_price
+    let verifiedUnitPrice = rawBasePrice
     const verifiedSelections: {
       option_type_code: string
       option_value_code: string
@@ -118,13 +129,22 @@ export async function verifyCartPrices(
       })
     }
 
+    // Round to cents to avoid floating point drift
+    verifiedUnitPrice = Math.round(verifiedUnitPrice * 100) / 100
+
+    if (verifiedUnitPrice < 0) {
+      throw new Error(`商品最終定價不得為負數，無法建立訂單`)
+    }
+
     // Rebuild configSnapshot entirely from DB — never carry forward stale snapshot values
     const verifiedConfigSnapshot: Json = {
       product_id: config.product_id,
-      base_price: product.base_price,
+      base_price: rawBasePrice,
       selections: verifiedSelections as unknown as Json[],
       line_unit_price: verifiedUnitPrice,
     }
+
+    const roundedSnapshot = Math.round(item.unit_price_snapshot * 100) / 100
 
     results.push({
       cartItemId: item.id,
@@ -132,7 +152,7 @@ export async function verifyCartPrices(
       quantity: item.quantity,
       verifiedUnitPrice,
       configSnapshot: verifiedConfigSnapshot,
-      priceChanged: verifiedUnitPrice !== item.unit_price_snapshot,
+      priceChanged: verifiedUnitPrice !== roundedSnapshot,
     })
   }
 
