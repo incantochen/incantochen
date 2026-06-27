@@ -7,6 +7,9 @@ type ServerEnv = {
   ECPAY_HASH_IV: string
   ECPAY_PAYMENT_URL: string
   NEXT_PUBLIC_SITE_URL: string
+  UPSTASH_REDIS_REST_URL: string
+  UPSTASH_REDIS_REST_TOKEN: string
+  RESEND_API_KEY: string
 }
 
 function required(key: keyof ServerEnv): string {
@@ -24,4 +27,7 @@ export const serverEnv: ServerEnv = {
   ECPAY_HASH_IV: required("ECPAY_HASH_IV"),
   ECPAY_PAYMENT_URL: required("ECPAY_PAYMENT_URL"),
   NEXT_PUBLIC_SITE_URL: required("NEXT_PUBLIC_SITE_URL"),
+  UPSTASH_REDIS_REST_URL: required("UPSTASH_REDIS_REST_URL"),
+  UPSTASH_REDIS_REST_TOKEN: required("UPSTASH_REDIS_REST_TOKEN"),
+  RESEND_API_KEY: required("RESEND_API_KEY"),
 }
