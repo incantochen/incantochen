@@ -37,7 +37,7 @@ T26,M1,金流,處理回拋並更新狀態,callback 驗證、更新 Payment／Ord
 T53,M1,金流,冪等性處理（防重複）,建單／回拋去重；雙通道處理｜✅ 完成（2026-06-26）：generateMerchantTradeNo；buildAioParams 接受外部 merchantTradeNo；/checkout/pay 預建 payment 記錄、復用 pending 冪等、已付款直導成功頁；webhook 以 merchant_trade_no 查 payment 表、UPDATE 防競態、fallback 處理 23505。,T26,1,51,P0,完成
 T27,M1,金流,付款結果頁,成功／失敗導引｜✅ 完成（2026-06-26）：/checkout/success 強化（DB 讀狀態，paid→完整訂單資訊，pending_payment→3s 輪詢最多 90s）；新增 /checkout/failed（失敗頁，重新付款入口；若訂單已 paid 自動跳轉成功頁）；order-result route 失敗改導向 /checkout/failed。,T26,1,52,P0,完成
 T30a,M1,通知,Email 下單確認（基本）,付款成功寄客人確認信｜✅ 完成（2026-06-27）：resend 安裝；env.server.ts 加 RESEND_API_KEY；src/lib/email/order-confirmation.ts（查 order+items+member email→buildEmailHtml→Resend send）；notify/route.ts 兩個 paid path 各加 void sendOrderConfirmation().catch(()=>{})；FROM_EMAIL=onboarding@resend.dev（T35 換自訂網域）；E2E：checkout→ECPay sandbox→webhook 1|OK→Resend 確認信寄出,T26,1.5,53.5,P0,完成
-T49,M1,通知,新訂單通知店家,有新單即 email／LINE 通知你本人,T26,0.5,54,P0,未開始
+T49,M1,通知,新訂單通知店家,有新單即 email／LINE 通知你本人｜✅ 完成（2026-06-27）：src/lib/email/new-order-notification.ts（sendNewOrderNotification：查 orders+items+member.email；HTML 含訂單號/客人資訊/品項/總計）；notify/route.ts 兩個 paid path 加 void sendNewOrderNotification().catch(()=>{})；TO固定=fishead02290@gmail.com（T35後改env var）,T26,0.5,54,P0,完成
 T28,M2,訂單,訂單狀態機,狀態定義與合法轉換,T26,1.5,55.5,P0,未開始
 T29,M2,訂單,狀態紀錄（OrderStatusLog）,狀態變更寫 log,T28,0.5,56,P0,未開始
 T08,M2,會員,會員中心框架,版面、個人資料頁,T07,1.5,57.5,P0,未開始
