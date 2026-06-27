@@ -36,7 +36,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24／T25／T26／**T27／T53／T41／T30a** 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay 金流→付款結果頁→冪等性→伺服器端驗價→Email 下單確認）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。M1 剩餘未完：**T58 應用層安全防護**、**T51 報價引擎單測**、**T49 新訂單通知**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24／T25／T26／**T27／T53／T41／T30a／T58／T51** 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay 金流→付款結果頁→冪等性→伺服器端驗價→Email 下單確認→應用層安全防護→報價引擎單測）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。M1 剩餘未完：**T49 新訂單通知**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 
@@ -147,6 +147,7 @@
 - **卡號不落地**：信用卡資訊全程交給綠界。
 - **金流冪等**：Webhook＋主動對帳 API 共用冪等鎖；逾時 ≠ 失敗；重付前先查是否已付款。
 - **登入防護**：magic link 落地頁需使用者再按一次才消耗 token；token 高熵／單次／短效。
+- ✅ **T58 應用層安全防護（2026-06-27）**：Security headers（X-Frame-Options/nosniff/Referrer-Policy/Permissions-Policy/CSP/HSTS）已加入 `next.config.ts`。**CSP 注意**：`script-src` 在 dev 環境含 `unsafe-eval`（React dev mode 需要），production build 自動移除；上線前用 securityheaders.com 掃 staging URL 確認。登入 email 改用 `z.string().email()` + `trim().toLowerCase()`；OTP 速率限制（Upstash Redis）：requestOtp 雙重 IP+email 限制，verifyOtpCode IP 限制 30 req/min；IP 取得 fallback：`cf-connecting-ip → x-forwarded-for → x-real-ip → null`（null 時跳過 IP limit 避免共用 bucket 誤鎖）。
 
 **未經明確同意，不得：** 修改 `.env*`、執行 DB migration、改動 auth／金流／session 邏輯、變更 RLS policy 或 CI 設定。
 
