@@ -359,13 +359,21 @@
 ---
 
 #### #T30a / M1 Email / 下單確認信
-**說明**：建立訂單後寄送確認信給客人（需先安裝 Resend）。
+**說明**：付款成功後（ECPay webhook RtnCode=1 確認）寄確認信給客人。
 
 | 項目 | 內容 |
 |------|------|
-| 狀態 | ⬜ 未開始（⚠️ 需先 `pnpm add resend`） |
-| 待辦 | 安裝 Resend；設計 Email 範本；`createOrder` 成功後 fire-and-forget 寄信 |
-| 依賴 | T23 ✅ |
+| 狀態 | ✅ 完成（2026-06-27） |
+| 依賴 | T26 ✅ |
+
+**完成內容**：
+- `pnpm add resend@6.14.0` 安裝 Resend SDK
+- `src/lib/env.server.ts`：加入 `RESEND_API_KEY: required()`（fail-fast）；使用者自行加入 `.env.local` + Vercel env vars
+- `src/lib/email/order-confirmation.ts`（`import "server-only"`）：查 `orders`+`order_item`+`product`+`member.email`；`buildEmailHtml()` 含訂單號、品項清單（商品名稱＋選配標籤＋數量）、總金額、收件地址、登入連結；`sendOrderConfirmation(orderId)` export
+- `src/app/api/ecpay/notify/route.ts`：兩個 `paid` 成功路徑各加 `void sendOrderConfirmation(orderId).catch(() => {})` fire-and-forget
+- `FROM_EMAIL = "incantochen <onboarding@resend.dev>"`（MVP 沙盒；T35 網域驗證後換 `orders@incantochen.com`）
+- ⚠️ `onboarding@resend.dev` 限只能寄到 Resend 帳號 email（`fishead02290@gmail.com`）；T35 完成後客人 email 才能直送
+- **E2E 驗收**：`form.requestSubmit()` → POST /checkout 303 → /checkout/pay → ECPay sandbox → 手動觸發 webhook → `1|OK` → Resend 確認信成功送出（Resend ID: ca40a59a）
 
 ---
 
