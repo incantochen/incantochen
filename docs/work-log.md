@@ -383,12 +383,18 @@
 ---
 
 #### #T49 / M1 Email / 新訂單通知店家
-**說明**：新訂單成立後通知店家（和 T30a 共用 Resend，建議一起做）。
+**說明**：付款成功後即時通知店家，信件包含訂單號、客人資訊、品項、總金額、收件地址。
 
 | 項目 | 內容 |
 |------|------|
-| 狀態 | ⬜ 未開始（⚠️ 需先 `pnpm add resend`） |
-| 依賴 | T30a |
+| 狀態 | ✅ 完成（2026-06-27） |
+| 依賴 | T30a ✅ |
+
+**完成內容**：
+- `src/lib/email/new-order-notification.ts`（`import "server-only"`）：查同 T30a 相同欄位；`OWNER_EMAIL = fishead02290@gmail.com`（TO 固定店家；T35 後可改 env var）；HTML 含訂單號、客人姓名/email/地址、品項表格、總計；`sendNewOrderNotification(orderId)` export
+- `notify/route.ts`：兩個 paid path 各加 `void sendNewOrderNotification(orderId).catch(() => {})`（與 `sendOrderConfirmation` 並列，各自 fire-and-forget）
+- 主旨格式：`[新訂單] INC-XXXXXXXX-XXXXXX — NT$XX,XXX`
+- ⚠️ T35 網域驗證後，`OWNER_EMAIL` 改為 env var，支援任意店家 email
 
 ---
 
