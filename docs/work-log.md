@@ -398,6 +398,43 @@
 
 ---
 
+## 📅 2026-06-27
+
+### 本次作業
+
+**主題**：M1 收尾（T30a / T58 / T51 / T49）
+
+| 任務 | 內容 | 狀態 |
+|------|------|------|
+| T30a | 付款成功後寄客人確認信（Resend）；`src/lib/email/order-confirmation.ts`；webhook fire-and-forget | ✅ |
+| T58 | Security headers（next.config.ts）；Upstash Redis OTP 速率限制；login email 正規化 | ✅ |
+| T51 | vitest 設定；verify-prices.ts Zod `.finite()` 強化；base_price 負值/NaN 守衛 | ✅ |
+| T49 | 付款成功後寄店家通知信；`src/lib/email/new-order-notification.ts`；webhook fire-and-forget | ✅ |
+
+**重要發現**：
+- `form.requestSubmit()` 才能正確觸發 Next.js Server Action（`button.click()` 在 Playwright 下不會送出 POST）
+- stash pop conflict 解法：`git restore --staged .` 後選擇性 stage 各任務檔案分開 commit
+- `onboarding@resend.dev` 限只能寄到 Resend 帳號 email；T35 購域後換 `orders@incantochen.com`
+
+**Vercel env vars 已由使用者設定**：`RESEND_API_KEY`、`UPSTASH_REDIS_REST_URL`、`UPSTASH_REDIS_REST_TOKEN`
+
+---
+
+### 下次作業
+
+**主題**：M2 起點
+
+| 優先 | 任務 | 說明 |
+|------|------|------|
+| 1 | T28 訂單狀態機 | 狀態定義與合法轉換，M2 所有訂單任務的基礎 |
+| 2 | T29 狀態紀錄（OrderStatusLog） | 狀態變更寫 log，依賴 T28 |
+| 3 | T08 會員中心框架 | 版面、個人資料頁，依賴 T07 ✅ |
+| 4 | T31 後台訂單管理 | 看單、改狀態、貼物流單號，依賴 T28 |
+
+建議從 **T28 → T29 → T31（後台）** 或 **T28 → T29 → T08 → T32（顧客查單）** 兩條線擇一先走。
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```
