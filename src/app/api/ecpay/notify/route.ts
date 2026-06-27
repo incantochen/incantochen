@@ -2,6 +2,7 @@ import "server-only"
 import { verifyCheckMacValue } from "@/lib/ecpay/check-mac-value"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
+import { sendOrderConfirmation } from "@/lib/email/order-confirmation"
 
 const OK = () =>
   new Response("1|OK", { status: 200, headers: { "Content-Type": "text/plain" } })
@@ -75,6 +76,7 @@ export async function POST(request: Request) {
 
       if (isPaid && order.status === "pending_payment") {
         await serviceRole.from("orders").update({ status: "paid" }).eq("id", order.id)
+        void sendOrderConfirmation(order.id).catch(() => {})
       }
 
       return OK()
@@ -113,6 +115,7 @@ export async function POST(request: Request) {
           .from("orders")
           .update({ status: "paid" })
           .eq("id", payment.order_id)
+        void sendOrderConfirmation(payment.order_id).catch(() => {})
       }
     }
 

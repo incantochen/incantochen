@@ -27,6 +27,7 @@
 > ✅ **T27 付款結果頁已完成（2026-06-26）**：`/checkout/success`（server component：查 orders+member join；`paid` → 成功 UI；`pending_payment` → `order-status-check.tsx` client-side polling `router.refresh()` 每 3 秒最多 90 秒，逾時顯示 amber「將以 email 通知」）；`/checkout/failed`（失敗頁：已 `paid` → redirect success；否則顯示重試按鈕）。`useRef(0)` + `startRef.current = Date.now()` 於 useEffect 避免 react-hooks/purity lint error。`order-result` route 失敗時改 redirect `/checkout/failed?order=xxx`。
 > ✅ **T53 ECPay MerchantTradeNo 冪等性已完成（2026-06-26）**：`src/lib/ecpay/merchant-trade-no.ts`（`generateMerchantTradeNo(orderNo)`：去 hyphen 17 字元 + 2 隨機字元 = 19 字，ECPay 20 字上限內）；`checkout/pay/page.tsx` reuse 現有 `pending` payment row 或建新 unique trade no；`notify/route.ts` 以 `merchant_trade_no` 為 lookup key，UPDATE 加 `.eq("status","pending")` 競態守衛。
 > ✅ **T41 伺服器端驗價＋金鑰隔離已完成（2026-06-26）**：`src/lib/quote/verify-prices.ts`（Zod 驗 config_snapshot；DB 重查 base_price + option_value whitelist；重建 verifiedSelections/configSnapshot；回傳 `priceChanged: boolean`）；`env.server.ts` 加 `SUPABASE_SERVICE_ROLE_KEY: required()`（fail-fast）；`service-role.ts` 改用 `serverEnv.SUPABASE_SERVICE_ROLE_KEY`；`createOrder` 驗價後若有 `priceChanged` → 更新 cart_item 快照 → `revalidatePath` → 回傳 `{ ok: false, priceUpdated: true }` 不建單（R/S/Q loop，對齊 user-flow.md）；`checkout-form.tsx` 區分 amber 警示（priceUpdated）vs 紅色硬錯誤。**金額安全紅線完整實現：訂單金額 100% 以 DB 白名單重算，絕不信任 cart 快照。**
+> ✅ **T30a Email 下單確認已完成（2026-06-27）**：`src/lib/email/order-confirmation.ts`（`import "server-only"`；查 orders+order_item+product+member.email；buildEmailHtml()；`sendOrderConfirmation(orderId)`）；`notify/route.ts` 兩個 paid path 各加 `void sendOrderConfirmation().catch(() => {})`（fire-and-forget）；`env.server.ts` 加 `RESEND_API_KEY: required()`。⚠️ 目前 FROM=`onboarding@resend.dev`（只能寄到 Resend 帳號 email）；T35 網域驗證後換 `orders@incantochen.com` 並移除 to 覆蓋。
 
 ---
 
@@ -35,7 +36,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24／T25／T26／**T27／T53／T41** 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay 金流→付款結果頁→冪等性→伺服器端驗價）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。M1 剩餘未完：**T58 應用層安全防護**、**T51 報價引擎單測**、**T30a Email 下單確認**、**T49 新訂單通知**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
+- **目前階段**：M-1／M0 全數完成。M1 進行中：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24／T25／T26／**T27／T53／T41／T30a** 完成（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay 金流→付款結果頁→冪等性→伺服器端驗價→Email 下單確認）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。M1 剩餘未完：**T58 應用層安全防護**、**T51 報價引擎單測**、**T49 新訂單通知**。里程碑序列：M0 → M1 戒指可配置並付款 → M2 → M3 → M4 → M5。
 
 ---
 
