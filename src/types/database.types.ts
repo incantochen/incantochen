@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       cart: {
@@ -271,30 +296,43 @@ export type Database = {
       }
       order_status_log: {
         Row: {
+          actor_id: string | null
           created_at: string
           from_status: string | null
           id: string
+          is_override: boolean
           note: string | null
           order_id: string
           to_status: string
         }
         Insert: {
+          actor_id?: string | null
           created_at?: string
           from_status?: string | null
           id?: string
+          is_override?: boolean
           note?: string | null
           order_id: string
           to_status: string
         }
         Update: {
+          actor_id?: string | null
           created_at?: string
           from_status?: string | null
           id?: string
+          is_override?: boolean
           note?: string | null
           order_id?: string
           to_status?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "order_status_log_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "member"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "order_status_log_order_id_fkey"
             columns: ["order_id"]
@@ -694,6 +732,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       invoice_status: ["none", "issued", "allowance", "voided"],
