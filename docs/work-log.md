@@ -451,6 +451,29 @@
 
 ---
 
+#### #T31 / M2 / 後台訂單管理
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-07-01） |
+| 產出 | `src/lib/auth/require-admin.ts`（新增）、`src/lib/order/order-status.ts`（新增）、`src/lib/env.server.ts`（修改，加 ADMIN_EMAIL）、`src/lib/order/state-machine.ts`（修改，re-export 自 order-status.ts）、`src/app/admin/orders/page.tsx`（新增）、`src/app/admin/orders/[id]/page.tsx`（新增）、`src/app/admin/orders/[id]/actions.ts`（新增）、`src/app/admin/orders/[id]/order-actions.tsx`（新增） |
+| 更新描述 | 1. **Admin guard**：`requireAdmin()` 以 `ADMIN_EMAIL` env var 做 MVP 身份驗證（T09 正式角色系統留 M3）。2. **`order-status.ts`**：把 `OrderStatus` 型別與 `VALID_TRANSITIONS` 常數抽出至不含 `server-only` 的共用檔，解決 Client Component bundle 無法引用 `state-machine.ts` 的問題；`state-machine.ts` 改 re-export。3. **`/admin/orders` 訂單列表**：狀態 tab 篩選、關鍵字搜尋（`.ilike()` 同時比對 `order_no`/`recipient_name`）、金額/時間欄位排序、分頁 20 筆，全部 URL-based state（Server Component）。4. **`/admin/orders/[id]` 訂單詳情**：四個區塊（訂單資訊、客人資訊、品項快照、付款資訊）+ 狀態時間軸（`order_status_log` 含 `actor.email`、`is_override` badge）。5. **操作面板（Client Component）**：正常狀態轉換按鈕（動態算自 VALID_TRANSITIONS）；出貨區塊（radio 宅配填單號／面交 + 可選備註，`tracking_no = "面交 備註"` 格式）；出貨後修正物流單號；Admin Override 折疊區（任意狀態 select + reason textarea 必填，`is_override=true` 寫入）。6. **使用者須設定** `.env.local` 與 Vercel Dashboard 加入 `ADMIN_EMAIL=（管理員email）`。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm tsc --noEmit` ✅、`pnpm test` 30/30 ✅、`pnpm build` ✅；`/admin/orders` 與 `/admin/orders/[id]` 出現在 build 路由表；merge commit 至 master，push 成功。 |
+| 依賴 | T28 ✅ |
+
+---
+
+### 下次作業
+
+| 優先 | 任務 | 說明 |
+|------|------|------|
+| 1 | T08 會員中心框架 | 版面、個人資料頁，依賴 T07 ✅ |
+| 2 | T32 顧客訂單追蹤 | 會員中心看訂單狀態與 order_status_log 時間軸，依賴 T29 ✅、T08 |
+| 3 | T64 後台 PII 遮罩 | 後台電話顯示遮罩（09xx-***-123），依賴 T31 ✅ |
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```
