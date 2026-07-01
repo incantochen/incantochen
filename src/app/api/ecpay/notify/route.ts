@@ -77,6 +77,14 @@ export async function POST(request: Request) {
 
       if (isPaid && order.status === "pending_payment") {
         await serviceRole.from("orders").update({ status: "paid" }).eq("id", order.id)
+        void serviceRole.from("order_status_log").insert({
+          order_id: order.id,
+          from_status: "pending_payment",
+          to_status: "paid",
+          note: "ECPay webhook",
+          actor_id: null,
+          is_override: false,
+        })
         void sendOrderConfirmation(order.id).catch(() => {})
         void sendNewOrderNotification(order.id).catch(() => {})
       }
@@ -117,6 +125,14 @@ export async function POST(request: Request) {
           .from("orders")
           .update({ status: "paid" })
           .eq("id", payment.order_id)
+        void serviceRole.from("order_status_log").insert({
+          order_id: payment.order_id,
+          from_status: "pending_payment",
+          to_status: "paid",
+          note: "ECPay webhook",
+          actor_id: null,
+          is_override: false,
+        })
         void sendOrderConfirmation(payment.order_id).catch(() => {})
         void sendNewOrderNotification(payment.order_id).catch(() => {})
       }
