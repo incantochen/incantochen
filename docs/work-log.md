@@ -422,16 +422,32 @@
 
 ### 下次作業
 
-**主題**：M2 起點
+**主題**：M2 起點 → T28/T29 已完成，繼續 T08 或 T31
 
 | 優先 | 任務 | 說明 |
 |------|------|------|
-| 1 | T28 訂單狀態機 | 狀態定義與合法轉換，M2 所有訂單任務的基礎 |
-| 2 | T29 狀態紀錄（OrderStatusLog） | 狀態變更寫 log，依賴 T28 |
-| 3 | T08 會員中心框架 | 版面、個人資料頁，依賴 T07 ✅ |
-| 4 | T31 後台訂單管理 | 看單、改狀態、貼物流單號，依賴 T28 |
+| 1 | T08 會員中心框架 | 版面、個人資料頁，依賴 T07 ✅ |
+| 2 | T31 後台訂單管理 | 看單、呼叫 transitionOrder/adminOverrideStatus 改狀態、貼物流單號 |
+| 3 | T32 顧客訂單追蹤 | 會員中心看狀態與 order_status_log 時間軸，依賴 T29 ✅、T08 |
 
-建議從 **T28 → T29 → T31（後台）** 或 **T28 → T29 → T08 → T32（顧客查單）** 兩條線擇一先走。
+建議路線：**T31（後台）** 或 **T08 → T32（前台）**。
+
+---
+
+## 📅 2026-07-01
+
+### 本次作業
+
+#### #T28 + T29 / M2 / 訂單狀態機 + 狀態紀錄
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-07-01） |
+| 產出 | `supabase/migrations/0004_add_actor_to_order_status_log.sql`（新增）、`src/lib/order/state-machine.ts`（新增）、`src/lib/order/__tests__/state-machine.test.ts`（新增）、`src/app/api/ecpay/notify/route.ts`（修改，補 log）、`src/types/database.types.ts`（gen types 更新） |
+| 更新描述 | 1. **Migration 0004**：`order_status_log` 補 `actor_id uuid`（操作者 member.id，NULL=系統）與 `is_override bool`（Admin bypass flag），已 `db push` 至雲端。2. **`state-machine.ts`**：`OrderStatus` 型別（7 個狀態）；`VALID_TRANSITIONS`（`cancelled` 只能從 `pending_payment` 進入，付款後取消一律走 `refunded`，財務可對帳）；`canTransition()` 純函式；`transitionOrder()` 受狀態機約束、寫 log（`is_override=false`）；`adminOverrideStatus()` Admin bypass 任意狀態皆可、`operatorId`+`reason` 必填、寫 log（`is_override=true`）。3. **`notify/route.ts`**：兩個 `pending_payment → paid` 路徑各補寫 `order_status_log`（T29）。4. **關鍵設計決策**：`shipped → completed` 的「實務難以確認收件」問題，採方案 A——`completed` 保留但 MVP 不強制用，`shipped` 即視為正常結束狀態，Phase 2 自動化接上。`paid → cancelled` 移除（付款後不可取消，須走 `refunded`）。Admin Override 可繞過狀態機強制改任意狀態，稽核記錄完整（`is_override=true`、`actor_id`、`note=reason`、`created_at` 自動）。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm tsc --noEmit` ✅、`pnpm test` 30/30 ✅、`pnpm build` ✅；merge commit 至 master，push 成功。 |
+| 依賴 | T26 ✅ |
 
 ---
 
