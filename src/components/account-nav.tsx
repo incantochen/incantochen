@@ -11,8 +11,12 @@ const linkClass = (active: boolean) =>
 
 export function AccountNav() {
   const pathname = usePathname()
-  const isOrdersActive = pathname === "/account" || pathname.startsWith("/account/orders")
-  const isProfileActive = pathname.startsWith("/account/profile")
+  const isOrdersActive =
+    pathname === "/account" ||
+    pathname === "/account/orders" ||
+    pathname.startsWith("/account/orders/")
+  const isProfileActive =
+    pathname === "/account/profile" || pathname.startsWith("/account/profile/")
 
   return (
     <nav className="flex flex-col">
