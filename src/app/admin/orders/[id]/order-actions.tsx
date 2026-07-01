@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import {
   VALID_TRANSITIONS,
+  STATUS_LABELS,
   type OrderStatus,
 } from "@/lib/order/order-status";
 import {
@@ -11,16 +12,6 @@ import {
   overrideStatus,
   saveTrackingNo,
 } from "./actions";
-
-const STATUS_LABELS: Record<OrderStatus, string> = {
-  pending_payment: "待付款",
-  paid: "已付款",
-  in_production: "製作中",
-  shipped: "已出貨",
-  completed: "已完成",
-  cancelled: "已取消",
-  refunded: "已退款",
-};
 
 const ALL_STATUSES: OrderStatus[] = [
   "pending_payment", "paid", "in_production",
