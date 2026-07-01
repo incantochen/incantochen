@@ -477,12 +477,30 @@
 
 ---
 
+## 📅 2026-07-02
+
+### 本次作業
+
+#### #T32 / M2 / 顧客訂單追蹤（會員中心看訂單狀態與紀錄）
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-07-02） |
+| 產出 | `src/app/account/orders/page.tsx`（改寫，取代 T08 佔位）、`src/app/account/orders/[id]/page.tsx`（新增）、`src/lib/order/order-status.ts`（修改，加 `STATUS_LABELS`/`STATUS_PILL_STYLES`）、`src/lib/utils.ts`（修改，加 `formatCurrency`/`formatDateTime`）、`src/app/admin/orders/page.tsx`／`[id]/page.tsx`／`[id]/order-actions.tsx`（各改成 import 共用 `STATUS_LABELS`，去除 3 份重複定義）、`docs/tasks.csv`（新增 T65 追蹤項） |
+| 更新描述 | 1. **範圍**：`/account/orders` 換真實訂單列表（訂單號/日期/金額/狀態 pill，無分頁，MVP 訂單量小）；`/account/orders/[id]` 顯示狀態時間軸（`order_status_log`，僅 `from_status→to_status`+時間戳，不露 `actor`/`is_override`/`note` 等後台稽核細節）、物流單號（`tracking_no` 有值才顯示，否則「尚未出貨」）、品項（`config_snapshot.selections[].label` 摘要＋商品名稱＋單價×數量）、合計；**不含**「申請售後」按鈕（T33 範圍）。2. 查詢一律用一般已登入 client（不是 service role）——RLS 的 `orders_select_own`/`order_item_select_own`/`order_status_log_select_own` 本來就是為此設計，訂單詳情頁另外顯式加 `.eq("member_id", user.id)` 做防呆。3. **踩坑**：`order_item` join `product(name)` 若走 RLS-scoped client，商品一旦離開 `active` 狀態（`product_select_public` RLS 只允許 `status='active'`），join 會靜默拿不到名稱；改成品項名稱另外用 service role 查，不受商品目前狀態影響。此為暫時解法，正式解法（`order_item` 補 `product_name_snapshot` 欄位、下單當下鎖住名稱）記錄為新任務 **T65**（涉及 migration，需先 plan mode）。4. 順手把後台三份重複的 `STATUS_LABELS` 定義抽到 `order-status.ts` 單一來源（`STATUS_COLORS` 維持後台自己管理，跟顧客介面的品牌配色 `STATUS_PILL_STYLES` 分開）；`formatCurrency`/`formatDateTime` 同樣去重到 `utils.ts`。5. **開發流程**：規劃階段一樣走 Ultraplan（雲端 session）；這次雲端 session 完全連不上 GitHub（`/web-setup` 顯示「Connected as incantochen」但實際仍推不上去，claude.ai 的「Connectors」本來就不含 GitHub——那是 MCP connector 清單，跟 Claude Code cloud session 的 GitHub 連線是兩套系統），改到 `github.com/settings/installations` 確認/重裝 Claude GitHub App 也未解決，最後改用 git bundle（雲端 `git bundle create` 產檔→使用者下載到本機→`git fetch <bundle> <branch>:<branch>`）把分支帶回來。**順帶把本機 `gh auth login` 也補上了**（先前完全沒登入過），之後本機直接 `git push`＋`gh pr create` 開 PR，繞過雲端推不上去的問題。6. **確立的新工作流程**：雲端 push 開 PR（或本機代為 push）→ 本機用真實 `.env.local`／production Supabase 跑完整驗證 → 驗證過才 merge。7. **本機驗收**：`pnpm lint`／`tsc --noEmit`／`pnpm test`（30/30）／`pnpm build`（`/account/orders`、`/account/orders/[id]` 皆在路由表）全過；手動 E2E（service role 建測試訂單含 3 筆狀態紀錄＋1 筆品項）——列表正確顯示訂單號/金額/狀態；詳情頁時間軸/物流單號空狀態/品項(含 service role 補查的商品名稱)/選配摘要/合計都正確、無「申請售後」按鈕；**另一會員直接改 URL 存取此訂單正確回 404**（RLS + 顯式歸屬檢查雙層防護皆生效）；測試資料已清除。 |
+| 待辦 | （無，已完成）。T65（`product_name_snapshot`）留待排入後續 sprint。 |
+| 驗收 | 見上，PR #5 merge 至 master。 |
+| 依賴 | T29 ✅、T08 ✅ |
+
+---
+
 ### 下次作業
 
 | 優先 | 任務 | 說明 |
 |------|------|------|
-| 1 | T32 顧客訂單追蹤 | 會員中心看訂單狀態與 order_status_log 時間軸，依賴 T29 ✅、T08 ✅ |
+| 1 | T33 售後申請（分類） | 七天退/瑕疵申訴/維修保養，僅從訂單詳情頁發起，依賴 T08 ✅、T32 ✅ |
 | 2 | T64 後台 PII 遮罩 | 後台電話顯示遮罩（09xx-***-123），依賴 T31 ✅ |
+| 3 | T65 OrderItem 補 product_name_snapshot | 涉及 migration，動手前先 plan mode，依賴 T23 ✅ |
 
 ---
 
