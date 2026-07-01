@@ -3,6 +3,10 @@ import { NextResponse, type NextRequest } from "next/server"
 import { env } from "@/lib/env"
 
 export async function proxy(request: NextRequest) {
+  // Set on the request (not the response) so it propagates to Server Components
+  // downstream via next/headers' headers() — response.headers only reaches the browser.
+  request.headers.set("x-pathname", request.nextUrl.pathname)
+
   let response = NextResponse.next({ request })
 
   const supabase = createServerClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {

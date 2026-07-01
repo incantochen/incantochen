@@ -8,6 +8,7 @@
   --font-head: var(--font-head-latin), var(--font-head-tc), Georgia, serif;
   --font-body: var(--font-body-latin), var(--font-body-tc), system-ui,
     -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --header-height: 65px;
 }
 
 @theme inline {
