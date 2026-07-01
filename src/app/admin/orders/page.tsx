@@ -1,17 +1,8 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import type { OrderStatus } from "@/lib/order/order-status";
-
-const STATUS_LABELS: Record<OrderStatus, string> = {
-  pending_payment: "待付款",
-  paid: "已付款",
-  in_production: "製作中",
-  shipped: "已出貨",
-  completed: "已完成",
-  cancelled: "已取消",
-  refunded: "已退款",
-};
+import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
+import { formatCurrency, formatDateTime } from "@/lib/utils";
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending_payment: "bg-amber-100 text-amber-800",
@@ -186,10 +177,10 @@ export default async function AdminOrdersPage({
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      NT${Number(order.total_amount).toLocaleString()}
+                      {formatCurrency(Number(order.total_amount))}
                     </td>
                     <td className="px-4 py-3 text-gray-500">
-                      {new Date(order.created_at).toLocaleString("zh-TW", { timeZone: "Asia/Taipei", hour12: false })}
+                      {formatDateTime(order.created_at)}
                     </td>
                   </tr>
                 );

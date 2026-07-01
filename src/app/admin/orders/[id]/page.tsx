@@ -2,18 +2,9 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import type { OrderStatus } from "@/lib/order/order-status";
+import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
+import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { OrderActions } from "./order-actions";
-
-const STATUS_LABELS: Record<OrderStatus, string> = {
-  pending_payment: "待付款",
-  paid: "已付款",
-  in_production: "製作中",
-  shipped: "已出貨",
-  completed: "已完成",
-  cancelled: "已取消",
-  refunded: "已退款",
-};
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending_payment: "bg-amber-100 text-amber-800",
@@ -24,13 +15,6 @@ const STATUS_COLORS: Record<OrderStatus, string> = {
   cancelled: "bg-gray-100 text-gray-700",
   refunded: "bg-red-100 text-red-800",
 };
-
-function formatDateTime(iso: string) {
-  return new Date(iso).toLocaleString("zh-TW", {
-    timeZone: "Asia/Taipei",
-    hour12: false,
-  });
-}
 
 export default async function AdminOrderDetailPage({
   params,
@@ -118,15 +102,15 @@ export default async function AdminOrderDetailPage({
                 </div>
                 <div>
                   <dt className="text-gray-500">小計</dt>
-                  <dd>NT${Number(order.subtotal).toLocaleString()}</dd>
+                  <dd>{formatCurrency(Number(order.subtotal))}</dd>
                 </div>
                 <div>
                   <dt className="text-gray-500">運費</dt>
-                  <dd>NT${Number(order.shipping_fee).toLocaleString()}</dd>
+                  <dd>{formatCurrency(Number(order.shipping_fee))}</dd>
                 </div>
                 <div>
                   <dt className="text-gray-500">總金額</dt>
-                  <dd className="font-semibold">NT${Number(order.total_amount).toLocaleString()}</dd>
+                  <dd className="font-semibold">{formatCurrency(Number(order.total_amount))}</dd>
                 </div>
                 {order.tracking_no && (
                   <div>
@@ -197,10 +181,10 @@ export default async function AdminOrderDetailPage({
                         </td>
                         <td className="py-2 text-right">{item.quantity}</td>
                         <td className="py-2 text-right">
-                          NT${Number(item.unit_price_snapshot).toLocaleString()}
+                          {formatCurrency(Number(item.unit_price_snapshot))}
                         </td>
                         <td className="py-2 text-right">
-                          NT${(Number(item.unit_price_snapshot) * item.quantity).toLocaleString()}
+                          {formatCurrency(Number(item.unit_price_snapshot) * item.quantity)}
                         </td>
                       </tr>
                     );
@@ -224,7 +208,7 @@ export default async function AdminOrderDetailPage({
                   </div>
                   <div>
                     <dt className="text-gray-500">付款金額</dt>
-                    <dd>NT${Number(payment.amount).toLocaleString()}</dd>
+                    <dd>{formatCurrency(Number(payment.amount))}</dd>
                   </div>
                   <div>
                     <dt className="text-gray-500">MerchantTradeNo</dt>
