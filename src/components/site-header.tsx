@@ -25,8 +25,8 @@ async function CartIconWithBadge() {
 
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-paper">
-      <div className="mx-auto grid max-w-[1240px] grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4">
+    <header className="sticky top-0 z-40 h-[var(--header-height)] border-b border-border bg-paper">
+      <div className="mx-auto grid h-full max-w-[1240px] grid-cols-[1fr_auto_1fr] items-center gap-4 px-6">
         <Link
           href="/"
           className="font-heading text-lg tracking-[0.28em] text-ink uppercase"
@@ -50,7 +50,7 @@ export function SiteHeader() {
           <Link href="/collections/ring" aria-label="搜尋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
             <Search className="size-[18px]" strokeWidth={1.4} />
           </Link>
-          <Link href="/login" aria-label="會員" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
+          <Link href="/account" aria-label="會員" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
             <User className="size-[18px]" strokeWidth={1.4} />
           </Link>
           <Suspense
