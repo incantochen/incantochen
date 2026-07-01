@@ -58,6 +58,12 @@
 |------|------|
 | `setup-checklist.md` | 環境建置 Checklist。初始安裝步驟確認清單。 |
 
+### 視覺參考
+
+| 檔案 | 用途 |
+|------|------|
+| `wireframe/` | P05 線框（低保真）：`index`／`collection`／`product`／`cart`／`checkout`／`account`／`custom`／`payment-result`。做任何 UI／頁面前先讀對應頁面。 |
+
 ---
 
 ## `incantochen/docs/`（專案根層）
