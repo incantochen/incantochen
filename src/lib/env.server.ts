@@ -10,6 +10,7 @@ type ServerEnv = {
   UPSTASH_REDIS_REST_URL: string
   UPSTASH_REDIS_REST_TOKEN: string
   RESEND_API_KEY: string
+  ADMIN_EMAIL: string
 }
 
 function required(key: keyof ServerEnv): string {
@@ -30,4 +31,5 @@ export const serverEnv: ServerEnv = {
   UPSTASH_REDIS_REST_URL: required("UPSTASH_REDIS_REST_URL"),
   UPSTASH_REDIS_REST_TOKEN: required("UPSTASH_REDIS_REST_TOKEN"),
   RESEND_API_KEY: required("RESEND_API_KEY"),
+  ADMIN_EMAIL: required("ADMIN_EMAIL"),
 }

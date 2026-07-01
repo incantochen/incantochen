@@ -1,28 +1,13 @@
 import "server-only";
 
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import {
+  type OrderStatus,
+  VALID_TRANSITIONS,
+} from "@/lib/order/order-status";
 
-export type OrderStatus =
-  | "pending_payment"
-  | "paid"
-  | "in_production"
-  | "shipped"
-  | "completed"
-  | "cancelled"
-  | "refunded";
-
-// 正常流程的合法轉換表。
-// 設計原則：cancelled 只能從 pending_payment 進入（錢未收）。
-// 付款後的取消一律走 refunded，確保退款記錄存在，財務可對帳。
-export const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  pending_payment: ["paid", "cancelled"],
-  paid: ["in_production", "refunded"],
-  in_production: ["shipped", "refunded"],
-  shipped: ["completed", "refunded"],
-  completed: [],
-  cancelled: [],
-  refunded: [],
-};
+export type { OrderStatus };
+export { VALID_TRANSITIONS };
 
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return VALID_TRANSITIONS[from].includes(to);
