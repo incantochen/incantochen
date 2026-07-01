@@ -464,13 +464,25 @@
 
 ---
 
+#### #T08 / M2 / 會員中心框架（版面 + 個人資料頁）
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-07-01） |
+| 產出 | `src/app/account/layout.tsx`（新增）、`src/components/account-nav.tsx`（新增）、`src/app/account/page.tsx`（修改）、`src/app/account/profile/page.tsx`（新增）、`src/app/account/profile/actions.ts`（新增）、`src/components/profile-form.tsx`（新增）、`src/lib/account/schema.ts`（新增）、`src/app/account/orders/page.tsx`（新增，佔位）、`src/lib/auth/require-user.ts`（修改）、`src/proxy.ts`（修改）、`src/components/site-header.tsx`（修改） |
+| 更新描述 | 1. 範圍依 `docs/IA.md` §5①與新產出的 `docs/wireframe/account.html` 定案：T08＝框架（側邊 nav）＋個人資料頁；訂單列表/詳情/時間軸留給 T32（依賴 T08）。2. **`account/layout.tsx`**：`requireUser()` 守門＋兩欄版面；側邊 nav 用 client component `account-nav.tsx`（`usePathname()` 判斷 active）。3. **個人資料頁**：Email 唯讀顯示（登入身份，不開放編輯）；姓名可編輯，因 `member` 表無 UPDATE RLS policy，`updateProfile` server action 沿用 `find-or-create-member.ts` 的 service role pattern 寫入，`user.id` 一律取自 `requireUser()`（不信任前端傳來的 id）。4. **`/account/orders`** 先放最小空狀態佔位，避免 nav 連結 404，實際清單與時間軸留 T32。5. 順帶修正：`require-user.ts`／`proxy.ts` 補上登入後導回原頁（未登入被導去 `/login` 時帶 `?redirect=` 原路徑，登入成功後 `router.push(redirectTo)`）；`site-header.tsx` 會員 icon 從寫死連到 `/login` 改連到 `/account`（原本登入後點會員 icon 還是會被導去登入頁的 bug）。6. **開發流程**：本次規劃先進 plan mode 擬定架構，交給 Ultraplan（雲端 Claude Code session）實作+approve，本機用 git bundle 把雲端分支帶回來後再驗收。7. **本機驗收**：`pnpm lint`／`tsc --noEmit`／`pnpm test`（30/30）／`pnpm build`（`/account`、`/account/profile`、`/account/orders` 皆在路由表）全過；`pnpm dev` 接雲端 production Supabase 手動 E2E——未登入導向 `/login?redirect=...` → `admin.generateLink` 產生測試帳號經 magic link 落地頁登入（避開真寄信觸發 Supabase 內建寄信頻率限制）→ `/account/profile` 顯示 Email → 改姓名送出「已更新」→ 直查雲端 DB 確認 `member.name` 寫入正確 → `/account/orders`／`/account` 登入後正常載入、無 console error → 測試帳號已清除。 |
+| 待辦 | （無，已完成） |
+| 驗收 | 見上，PR #4 merge 至 master，push 成功。 |
+| 依賴 | T07 ✅ |
+
+---
+
 ### 下次作業
 
 | 優先 | 任務 | 說明 |
 |------|------|------|
-| 1 | T08 會員中心框架 | 版面、個人資料頁，依賴 T07 ✅ |
-| 2 | T32 顧客訂單追蹤 | 會員中心看訂單狀態與 order_status_log 時間軸，依賴 T29 ✅、T08 |
-| 3 | T64 後台 PII 遮罩 | 後台電話顯示遮罩（09xx-***-123），依賴 T31 ✅ |
+| 1 | T32 顧客訂單追蹤 | 會員中心看訂單狀態與 order_status_log 時間軸，依賴 T29 ✅、T08 ✅ |
+| 2 | T64 後台 PII 遮罩 | 後台電話顯示遮罩（09xx-***-123），依賴 T31 ✅ |
 
 ---
 
