@@ -71,3 +71,18 @@ T37,M5,上線,基本錯誤監控,Sentry 或等價,T04,0.5,90.5,P1,未開始
 T33,M5,售後,售後申請（分類）,七天退(限適用品)/瑕疵申訴/維修保養，不同流程時限,T08,1.5,92,P1,未開始
 T38,M5,上線,整體測試與上線檢查（戒指）,E2E 走查、checklist,—,2,94,P0,未開始
 T45,後續,擴充,擴充其他品類（耳環／項鍊／手鍊）,靠後台自行上架＋素材,T13,2,96,P2,未開始
+T67,M2,金流,◆ 修正 order-result 訂單號重組錯誤,審查發現（2026-07-02）：order-result route 用 slice(11) 重組訂單號、會把 T53 的 2 碼隨機後綴一併帶入→成功頁查無訂單靜默導回首頁；每位付款客人都會踩到。改 slice(11,17)（notify fallback 已是正確寫法）。,T53,0.25,96.25,P0,未開始
+T68,M2,金流,◆ Webhook 錯誤處理與金額核對強化,審查發現：notify 外層 catch 回 1|OK→暫時性 DB 故障時 ECPay 不重送、付款通知永久遺失；改非預期例外回 0|Error（僅處理完成／冪等路徑回 1|OK）。加標記 paid 前核對 TradeAmt 與 payment.amount（縱深防禦）。,T26,0.5,96.75,P0,未開始
+T69,M2,通知,◆ Email 改 waitUntil＋notification 去重落地,審查發現：void fire-and-forget 在 serverless 回應後函式可能被凍結→信件不寄出；改 waitUntil 或 await。並落實 0001 notification 表（unique order_id+type）：寄前 insert 防重寄＋留寄送稽核（目前程式完全沒寫這張表）。須與 T68 一起做——webhook 改會重送後、無去重會重複寄信。,T68,0.5,97.25,P0,未開始
+T70,M2,資料庫,◆ cart.guest_token 加 unique 約束,審查發現：check-then-insert 併發加車會產生同 token 重複購物車→maybeSingle 失敗、購物車「消失」且無法結帳。migration 加 unique index＋addToCart 改 upsert/on conflict。涉及 migration 先 plan mode。,T20,0.5,97.75,P0,未開始
+T71,M2,安全,◆ 訪客結帳 Email 未驗證掛單防護,審查發現：結帳輸入任何既有會員 email 即可把訂單（含任意地址）掛進對方帳號；亦構成帳號枚舉。既有帳號改要求 OTP 登入、或訂單待 email 驗證後才綁定會員。,T23,1,98.75,P1,未開始
+T72,M2,安全,◆ Email 模板 HTML escape＋表單長度上限,審查發現：收件人姓名／地址／選項 label 未跳脫直接插入信件 HTML——店家新訂單通知信可被注入任意 HTML／釣魚連結；且 checkout schema 姓名地址無 max 長度。補 escape 函式＋schema max()。,T30a,0.5,99.25,P1,未開始
+T73,M2,安全,◆ 成功頁存取控制＋訂單號改 crypto 亂數,審查發現：僅憑 order_no 即可看 email／姓名／金額；order_no 用 Math.random（非密碼學強度、帶日期前綴）且該路由無限流。改 crypto.getRandomValues＋成功頁綁 session／短效 cookie。,T27,0.5,99.75,P1,未開始
+T74,M2,金流,◆ pending payment 逾期換新 trade no,審查發現：客人進 ECPay 收銀台後放棄→無 webhook、payment 永遠 pending→復用同 MerchantTradeNo 可能被綠界拒絕而付款卡死。逾時（如 30 分鐘）改產新 trade no；與 T66 逾期取消整合。,T66,0.5,100.25,P1,未開始
+T75,M2,購物車,◆ 付款完成後才清購物車,審查發現：建單當下即清車→付款失敗／放棄後客人須重新配置半客製商品（高流失）。改付款 paid 後才清、或保留購物車至訂單逾期取消。,T23,0.5,100.75,P1,未開始
+T76,M5,訂單,訂單建立交易化（RPC）,審查發現：order＋order_item 兩段 insert 無交易包裹、明細失敗留孤兒訂單靠人工清理。包成 Postgres function 單一交易。,T23,0.5,101.25,P2,未開始
+T77,M5,後台,shipOrder 先驗狀態再寫 tracking_no,審查發現：先 update tracking_no 再 transitionOrder→非法轉換拋錯時單號已寫入、狀態不一致。調整順序或併入同一交易。,T31,0.25,101.5,P2,未開始
+T78,M5,安全,購物車寫入限流＋過期清理,審查發現：匿名可無限建 cart／cart_item（無限流、無清理排程）。加 rate limit＋stale cart 定期清除（90 天 cookie 到期對齊）。,T58,0.5,102,P2,未開始
+T79,M5,會員,findOrCreateMember 錯誤處理,審查發現：insert 錯誤被完全吞掉→後續 orders FK 失敗才爆籠統錯誤。檢查 error（容忍 23505 併發重複）並回傳失敗訊號。,T07,0.25,102.25,P2,未開始
+T80,M5,安全,PII 稽核 log 留存強化,審查發現：logPiiAccess 走 console→Vercel logs 留存短（依方案數小時到數天）、稽核形同揮發。接 log drain 或改落 DB 表。,T64,0.5,102.75,P2,未開始
+T81,後續,購物車,會員購物車合併（登入併 guest cart）,審查發現：cart.member_id 欄位存在但全程未用、購物車完全綁 cookie——會員換裝置／清 cookie 即遺失。登入時將 guest cart 併入會員 cart（0001 schema 註解原本即預期此行為）。,T08,1,103.75,P2,未開始
