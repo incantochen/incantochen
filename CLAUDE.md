@@ -30,6 +30,7 @@
 > ✅ **T30a Email 下單確認已完成（2026-06-27）**：`src/lib/email/order-confirmation.ts`（`import "server-only"`；查 orders+order_item+product+member.email；buildEmailHtml()；`sendOrderConfirmation(orderId)`）；`notify/route.ts` 兩個 paid path 各加 `void sendOrderConfirmation().catch(() => {})`（fire-and-forget）；`env.server.ts` 加 `RESEND_API_KEY: required()`。⚠️ 目前 FROM=`onboarding@resend.dev`（只能寄到 Resend 帳號 email）；T35 網域驗證後換 `orders@incantochen.com` 並移除 to 覆蓋。
 > ✅ **T49 新訂單通知店家已完成（2026-06-27）**：`src/lib/email/new-order-notification.ts`（同架構；TO 固定=`fishead02290@gmail.com`；主旨 `[新訂單] 訂單號 — NT$總金額`；HTML 含客人姓名/email/地址/品項/總計）；`notify/route.ts` 兩個 paid path 加 `void sendNewOrderNotification().catch(() => {})`；T35 後 `OWNER_EMAIL` 改為 env var。**M1 全數完成。**
 > ✅ **T65 OrderItem 商品名稱快照已完成（2026-07-02）**：`supabase/migrations/0005`（`order_item.product_name_snapshot text`，**刻意 nullable**＋回填既有訂單，⚠️ **須先 `db push` 再 merge/部署**）；`verifyCartPrices` 回傳 `productName`（與驗價同一次 DB 查詢），`createOrder` 寫入快照；顯示端（會員／後台／Email／ECPay ItemName）快照優先、join 現值僅 null 窗口 fallback；會員訂單詳情頁移除 T32 的 service role 補查 workaround。定案原則：**訂單成立即契約**，商品改名/調價/下架不回寫已成立訂單，付款重試不重驗價；待付款逾期取消記為 T66。
+> ✅ **T33 售後申請已完成（2026-07-02）**：新增第 14 張表 `support_request`（`supabase/migrations/0006`，破例增表，一次到位供 T47 沿用）——`request_type` text+check（`return_defect`/`repair_maintenance`）、`status` 刻意不加 check（T47 定案 RMA 狀態機後補）、RLS 僅 `select own`、無 insert/update/delete policy（寫入一律 service role）、禁刪。**業務拍板**：半客製品＝法定客製品，無七天鑑賞退貨；客戶端僅開放單一入口「**商品問題回報**」（存 `return_defect`，無類型選擇，`⚖️ TODO(T36)` 告知文字含 24 小時到貨異常聯絡窗口）；`repair_maintenance` 僅供後台手動建立。新增 `src/lib/support/`（常數＋Zod schema＋測試）、`src/lib/email/support-request-notification.ts`（鏡射 `new-order-notification.ts`，`replyTo` 客人 email）、`/account/orders/[id]/support`（頁面＋action＋表單）、訂單詳情頁入口按鈕＋摘要卡、`/admin/orders/[id]` 售後區塊（狀態更新＋手動建案，鏡射既有 admin gray 風格，非前台品牌 token）。過渡期退款走綠界廠商後台手動退刷＋既有 Admin Override（T31）；完整審核分流＋退刷 API 自動化留 T47。
 
 ---
 
@@ -38,41 +39,44 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0 全數完成。**M1 全數完成**：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24／T25／T26／T27／T53／T41／T30a／T58／T51／**T49**（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay 金流→付款結果頁→冪等性→伺服器端驗價→Email 下單確認→應用層安全防護→報價引擎單測→新訂單通知）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。下一階段：**M2**（訂單狀態機、會員中心、後台基礎）。里程碑序列：M0 → M1 ✅ → M2 → M3 → M4 → M5。
+- **目前階段**：M-1／M0 全數完成。**M1 全數完成**：T06／T07／T15／T16／T18／T19／T20／T21／T22／T57／T23／T24／T25／T26／T27／T53／T41／T30a／T58／T51／**T49**（登入＋路由保護→PDP→配置器→報價→購物車→結帳→建立訂單→ECPay 金流→付款結果頁→冪等性→伺服器端驗價→Email 下單確認→應用層安全防護→報價引擎單測→新訂單通知）。**T17 暫緩**（依賴 T55/T56 3D 素材）。**T48 暫緩**（物流策略待確認）。**M2 進行中**：T65（OrderItem 商品名稱快照）、T33（售後申請）已完成。里程碑序列：M0 → M1 ✅ → M2（進行中）→ M3 → M4 → M5。
 
 ---
 
 ## 2. 技術棧（已鎖定，勿擅自更換）
 
-| 層 | 選用 |
-|---|---|
-| 前端 | **Next.js 16**（App Router）＋ shadcn/ui ＋ Tailwind CSS |
-| 函式庫 | **React 19.2**（隨 Next.js 16，勿單獨變更版本） |
-| 語言 | **TypeScript**（strict） |
-| 套件管理器 | **pnpm**（鎖定，勿混用 npm／yarn；lockfile 進 git） |
-| Runtime | **Node.js 20+**（Next.js 16 最低需求） |
-| 部署 | Vercel（含 CI、preview 為 staging） |
-| 資料庫／後端 | Supabase（Postgres） |
-| 會員登入 | Supabase Auth — **Email OTP 驗證碼（主）＋ Magic link（輔）**，免密碼 |
-| 圖片儲存 | Supabase Storage |
-| 金流／電子發票 | 綠界 ECPay |
-| 物流 | 綠界黑貓宅配（保價＋本人簽收，**不開放超商**） |
-| Email | Resend |
-| 驗證 | Zod（所有外部輸入；以 `z.infer` 推導型別） |
-| DB migration | **Supabase CLI**（SQL 於 `supabase/migrations/`；**勿引 ORM 管 migration**） |
+| 層             | 選用                                                                         |
+| -------------- | ---------------------------------------------------------------------------- |
+| 前端           | **Next.js 16**（App Router）＋ shadcn/ui ＋ Tailwind CSS                     |
+| 函式庫         | **React 19.2**（隨 Next.js 16，勿單獨變更版本）                              |
+| 語言           | **TypeScript**（strict）                                                     |
+| 套件管理器     | **pnpm**（鎖定，勿混用 npm／yarn；lockfile 進 git）                          |
+| Runtime        | **Node.js 20+**（Next.js 16 最低需求）                                       |
+| 部署           | Vercel（含 CI、preview 為 staging）                                          |
+| 資料庫／後端   | Supabase（Postgres）                                                         |
+| 會員登入       | Supabase Auth — **Email OTP 驗證碼（主）＋ Magic link（輔）**，免密碼        |
+| 圖片儲存       | Supabase Storage                                                             |
+| 金流／電子發票 | 綠界 ECPay                                                                   |
+| 物流           | 綠界黑貓宅配（保價＋本人簽收，**不開放超商**）                               |
+| Email          | Resend                                                                       |
+| 驗證           | Zod（所有外部輸入；以 `z.infer` 推導型別）                                   |
+| DB migration   | **Supabase CLI**（SQL 於 `supabase/migrations/`；**勿引 ORM 管 migration**） |
 
 **Next.js 16 注意事項：**
+
 - Turbopack 為預設打包器；快取改為明確的 Cache Components（opt-in），預設動態渲染——電商的價格／庫存／訂單本來就該即時，符合需求。
 - 路由攔截已從 `middleware.js` 改為 **`proxy.ts`**（用於 magic link 授權的進入點寫在這裡）。
 - 商品組合圖採「程式合成」：Blender 3D 素材 + 前端擬真疊圖（對齊＋陰影高光）。**MVP 不做 3D 即時預覽**。
 
 **TypeScript 設定基線：**
+
 - `tsconfig.json` 啟用 `strict: true`，並額外開 **`noUncheckedIndexedAccess: true`**（金流／電商必備，強制處理取值可能為 undefined）。
 - 路徑別名 `@/*` → `./src/*`。
-- **Supabase 型別自動生成**：每次改 schema 後跑 `supabase gen types typescript`，產出 13 張表的型別，查詢要有端到端型別安全。
+- **Supabase 型別自動生成**：每次改 schema 後跑 `supabase gen types typescript`，產出 14 張表的型別，查詢要有端到端型別安全。
 - 環境變數集中於有型別的 env 模組，不在各處散用 `process.env.XXX`。
 
 **版本策略：**
+
 - 只用穩定版（Stable）。安裝套件用明確版本或 `@latest`，**禁用 `@canary`／`@beta`／`@rc`／`@next`**。
 - 不主動升級相依套件；除非我要求，或為修補安全漏洞。以 lockfile 為準，保持版本一致。
 - 主版本升級（如 Next.js 16 → 17）或更換任何已鎖定的技術棧，**先進 plan mode 提出 Migration Plan（影響範圍／breaking changes／回滾方式），經我確認再執行**。
@@ -116,17 +120,19 @@
 - **一律用 pnpm，不要混用 npm／yarn**
 
 **Windows 環境限制（搜尋指令）：**
+
 - **禁止**從根目錄做全硬碟搜尋（`find /`、`dir /s C:\`、`Get-ChildItem -Recurse` 等）——會掃到 `node_modules`，極慢且可能掛起。
 - 一律改用限制深度的相對路徑搜尋，例如 `find . -maxdepth 3 -name "*.ts"`。
 
 ---
 
-## 5. 資料模型（13 張表，勿隨意增刪表）
+## 5. 資料模型（14 張表，勿隨意增刪表；T33 售後為唯一破例，已收斂為一次性）
 
 - **商品與選項**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue
 - **會員與購物車**：Member、Cart、CartItem
 - **訂單與金流**：Order、OrderItem、Payment
 - **通知與狀態**：OrderStatusLog、Notification
+- **售後**（T33 新增）：support_request（`request_type`：`return_defect`／`repair_maintenance`；RLS 僅 select own，寫入走 service role）
 
 三個核心設計，改動相關程式前務必遵守：
 
@@ -141,10 +147,12 @@
 ## 6. 安全邊界（電商，最高優先）
 
 **兩條紅線，永遠不可省：**
+
 - **伺服器端驗價（T41）**：金額一律在伺服器端依白名單重新計算，**絕不信任前端傳來的價格**。
 - **資料庫備份（T34）**：備份相關設定不可關閉或繞過。
 
 **其他硬性規則：**
+
 - ✅ **RLS（T46 已完成）**：13 表全 enable、deny-by-default。商品/選項公開唯讀且限 `status='active'`；帳務表禁硬刪；後台 admin 走 service role。
 - **卡號不落地**：信用卡資訊全程交給綠界。
 - **金流冪等**：Webhook＋主動對帳 API 共用冪等鎖；逾時 ≠ 失敗；重付前先查是否已付款。
@@ -169,9 +177,11 @@
 ### 各任務自驗收指令
 
 #### T43 dev seed ✅ 已完成（2026-06-25）
+
 完成 `supabase db reset --local` 後，逐條執行 `docs/verify-seed.sql` 的查詢驗收（此 CLI 版本 `db query` 不支援單檔多語句，需逐條跑，或用 `supabase db query --local "<sql>"`；自訂 enum 欄位查詢需 `::text` 轉型，否則無法掃描）。
 
 **通過條件**（§1 筆數查詢結果）：
+
 - `products = 1`
 - `option_types = 3`
 - `option_values = 8`

@@ -1,47 +1,64 @@
-import { notFound } from "next/navigation"
-import { requireUser } from "@/lib/auth/require-user"
-import { createClient } from "@/lib/supabase/server"
-import { formatCurrency, formatDateTime } from "@/lib/utils"
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { requireUser } from "@/lib/auth/require-user";
+import { createClient } from "@/lib/supabase/server";
+import { formatCurrency, formatDateTime } from "@/lib/utils";
 import {
   STATUS_LABELS,
   STATUS_PILL_STYLES,
   type OrderStatus,
-} from "@/lib/order/order-status"
+} from "@/lib/order/order-status";
+import {
+  REQUEST_TYPE_LABELS,
+  SUPPORT_STATUS_LABELS,
+  SUPPORT_STATUS_PILL_STYLES,
+  canRequestSupport,
+  type SupportRequestStatus,
+  type SupportRequestType,
+} from "@/lib/support/support-request";
 
 export default async function OrderDetailPage({
   params,
 }: {
-  params: Promise<{ id: string }>
+  params: Promise<{ id: string }>;
 }) {
-  const user = await requireUser()
-  const { id } = await params
-  const supabase = await createClient()
+  const user = await requireUser();
+  const { id } = await params;
+  const supabase = await createClient();
 
   const { data: order } = await supabase
     .from("orders")
     .select("*")
     .eq("id", id)
     .eq("member_id", user.id)
-    .single()
+    .single();
 
-  if (!order) notFound()
+  if (!order) notFound();
 
-  const [{ data: items }, { data: logs }] = await Promise.all([
-    supabase
-      .from("order_item")
-      .select(
-        "id, product_id, product_name_snapshot, quantity, unit_price_snapshot, config_snapshot",
-      )
-      .eq("order_id", id)
-      .order("created_at"),
-    supabase
-      .from("order_status_log")
-      .select("from_status, to_status, created_at")
-      .eq("order_id", id)
-      .order("created_at"),
-  ])
+  const [{ data: items }, { data: logs }, { data: supportRequests }] =
+    await Promise.all([
+      supabase
+        .from("order_item")
+        .select(
+          "id, product_id, product_name_snapshot, quantity, unit_price_snapshot, config_snapshot",
+        )
+        .eq("order_id", id)
+        .order("created_at"),
+      supabase
+        .from("order_status_log")
+        .select("from_status, to_status, created_at")
+        .eq("order_id", id)
+        .order("created_at"),
+      supabase
+        .from("support_request")
+        .select("id, request_type, status, created_at")
+        .eq("order_id", id)
+        .order("created_at", { ascending: false }),
+    ]);
 
-  const status = order.status as OrderStatus
+  const status = order.status as OrderStatus;
+  const eligibleForSupport = canRequestSupport(status);
+  const latestSupportRequest = (supportRequests ?? [])[0];
 
   return (
     <div className="space-y-8">
@@ -109,11 +126,11 @@ export default async function OrderDetailPage({
           <div className="space-y-4">
             {(items ?? []).map((item) => {
               const snapshot = item.config_snapshot as {
-                selections?: { label: string }[]
-              } | null
+                selections?: { label: string }[];
+              } | null;
               const selectionsSummary = (snapshot?.selections ?? [])
                 .map((s) => s.label)
-                .join(" · ")
+                .join(" · ");
               return (
                 <div
                   key={item.id}
@@ -139,7 +156,7 @@ export default async function OrderDetailPage({
                     )}
                   </div>
                 </div>
-              )
+              );
             })}
           </div>
           <div className="mt-4 flex justify-between border-t border-border pt-4 text-sm">
@@ -148,8 +165,44 @@ export default async function OrderDetailPage({
               {formatCurrency(Number(order.total_amount))}
             </span>
           </div>
+
+          {eligibleForSupport && (
+            <div className="mt-6 border-t border-border pt-6">
+              {latestSupportRequest && (
+                <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-cloud px-4 py-3 text-sm">
+                  <div>
+                    <div className="text-ink">
+                      {
+                        REQUEST_TYPE_LABELS[
+                          latestSupportRequest.request_type as SupportRequestType
+                        ]
+                      }
+                    </div>
+                    <div className="mt-0.5 text-xs text-ash">
+                      {formatDateTime(latestSupportRequest.created_at)}
+                    </div>
+                  </div>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-[11px] tracking-[0.08em] ${SUPPORT_STATUS_PILL_STYLES[latestSupportRequest.status as SupportRequestStatus]}`}
+                  >
+                    {
+                      SUPPORT_STATUS_LABELS[
+                        latestSupportRequest.status as SupportRequestStatus
+                      ]
+                    }
+                  </span>
+                </div>
+              )}
+              <Link
+                href={`/account/orders/${order.id}/support`}
+                className="inline-flex items-center justify-center rounded-btn border border-primary px-5 py-2.5 text-[11px] font-medium tracking-[0.2em] text-primary uppercase hover:bg-primary hover:text-primary-foreground"
+              >
+                商品問題回報
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </div>
-  )
+  );
 }

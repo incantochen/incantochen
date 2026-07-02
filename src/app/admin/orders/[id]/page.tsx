@@ -7,6 +7,7 @@ import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
 import { OrderActions } from "./order-actions";
 import { CustomerInfo } from "./customer-info";
+import { SupportRequests } from "./support-requests";
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending_payment: "bg-amber-100 text-amber-800",
@@ -27,33 +28,40 @@ export default async function AdminOrderDetailPage({
   const { id } = await params;
   const supabase = createServiceRoleClient();
 
-  const [orderRes, itemsRes, paymentRes, logsRes] = await Promise.all([
-    supabase
-      .from("orders")
-      .select(`*, member(id, email, name)`)
-      .eq("id", id)
-      .single(),
+  const [orderRes, itemsRes, paymentRes, logsRes, supportRequestsRes] =
+    await Promise.all([
+      supabase
+        .from("orders")
+        .select(`*, member(id, email, name)`)
+        .eq("id", id)
+        .single(),
 
-    supabase
-      .from("order_item")
-      .select(`*, product(name)`)
-      .eq("order_id", id)
-      .order("created_at"),
+      supabase
+        .from("order_item")
+        .select(`*, product(name)`)
+        .eq("order_id", id)
+        .order("created_at"),
 
-    supabase
-      .from("payment")
-      .select("status, merchant_trade_no, gateway_trade_no, paid_at, amount")
-      .eq("order_id", id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      supabase
+        .from("payment")
+        .select("status, merchant_trade_no, gateway_trade_no, paid_at, amount")
+        .eq("order_id", id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
 
-    supabase
-      .from("order_status_log")
-      .select(`*, actor:member(email)`)
-      .eq("order_id", id)
-      .order("created_at"),
-  ]);
+      supabase
+        .from("order_status_log")
+        .select(`*, actor:member(email)`)
+        .eq("order_id", id)
+        .order("created_at"),
+
+      supabase
+        .from("support_request")
+        .select("id, request_type, description, status, created_at")
+        .eq("order_id", id)
+        .order("created_at", { ascending: false }),
+    ]);
 
   if (orderRes.error || !orderRes.data) notFound();
 
@@ -61,6 +69,7 @@ export default async function AdminOrderDetailPage({
   const items = itemsRes.data ?? [];
   const payment = paymentRes.data;
   const logs = logsRes.data ?? [];
+  const supportRequests = supportRequestsRes.data ?? [];
   const member = order.member as {
     id: string;
     email: string;
@@ -308,6 +317,9 @@ export default async function AdminOrderDetailPage({
                 </ol>
               )}
             </section>
+
+            {/* 售後申請 */}
+            <SupportRequests orderId={order.id} requests={supportRequests} />
           </div>
 
           {/* 右欄：操作 */}
