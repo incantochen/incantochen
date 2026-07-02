@@ -1,13 +1,23 @@
-# 產出流程：去重、報告、tasks.csv、GitHub issues
+# 產出流程：去重、findings md、tasks.csv、GitHub issues
 
-## 步驟 0：去重比對（強制，輸出報告前執行）
+## 產出管線總覽（md 中繼，支援無人值守）
+
+```
+審查發現 → docs/review-findings.md（自動寫入，無需確認）
+         → 後續 session 回歸審查：比對＋更新同一份 md
+         → 使用者在 md 上確認（改狀態為「確認」或「不採納」）
+         → 經確認的項目才轉入 tasks.csv＋GitHub issues
+```
+
+`docs/review-findings.md` 是審查的工作底稿與唯一累積點：無人值守執行時只寫這份 md，不動 tasks.csv、不開 issues。
+
+## 步驟 0：去重比對（強制，輸出前執行）
 
 每個發現先與既有追蹤紀錄比對，**依根本原因比對、不是依檔案位置**（同檔案可以有不同問題；同根本原因可能散在多檔）：
 
-```
-gh issue list --repo incantochen/incantochen --state all --limit 100
-```
-＋讀 `docs/tasks.csv` 中所有「審查發現」開頭的任務（T67 起）。
+1. 讀 `docs/review-findings.md`（若存在）——上次審查的全部發現與各自狀態
+2. `gh issue list --repo incantochen/incantochen --state all --limit 100`
+3. 讀 `docs/tasks.csv` 中所有「審查發現」開頭的任務（T67 起）
 
 分類處理：
 - **已列管、未修**：不重報。報告末尾列「既有任務回歸狀態」一行帶過（任務編號＋狀態）。
@@ -15,14 +25,22 @@ gh issue list --repo incantochen/incantochen --state all --limit 100
 - **部分重疊**：既有任務只涵蓋一部分（例：同格式的另一個解析點、同模式的另一處），新的部分照常報，註明與哪個任務相關。
 - **全新**：照常報。
 
-## 步驟 1：報告格式
+## 步驟 1：寫入 `docs/review-findings.md`（自動，無需確認）
 
-- 先講結論（整體評價一兩句），再依嚴重度列發現
-- 每個發現：一句話標題（含 P0/P1/P2）→ 檔案位置 `path:line` → 失敗情境（什麼輸入／狀態→什麼錯誤結果）→ 建議修法
-- 分區：確認的 bug → 安全性 → 可靠性／設計 → 既有任務回歸狀態
-- 結尾給修復優先序建議（哪個先修、為什麼、相依關係）
+- 檔案結構：開頭「審查記錄」表（日期／範圍／模型／發現數）；主體為發現清單，依嚴重度排序
+- 每個發現一節，格式：
+  ```
+  ## F-### [P0] 一句話標題
+  - 狀態：待確認 | 確認 | 不採納 | 已轉任務(T##) | 已修復
+  - 位置：path:line
+  - 失敗情境：<什麼輸入／狀態→什麼錯誤結果>
+  - 修法：<建議>
+  - 記錄：<YYYY-MM-DD 首次發現／後續 session 的比對更新>
+  ```
+- **F 編號永久遞增不重用**；後續 session 回歸時：仍存在→更新「記錄」；已修復→狀態改「已修復」附驗證；新發現→接續編號新增。**只有使用者能把狀態改成「確認」或「不採納」**
+- 同時在對話輸出摘要報告：先講結論，分區（bug→安全→可靠性→回歸狀態），結尾給修復優先序與相依關係
 
-## 步驟 2：寫入 tasks.csv（經使用者確認後）
+## 步驟 2：寫入 tasks.csv（僅限 md 中狀態＝「確認」的項目）
 
 欄位：`ID,階段,模組,任務,說明,依賴,預估(人天),累積人天,優先級,狀態`
 
@@ -35,7 +53,9 @@ gh issue list --repo incantochen/incantochen --state all --limit 100
 - 優先級：P0＝正在影響客人或會弄壞資料；P1＝上線前必修；P2＝品質改善
 - commit 慣例：docs 類經使用者同意可直接進 master；訊息格式 `docs(tasks): ...`
 
-## 步驟 3：開 GitHub issues（經使用者確認後）
+轉入完成後，把 md 中該發現的狀態改為「已轉任務(T##)」。
+
+## 步驟 3：開 GitHub issues（僅限已轉任務的確認項目）
 
 ```
 gh issue create --repo incantochen/incantochen --label "<類型>,<優先級>" --title "T## [P#] 一句話描述" --body @'

@@ -48,7 +48,7 @@ description: 軟體開發審查（審查, review, code review, 環境審查, sch
    - 告警缺口：「哪些故障會在客人抱怨之前被發現？」逐一檢視 webhook 失敗／email 失敗／訂單卡 pending
    - 文件一致性：`docs/data-model.md`、`user-flow.md` 是否跟上實作演進
    - 依賴安全：`pnpm audit`
-5. 依 `references/reporting.md` 產出報告；經使用者確認後落地 tasks.csv 與 GitHub issues
+5. 依 `references/reporting.md` 產出：發現自動寫入 `docs/review-findings.md`（無人值守亦可）；**只有 md 中使用者標「確認」的項目**才轉 tasks.csv＋GitHub issues
 
 ## 歷史審查記錄
 
