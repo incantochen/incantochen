@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { logPiiAccess } from "@/lib/pii/audit";
 import {
   transitionOrder,
   adminOverrideStatus,
@@ -45,6 +46,40 @@ export async function overrideStatus(
   await adminOverrideStatus(orderId, to, { operatorId: user.id, reason });
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
+}
+
+export async function revealOrderPii(orderId: string): Promise<{
+  recipientName: string;
+  recipientPhone: string;
+  email: string | null;
+  shippingAddress: string;
+}> {
+  const user = await requireAdmin();
+  const supabase = createServiceRoleClient();
+
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select("recipient_name, recipient_phone, shipping_address, member(email)")
+    .eq("id", orderId)
+    .single();
+
+  if (error || !order) throw new Error("找不到訂單");
+
+  // 完整個資離開伺服器前必記稽核 log（T64：記錄誰存取個資）
+  logPiiAccess({
+    actorId: user.id,
+    actorEmail: user.email ?? "",
+    orderId,
+    fields: ["recipient_name", "recipient_phone", "email", "shipping_address"],
+  });
+
+  const member = order.member as { email: string } | null;
+  return {
+    recipientName: order.recipient_name,
+    recipientPhone: order.recipient_phone,
+    email: member?.email ?? null,
+    shippingAddress: order.shipping_address,
+  };
 }
 
 export async function saveTrackingNo(orderId: string, trackingNo: string) {

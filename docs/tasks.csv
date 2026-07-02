@@ -42,7 +42,7 @@ T28,M2,訂單,訂單狀態機,狀態定義與合法轉換,T26,1.5,55.5,P0,完成
 T29,M2,訂單,狀態紀錄（OrderStatusLog）,狀態變更寫 log,T28,0.5,56,P0,完成
 T08,M2,會員,會員中心框架,版面、個人資料頁｜✅ 完成（2026-07-01）：`/account` layout（側邊 nav：訂單／個人資料／登出）＋`account-nav.tsx`（active 判斷）；`/account/profile`（唯讀 Email＋可編輯姓名，service role 更新 member.name）；`/account/orders` 佔位頁（留 T32）；require-user.ts/proxy.ts 補登入後導回原頁（?redirect=）；site-header 會員 icon 改連 /account,T07,1.5,57.5,P0,完成
 T31,M2,後台,後台訂單管理,看單、改狀態、貼物流單號,T28,2.5,60,P0,完成
-T64,M2,安全,◆ 後台 PII 遮罩＋存取稽核,後台顯示遮罩(09xx-***-123)、記錄誰存取個資,T31,0.5,60.5,P1,未開始
+T64,M2,安全,◆ 後台 PII 遮罩＋存取稽核,後台顯示遮罩(09xx-***-123)、記錄誰存取個資｜✅ 完成（2026-07-02）：後台列表／詳情預設遮罩（姓名/電話/Email/地址），詳情頁「顯示完整個資」走 server action 揭示並寫應用層稽核 log（不新增 DB 表）,T31,0.5,60.5,P1,完成
 T32,M2,前台,顧客訂單追蹤,會員中心看狀態與紀錄｜✅ 完成（2026-07-02）：`/account/orders` 換成真實訂單列表（取代 T08 佔位頁）；`/account/orders/[id]` 詳情頁（狀態時間軸、物流單號、品項與合計，不含售後入口＝T33 範圍）；STATUS_LABELS／日期金額 formatter 去重抽到 order-status.ts／utils.ts；product 名稱改走 service role 查（RLS 對下架商品會擋 join），順帶開了 T65 追蹤日後補 product_name_snapshot,"T29,T08",1.5,62,P0,完成
 T65,M2,訂單,OrderItem 補 product_name_snapshot,商品改名或下架後，訂單明細會顯示現在的名稱而非下單當下的名稱；比照既有 unit_price_snapshot/config_snapshot 做法，order_item 新增 product_name_snapshot 欄位，createOrder() 寫入時鎖住商品名稱。影響 T23（建立訂單寫入）、T31（後台顯示）、T32（顧客追蹤頁，屆時可改直接讀 snapshot，取代目前用 service role 補查 product.name 的暫時做法）。涉及 migration，動手前先 plan mode。,T23,0.5,62.5,P1,未開始
 T30b,M2,通知,其餘狀態通知（出貨等）,出貨／配送 email,T28,1,63.5,P0,未開始
