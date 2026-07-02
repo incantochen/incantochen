@@ -7,7 +7,10 @@ import { cookies } from "next/headers"
 import { createClient } from "@/lib/supabase/server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member"
-import { checkoutFormSchema, type CheckoutFormValues } from "@/lib/checkout/schema"
+import {
+  checkoutFormSchema,
+  type CheckoutFormValues,
+} from "@/lib/checkout/schema"
 import { verifyCartPrices } from "@/lib/quote/verify-prices"
 
 type CreateOrderResult = { ok: false; error: string; priceUpdated?: true }
@@ -31,7 +34,8 @@ export async function createOrder(
   if (!parsed.success) {
     return { ok: false, error: "表單資料有誤，請重新填寫" }
   }
-  const { email, recipientName, recipientPhone, zipCode, shippingAddress } = parsed.data
+  const { email, recipientName, recipientPhone, zipCode, shippingAddress } =
+    parsed.data
 
   const serviceRole = createServiceRoleClient()
   const cookieStore = await cookies()
@@ -63,7 +67,9 @@ export async function createOrder(
 
   // ③ Member find-or-create ("結帳即會員")
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
   let memberId: string
 
@@ -82,10 +88,11 @@ export async function createOrder(
     if (existingMember) {
       memberId = existingMember.id
     } else {
-      const { data: newAuthData, error: createError } = await serviceRole.auth.admin.createUser({
-        email,
-        email_confirm: true,
-      })
+      const { data: newAuthData, error: createError } =
+        await serviceRole.auth.admin.createUser({
+          email,
+          email_confirm: true,
+        })
       if (createError || !newAuthData.user) {
         if (createError?.message?.toLowerCase().includes("already")) {
           return { ok: false, error: "此 Email 已有帳號，請先登入再結帳" }
@@ -102,7 +109,8 @@ export async function createOrder(
   try {
     verifiedItems = await verifyCartPrices(serviceRole, cartItems)
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "商品資訊有誤，請重新確認後再試"
+    const msg =
+      e instanceof Error ? e.message : "商品資訊有誤，請重新確認後再試"
     return { ok: false, error: msg }
   }
 
@@ -185,16 +193,22 @@ export async function createOrder(
   const orderItems = verifiedItems.map((item) => ({
     order_id: orderId,
     product_id: item.productId,
+    product_name_snapshot: item.productName,
     quantity: item.quantity,
     unit_price_snapshot: item.verifiedUnitPrice,
     config_snapshot: item.configSnapshot,
   }))
 
-  const { error: itemsError } = await serviceRole.from("order_item").insert(orderItems)
+  const { error: itemsError } = await serviceRole
+    .from("order_item")
+    .insert(orderItems)
 
   if (itemsError) {
     // Order exists but items failed — return error; admin can clean up orphaned order
-    return { ok: false, error: "訂單明細寫入失敗，請聯絡客服（訂單號：" + orderNo + "）" }
+    return {
+      ok: false,
+      error: "訂單明細寫入失敗，請聯絡客服（訂單號：" + orderNo + "）",
+    }
   }
 
   // ⑧ Clear cart (CASCADE deletes cart_items)

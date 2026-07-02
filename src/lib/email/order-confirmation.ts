@@ -10,7 +10,12 @@ const selectionSchema = {
   parse(raw: unknown): { label: string; price_delta: number }[] {
     if (!Array.isArray(raw)) return []
     return raw.flatMap((s) => {
-      if (typeof s === "object" && s !== null && "label" in s && "price_delta" in s) {
+      if (
+        typeof s === "object" &&
+        s !== null &&
+        "label" in s &&
+        "price_delta" in s
+      ) {
         return [{ label: String(s.label), price_delta: Number(s.price_delta) }]
       }
       return []
@@ -32,7 +37,15 @@ function buildEmailHtml(params: {
     selections: { label: string; price_delta: number }[]
   }[]
 }): string {
-  const { orderNo, recipientName, totalAmount, shippingAddress, zipCode, loginUrl, items } = params
+  const {
+    orderNo,
+    recipientName,
+    totalAmount,
+    shippingAddress,
+    zipCode,
+    loginUrl,
+    items,
+  } = params
 
   const itemRows = items
     .map((item) => {
@@ -51,7 +64,9 @@ function buildEmailHtml(params: {
     })
     .join("")
 
-  const addressLine = zipCode ? `${zipCode} ${shippingAddress}` : shippingAddress
+  const addressLine = zipCode
+    ? `${zipCode} ${shippingAddress}`
+    : shippingAddress
 
   return `<!DOCTYPE html>
 <html lang="zh-TW">
@@ -156,7 +171,7 @@ export async function sendOrderConfirmation(orderId: string): Promise<void> {
     .select(
       `order_no, recipient_name, total_amount, shipping_address, zip_code,
        member:member_id(email),
-       order_item(quantity, unit_price_snapshot, config_snapshot, product:product_id(name))`,
+       order_item(quantity, unit_price_snapshot, config_snapshot, product_name_snapshot, product:product_id(name))`,
     )
     .eq("id", orderId)
     .single()
@@ -164,30 +179,36 @@ export async function sendOrderConfirmation(orderId: string): Promise<void> {
   if (!order) return
 
   const memberData = order.member
-  const email = Array.isArray(memberData) ? memberData[0]?.email : memberData?.email
+  const email = Array.isArray(memberData)
+    ? memberData[0]?.email
+    : memberData?.email
   if (!email) return
 
-  const items = (Array.isArray(order.order_item) ? order.order_item : []).map((item) => {
-    const productData = item.product
-    const productName = Array.isArray(productData)
-      ? (productData[0]?.name ?? "商品")
-      : (productData?.name ?? "商品")
+  const items = (Array.isArray(order.order_item) ? order.order_item : []).map(
+    (item) => {
+      const productData = item.product
+      // 快照優先（下單當下名稱）；join 現值僅供 null 窗口 fallback
+      const joinedName = Array.isArray(productData)
+        ? productData[0]?.name
+        : productData?.name
+      const productName = item.product_name_snapshot ?? joinedName ?? "商品"
 
-    const selections = selectionSchema.parse(
-      typeof item.config_snapshot === "object" &&
-        item.config_snapshot !== null &&
-        "selections" in item.config_snapshot
-        ? (item.config_snapshot as { selections: unknown }).selections
-        : [],
-    )
+      const selections = selectionSchema.parse(
+        typeof item.config_snapshot === "object" &&
+          item.config_snapshot !== null &&
+          "selections" in item.config_snapshot
+          ? (item.config_snapshot as { selections: unknown }).selections
+          : [],
+      )
 
-    return {
-      productName,
-      quantity: item.quantity,
-      unitPrice: item.unit_price_snapshot,
-      selections,
-    }
-  })
+      return {
+        productName,
+        quantity: item.quantity,
+        unitPrice: item.unit_price_snapshot,
+        selections,
+      }
+    },
+  )
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`
 

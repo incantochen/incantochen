@@ -61,7 +61,11 @@ export default async function AdminOrderDetailPage({
   const items = itemsRes.data ?? [];
   const payment = paymentRes.data;
   const logs = logsRes.data ?? [];
-  const member = order.member as { id: string; email: string; name: string | null } | null;
+  const member = order.member as {
+    id: string;
+    email: string;
+    name: string | null;
+  } | null;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -112,7 +116,9 @@ export default async function AdminOrderDetailPage({
                 </div>
                 <div>
                   <dt className="text-gray-500">總金額</dt>
-                  <dd className="font-semibold">{formatCurrency(Number(order.total_amount))}</dd>
+                  <dd className="font-semibold">
+                    {formatCurrency(Number(order.total_amount))}
+                  </dd>
                 </div>
                 {order.tracking_no && (
                   <div>
@@ -141,20 +147,36 @@ export default async function AdminOrderDetailPage({
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    <th className="pb-2 text-left font-medium text-gray-600">商品</th>
-                    <th className="pb-2 text-right font-medium text-gray-600">數量</th>
-                    <th className="pb-2 text-right font-medium text-gray-600">單價</th>
-                    <th className="pb-2 text-right font-medium text-gray-600">小計</th>
+                    <th className="pb-2 text-left font-medium text-gray-600">
+                      商品
+                    </th>
+                    <th className="pb-2 text-right font-medium text-gray-600">
+                      數量
+                    </th>
+                    <th className="pb-2 text-right font-medium text-gray-600">
+                      單價
+                    </th>
+                    <th className="pb-2 text-right font-medium text-gray-600">
+                      小計
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {items.map((item) => {
                     const productData = item.product as { name: string } | null;
-                    const config = item.config_snapshot as Record<string, string> | null;
+                    const config = item.config_snapshot as Record<
+                      string,
+                      string
+                    > | null;
                     return (
                       <tr key={item.id}>
                         <td className="py-2 pr-4">
-                          <div>{productData?.name ?? item.product_id}</div>
+                          {/* 快照優先（下單當下名稱）；join 現值僅供 null 窗口 fallback */}
+                          <div>
+                            {item.product_name_snapshot ??
+                              productData?.name ??
+                              item.product_id}
+                          </div>
                           {config && Object.keys(config).length > 0 && (
                             <div className="text-xs text-gray-400 mt-0.5">
                               {Object.entries(config)
@@ -168,7 +190,9 @@ export default async function AdminOrderDetailPage({
                           {formatCurrency(Number(item.unit_price_snapshot))}
                         </td>
                         <td className="py-2 text-right">
-                          {formatCurrency(Number(item.unit_price_snapshot) * item.quantity)}
+                          {formatCurrency(
+                            Number(item.unit_price_snapshot) * item.quantity,
+                          )}
                         </td>
                       </tr>
                     );
@@ -186,8 +210,18 @@ export default async function AdminOrderDetailPage({
                 <dl className="grid grid-cols-2 gap-3 text-sm">
                   <div>
                     <dt className="text-gray-500">付款狀態</dt>
-                    <dd className={payment.status === "paid" ? "text-green-700 font-medium" : "text-gray-700"}>
-                      {payment.status === "paid" ? "已付款" : payment.status === "failed" ? "失敗" : "待付款"}
+                    <dd
+                      className={
+                        payment.status === "paid"
+                          ? "text-green-700 font-medium"
+                          : "text-gray-700"
+                      }
+                    >
+                      {payment.status === "paid"
+                        ? "已付款"
+                        : payment.status === "failed"
+                          ? "失敗"
+                          : "待付款"}
                     </dd>
                   </div>
                   <div>
@@ -196,12 +230,16 @@ export default async function AdminOrderDetailPage({
                   </div>
                   <div>
                     <dt className="text-gray-500">MerchantTradeNo</dt>
-                    <dd className="font-mono text-xs">{payment.merchant_trade_no}</dd>
+                    <dd className="font-mono text-xs">
+                      {payment.merchant_trade_no}
+                    </dd>
                   </div>
                   {payment.gateway_trade_no && (
                     <div>
                       <dt className="text-gray-500">ECPay TradeNo</dt>
-                      <dd className="font-mono text-xs">{payment.gateway_trade_no}</dd>
+                      <dd className="font-mono text-xs">
+                        {payment.gateway_trade_no}
+                      </dd>
                     </div>
                   )}
                   {payment.paid_at && (
@@ -234,12 +272,23 @@ export default async function AdminOrderDetailPage({
                           <div className="text-gray-700">
                             {log.from_status ? (
                               <>
-                                <span className="font-medium">{STATUS_LABELS[log.from_status as OrderStatus] ?? log.from_status}</span>
+                                <span className="font-medium">
+                                  {STATUS_LABELS[
+                                    log.from_status as OrderStatus
+                                  ] ?? log.from_status}
+                                </span>
                                 {" → "}
-                                <span className="font-medium">{STATUS_LABELS[log.to_status as OrderStatus] ?? log.to_status}</span>
+                                <span className="font-medium">
+                                  {STATUS_LABELS[
+                                    log.to_status as OrderStatus
+                                  ] ?? log.to_status}
+                                </span>
                               </>
                             ) : (
-                              <span className="font-medium">{STATUS_LABELS[log.to_status as OrderStatus] ?? log.to_status}</span>
+                              <span className="font-medium">
+                                {STATUS_LABELS[log.to_status as OrderStatus] ??
+                                  log.to_status}
+                              </span>
                             )}
                             {log.is_override && (
                               <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded">

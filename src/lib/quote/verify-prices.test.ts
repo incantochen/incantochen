@@ -19,39 +19,48 @@ type MockProductOption = {
 }
 
 function buildMock(
-  product: { base_price: unknown } | null,
+  product: { base_price: unknown; name?: unknown } | null,
   productOptions: MockProductOption[] | null,
 ) {
+  // 未指定 name 時給預設值（T65 後 verifyCartPrices 會驗證 name）；明確傳入者優先
+  const productData = product ? { name: "測試商品", ...product } : null
   const productChain: any = {
     select: () => productChain,
     eq: () => productChain,
-    maybeSingle: () => Promise.resolve({ data: product }),
+    maybeSingle: () => Promise.resolve({ data: productData }),
   }
   const productOptionsChain: any = {
     select: () => productOptionsChain,
     eq: () => Promise.resolve({ data: productOptions }),
   }
   return {
-    from: (table: string) => (table === "product" ? productChain : productOptionsChain),
+    from: (table: string) =>
+      table === "product" ? productChain : productOptionsChain,
   } as any
 }
 
 // Stateful mock: product returns different data per call
 function buildCallCountMock(
-  products: (({ base_price: number } | null))[],
+  products: ({ base_price: number } | null)[],
   productOptions: MockProductOption[],
 ) {
   let callCount = 0
   const productChain: any = {
     select: () => productChain,
     eq: () => productChain,
-    maybeSingle: () => Promise.resolve({ data: products[callCount++] ?? null }),
+    maybeSingle: () => {
+      const p = products[callCount++] ?? null
+      return Promise.resolve({ data: p ? { name: "測試商品", ...p } : null })
+    },
   }
   const productOptionsChain: any = {
     select: () => productOptionsChain,
     eq: () => Promise.resolve({ data: productOptions }),
   }
-  return { from: (table: string) => (table === "product" ? productChain : productOptionsChain) } as any
+  return {
+    from: (table: string) =>
+      table === "product" ? productChain : productOptionsChain,
+  } as any
 }
 
 // ---------------------------------------------------------------------------
@@ -84,14 +93,26 @@ const GEM_RING_OPTIONS: MockProductOption[] = [
   },
 ]
 
-function makeItem(overrides: Partial<{
-  id: string
-  unit_price_snapshot: number
-  selections: { option_type_code: string; option_value_code: string; label: string; price_delta: unknown }[]
-  config_snapshot: Json
-}> = {}) {
+function makeItem(
+  overrides: Partial<{
+    id: string
+    unit_price_snapshot: number
+    selections: {
+      option_type_code: string
+      option_value_code: string
+      label: string
+      price_delta: unknown
+    }[]
+    config_snapshot: Json
+  }> = {},
+) {
   const selections = overrides.selections ?? [
-    { option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: 3000 },
+    {
+      option_type_code: "gem_color",
+      option_value_code: "emerald",
+      label: "翠綠",
+      price_delta: 3000,
+    },
   ]
   return {
     id: overrides.id ?? "item-1",
@@ -129,7 +150,10 @@ describe("A Core", () => {
       {
         option_type: { code: "gem_color" },
         product_option_value: [
-          { price_delta: 5000, option_value: { code: "emerald", label: "翠綠" } },
+          {
+            price_delta: 5000,
+            option_value: { code: "emerald", label: "翠綠" },
+          },
         ],
       },
     ]
@@ -144,15 +168,35 @@ describe("A Core", () => {
     const cartItem = makeItem({
       unit_price_snapshot: 13500,
       selections: [
-        { option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: 3000 },
-        { option_type_code: "ring_size", option_value_code: "size-10", label: "10號", price_delta: 500 },
+        {
+          option_type_code: "gem_color",
+          option_value_code: "emerald",
+          label: "翠綠",
+          price_delta: 3000,
+        },
+        {
+          option_type_code: "ring_size",
+          option_value_code: "size-10",
+          label: "10號",
+          price_delta: 500,
+        },
       ],
       config_snapshot: {
         product_id: PRODUCT_ID,
         base_price: 10000,
         selections: [
-          { option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: 3000 },
-          { option_type_code: "ring_size", option_value_code: "size-10", label: "10號", price_delta: 500 },
+          {
+            option_type_code: "gem_color",
+            option_value_code: "emerald",
+            label: "翠綠",
+            price_delta: 3000,
+          },
+          {
+            option_type_code: "ring_size",
+            option_value_code: "size-10",
+            label: "10號",
+            price_delta: 500,
+          },
         ],
         line_unit_price: 13500,
       },
@@ -167,7 +211,12 @@ describe("A Core", () => {
     const cartItem = makeItem({
       unit_price_snapshot: 10000,
       selections: [],
-      config_snapshot: { product_id: PRODUCT_ID, base_price: 10000, selections: [], line_unit_price: 10000 },
+      config_snapshot: {
+        product_id: PRODUCT_ID,
+        base_price: 10000,
+        selections: [],
+        line_unit_price: 10000,
+      },
     })
     const [item] = await verifyCartPrices(mock, [cartItem])
     expect(item?.verifiedUnitPrice).toBe(10000)
@@ -176,51 +225,93 @@ describe("A Core", () => {
 
   it("A6: malformed config_snapshot → throw", async () => {
     const cartItem = makeItem({ config_snapshot: { bad: "data" } })
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [cartItem]))
-      .rejects.toThrow("購物車項目設定損壞")
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [
+        cartItem,
+      ]),
+    ).rejects.toThrow("購物車項目設定損壞")
   })
 
   it("A7: product null (inactive/missing) → throw", async () => {
-    await expect(verifyCartPrices(buildMock(null, GEM_OPTIONS), [makeItem()]))
-      .rejects.toThrow("商品已下架")
+    await expect(
+      verifyCartPrices(buildMock(null, GEM_OPTIONS), [makeItem()]),
+    ).rejects.toThrow("商品已下架")
   })
 
   it("A8: productOptions null → throw", async () => {
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, null), [makeItem()]))
-      .rejects.toThrow("無法取得商品選項")
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, null), [makeItem()]),
+    ).rejects.toThrow("無法取得商品選項")
   })
 
   it("A9: option_type not in whitelist → throw", async () => {
     const cartItem = makeItem({
-      selections: [{ option_type_code: "unknown_type", option_value_code: "emerald", label: "?", price_delta: 3000 }],
+      selections: [
+        {
+          option_type_code: "unknown_type",
+          option_value_code: "emerald",
+          label: "?",
+          price_delta: 3000,
+        },
+      ],
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 10000,
-        selections: [{ option_type_code: "unknown_type", option_value_code: "emerald", label: "?", price_delta: 3000 }],
+        product_id: PRODUCT_ID,
+        base_price: 10000,
+        selections: [
+          {
+            option_type_code: "unknown_type",
+            option_value_code: "emerald",
+            label: "?",
+            price_delta: 3000,
+          },
+        ],
         line_unit_price: 13000,
       },
     })
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [cartItem]))
-      .rejects.toThrow("不在此商品白名單")
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [
+        cartItem,
+      ]),
+    ).rejects.toThrow("不在此商品白名單")
   })
 
   it("A10: option_value not in whitelist → throw", async () => {
     const cartItem = makeItem({
-      selections: [{ option_type_code: "gem_color", option_value_code: "ruby", label: "紅寶", price_delta: 3000 }],
+      selections: [
+        {
+          option_type_code: "gem_color",
+          option_value_code: "ruby",
+          label: "紅寶",
+          price_delta: 3000,
+        },
+      ],
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 10000,
-        selections: [{ option_type_code: "gem_color", option_value_code: "ruby", label: "紅寶", price_delta: 3000 }],
+        product_id: PRODUCT_ID,
+        base_price: 10000,
+        selections: [
+          {
+            option_type_code: "gem_color",
+            option_value_code: "ruby",
+            label: "紅寶",
+            price_delta: 3000,
+          },
+        ],
         line_unit_price: 13000,
       },
     })
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [cartItem]))
-      .rejects.toThrow("不在此商品白名單")
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [
+        cartItem,
+      ]),
+    ).rejects.toThrow("不在此商品白名單")
   })
 
   it("A11: second item product null → throw mid-loop", async () => {
     const mock = buildCallCountMock([{ base_price: 10000 }, null], GEM_OPTIONS)
     const item2 = makeItem({ id: "item-2" })
-    await expect(verifyCartPrices(mock, [makeItem(), item2]))
-      .rejects.toThrow("商品已下架")
+    await expect(verifyCartPrices(mock, [makeItem(), item2])).rejects.toThrow(
+      "商品已下架",
+    )
   })
 })
 
@@ -232,37 +323,85 @@ describe("B Numeric", () => {
   it("B12: NaN price_delta in config_snapshot → Zod catch → throw", async () => {
     const cartItem = makeItem({
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 10000,
-        selections: [{ option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: NaN }],
+        product_id: PRODUCT_ID,
+        base_price: 10000,
+        selections: [
+          {
+            option_type_code: "gem_color",
+            option_value_code: "emerald",
+            label: "翠綠",
+            price_delta: NaN,
+          },
+        ],
         line_unit_price: NaN,
       },
     })
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [cartItem]))
-      .rejects.toThrow("購物車項目設定損壞")
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [
+        cartItem,
+      ]),
+    ).rejects.toThrow("購物車項目設定損壞")
   })
 
   it("B13: DB price_delta null → throw", async () => {
-    const options = [{ option_type: { code: "gem_color" }, product_option_value: [{ price_delta: null, option_value: { code: "emerald", label: "翠綠" } }] }]
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, options as any), [makeItem()]))
-      .rejects.toThrow("選項定價資料異常")
+    const options = [
+      {
+        option_type: { code: "gem_color" },
+        product_option_value: [
+          {
+            price_delta: null,
+            option_value: { code: "emerald", label: "翠綠" },
+          },
+        ],
+      },
+    ]
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, options as any), [
+        makeItem(),
+      ]),
+    ).rejects.toThrow("選項定價資料異常")
   })
 
   it("B14: DB price_delta string → throw", async () => {
-    const options = [{ option_type: { code: "gem_color" }, product_option_value: [{ price_delta: "3000", option_value: { code: "emerald", label: "翠綠" } }] }]
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, options as any), [makeItem()]))
-      .rejects.toThrow("選項定價資料異常")
+    const options = [
+      {
+        option_type: { code: "gem_color" },
+        product_option_value: [
+          {
+            price_delta: "3000",
+            option_value: { code: "emerald", label: "翠綠" },
+          },
+        ],
+      },
+    ]
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, options as any), [
+        makeItem(),
+      ]),
+    ).rejects.toThrow("選項定價資料異常")
   })
 
   it("B15: Infinity price_delta in config_snapshot → z.number().finite() → throw", async () => {
     const cartItem = makeItem({
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 10000,
-        selections: [{ option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: Infinity }],
+        product_id: PRODUCT_ID,
+        base_price: 10000,
+        selections: [
+          {
+            option_type_code: "gem_color",
+            option_value_code: "emerald",
+            label: "翠綠",
+            price_delta: Infinity,
+          },
+        ],
         line_unit_price: Infinity,
       },
     })
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [cartItem]))
-      .rejects.toThrow("購物車項目設定損壞")
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [
+        cartItem,
+      ]),
+    ).rejects.toThrow("購物車項目設定損壞")
   })
 })
 
@@ -273,7 +412,10 @@ describe("B Numeric", () => {
 describe("C Tamper", () => {
   it("C16: tampered unit_price_snapshot ignored, DB price wins", async () => {
     const cartItem = makeItem({ unit_price_snapshot: 999 }) // tampered client value
-    const [item] = await verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [cartItem])
+    const [item] = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, GEM_OPTIONS),
+      [cartItem],
+    )
     expect(item?.verifiedUnitPrice).toBe(13000)
     expect(item?.priceChanged).toBe(true)
   })
@@ -281,17 +423,29 @@ describe("C Tamper", () => {
   it("C17: config_snapshot price_delta mismatch with DB → priceChanged true, DB value wins", async () => {
     // snapshot says delta=3000, DB says delta=5000
     const changedOptions: MockProductOption[] = [
-      { option_type: { code: "gem_color" }, product_option_value: [{ price_delta: 5000, option_value: { code: "emerald", label: "翠綠" } }] },
+      {
+        option_type: { code: "gem_color" },
+        product_option_value: [
+          {
+            price_delta: 5000,
+            option_value: { code: "emerald", label: "翠綠" },
+          },
+        ],
+      },
     ]
-    const [item] = await verifyCartPrices(buildMock({ base_price: 10000 }, changedOptions), [makeItem()])
+    const [item] = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, changedOptions),
+      [makeItem()],
+    )
     expect(item?.verifiedUnitPrice).toBe(15000)
     expect(item?.priceChanged).toBe(true)
   })
 
   it("C18: deleted product replay (status inactive) → throw", async () => {
     // .eq("status","active") returns null for inactive products
-    await expect(verifyCartPrices(buildMock(null, GEM_OPTIONS), [makeItem()]))
-      .rejects.toThrow("商品已下架")
+    await expect(
+      verifyCartPrices(buildMock(null, GEM_OPTIONS), [makeItem()]),
+    ).rejects.toThrow("商品已下架")
   })
 })
 
@@ -303,28 +457,64 @@ describe("D Precision", () => {
   it("D19: floating point sum has no precision drift", async () => {
     // 1000 + 100.1 + 200.2 = 1300.2999... in raw JS; with round → 1300.3
     const options: MockProductOption[] = [
-      { option_type: { code: "gem_color" }, product_option_value: [{ price_delta: 100.1, option_value: { code: "emerald", label: "翠綠" } }] },
-      { option_type: { code: "ring_size" }, product_option_value: [{ price_delta: 200.2, option_value: { code: "size-10", label: "10號" } }] },
+      {
+        option_type: { code: "gem_color" },
+        product_option_value: [
+          {
+            price_delta: 100.1,
+            option_value: { code: "emerald", label: "翠綠" },
+          },
+        ],
+      },
+      {
+        option_type: { code: "ring_size" },
+        product_option_value: [
+          {
+            price_delta: 200.2,
+            option_value: { code: "size-10", label: "10號" },
+          },
+        ],
+      },
     ]
     const cartItem = makeItem({
       unit_price_snapshot: 1300.3,
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 1000,
+        product_id: PRODUCT_ID,
+        base_price: 1000,
         selections: [
-          { option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: 100.1 },
-          { option_type_code: "ring_size", option_value_code: "size-10", label: "10號", price_delta: 200.2 },
+          {
+            option_type_code: "gem_color",
+            option_value_code: "emerald",
+            label: "翠綠",
+            price_delta: 100.1,
+          },
+          {
+            option_type_code: "ring_size",
+            option_value_code: "size-10",
+            label: "10號",
+            price_delta: 200.2,
+          },
         ],
         line_unit_price: 1300.3,
       },
     })
-    const [item] = await verifyCartPrices(buildMock({ base_price: 1000 }, options), [cartItem])
+    const [item] = await verifyCartPrices(
+      buildMock({ base_price: 1000 }, options),
+      [cartItem],
+    )
     expect(item?.verifiedUnitPrice).toBe(1300.3)
     expect(item?.priceChanged).toBe(false)
   })
 
   it("D20: rounding is deterministic across two independent calls", async () => {
-    const r1 = await verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [makeItem()])
-    const r2 = await verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [makeItem()])
+    const r1 = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, GEM_OPTIONS),
+      [makeItem()],
+    )
+    const r2 = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, GEM_OPTIONS),
+      [makeItem()],
+    )
     expect(r1[0]?.verifiedUnitPrice).toBe(r2[0]?.verifiedUnitPrice)
     expect(r1[0]?.priceChanged).toBe(r2[0]?.priceChanged)
   })
@@ -337,7 +527,10 @@ describe("D Precision", () => {
 describe("E Cart", () => {
   it("E21: duplicate items verified independently, each returned", async () => {
     const item2 = makeItem({ id: "item-2", unit_price_snapshot: 13000 })
-    const result = await verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [makeItem(), item2])
+    const result = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, GEM_OPTIONS),
+      [makeItem(), item2],
+    )
     expect(result).toHaveLength(2)
     expect(result[0]?.cartItemId).toBe("item-1")
     expect(result[1]?.cartItemId).toBe("item-2")
@@ -349,10 +542,21 @@ describe("E Cart", () => {
       id: "item-ab",
       unit_price_snapshot: 13500,
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 10000,
+        product_id: PRODUCT_ID,
+        base_price: 10000,
         selections: [
-          { option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: 3000 },
-          { option_type_code: "ring_size", option_value_code: "size-10", label: "10號", price_delta: 500 },
+          {
+            option_type_code: "gem_color",
+            option_value_code: "emerald",
+            label: "翠綠",
+            price_delta: 3000,
+          },
+          {
+            option_type_code: "ring_size",
+            option_value_code: "size-10",
+            label: "10號",
+            price_delta: 500,
+          },
         ],
         line_unit_price: 13500,
       },
@@ -361,15 +565,29 @@ describe("E Cart", () => {
       id: "item-ba",
       unit_price_snapshot: 13500,
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 10000,
+        product_id: PRODUCT_ID,
+        base_price: 10000,
         selections: [
-          { option_type_code: "ring_size", option_value_code: "size-10", label: "10號", price_delta: 500 },
-          { option_type_code: "gem_color", option_value_code: "emerald", label: "翠綠", price_delta: 3000 },
+          {
+            option_type_code: "ring_size",
+            option_value_code: "size-10",
+            label: "10號",
+            price_delta: 500,
+          },
+          {
+            option_type_code: "gem_color",
+            option_value_code: "emerald",
+            label: "翠綠",
+            price_delta: 3000,
+          },
         ],
         line_unit_price: 13500,
       },
     })
-    const result = await verifyCartPrices(buildMock({ base_price: 10000 }, GEM_RING_OPTIONS), [itemAB, itemBA])
+    const result = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, GEM_RING_OPTIONS),
+      [itemAB, itemBA],
+    )
     expect(result[0]?.verifiedUnitPrice).toBe(13500)
     expect(result[1]?.verifiedUnitPrice).toBe(13500)
     expect(result[0]?.priceChanged).toBe(false)
@@ -379,12 +597,23 @@ describe("E Cart", () => {
   it("E23: snapshot label mismatch ignored — rebuilt configSnapshot uses DB label", async () => {
     const cartItem = makeItem({
       config_snapshot: {
-        product_id: PRODUCT_ID, base_price: 10000,
-        selections: [{ option_type_code: "gem_color", option_value_code: "emerald", label: "WRONG LABEL", price_delta: 3000 }],
+        product_id: PRODUCT_ID,
+        base_price: 10000,
+        selections: [
+          {
+            option_type_code: "gem_color",
+            option_value_code: "emerald",
+            label: "WRONG LABEL",
+            price_delta: 3000,
+          },
+        ],
         line_unit_price: 13000,
       },
     })
-    const [item] = await verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [cartItem])
+    const [item] = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, GEM_OPTIONS),
+      [cartItem],
+    )
     const snap = item?.configSnapshot as any
     expect(snap.selections[0].label).toBe("翠綠")
     expect(item?.verifiedUnitPrice).toBe(13000)
@@ -397,22 +626,51 @@ describe("E Cart", () => {
 
 describe("F Abuse", () => {
   it("F24: DB price_delta undefined → throw", async () => {
-    const options = [{ option_type: { code: "gem_color" }, product_option_value: [{ price_delta: undefined, option_value: { code: "emerald", label: "翠綠" } }] }]
-    await expect(verifyCartPrices(buildMock({ base_price: 10000 }, options as any), [makeItem()]))
-      .rejects.toThrow("選項定價資料異常")
+    const options = [
+      {
+        option_type: { code: "gem_color" },
+        product_option_value: [
+          {
+            price_delta: undefined,
+            option_value: { code: "emerald", label: "翠綠" },
+          },
+        ],
+      },
+    ]
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, options as any), [
+        makeItem(),
+      ]),
+    ).rejects.toThrow("選項定價資料異常")
   })
 
   it("F25: negative verifiedUnitPrice → throw", async () => {
     const negOptions: MockProductOption[] = [
-      { option_type: { code: "gem_color" }, product_option_value: [{ price_delta: -99999, option_value: { code: "emerald", label: "翠綠" } }] },
+      {
+        option_type: { code: "gem_color" },
+        product_option_value: [
+          {
+            price_delta: -99999,
+            option_value: { code: "emerald", label: "翠綠" },
+          },
+        ],
+      },
     ]
-    await expect(verifyCartPrices(buildMock({ base_price: 100 }, negOptions), [makeItem()]))
-      .rejects.toThrow("定價不得為負數")
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 100 }, negOptions), [
+        makeItem(),
+      ]),
+    ).rejects.toThrow("定價不得為負數")
   })
 
   it("F26: 50-item cart does not crash", async () => {
-    const items = Array.from({ length: 50 }, (_, i) => makeItem({ id: `item-${i}` }))
-    const result = await verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), items)
+    const items = Array.from({ length: 50 }, (_, i) =>
+      makeItem({ id: `item-${i}` }),
+    )
+    const result = await verifyCartPrices(
+      buildMock({ base_price: 10000 }, GEM_OPTIONS),
+      items,
+    )
     expect(result).toHaveLength(50)
     expect(result.every((r) => r.verifiedUnitPrice === 13000)).toBe(true)
   }, 10000)
@@ -424,9 +682,48 @@ describe("F Abuse", () => {
 
 describe("G Determinism", () => {
   it("G27: same input always produces identical output", async () => {
-    const run = () => verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [makeItem()])
+    const run = () =>
+      verifyCartPrices(buildMock({ base_price: 10000 }, GEM_OPTIONS), [
+        makeItem(),
+      ])
     const [r1, r2, r3] = await Promise.all([run(), run(), run()])
     expect(r1).toEqual(r2)
     expect(r2).toEqual(r3)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// H — Product name snapshot (T65)
+// ---------------------------------------------------------------------------
+
+describe("H Product name", () => {
+  it("H28: productName returns current DB name", async () => {
+    const mock = buildMock(
+      { base_price: 10000, name: "祖母綠單鑽戒指" },
+      GEM_OPTIONS,
+    )
+    const [item] = await verifyCartPrices(mock, [makeItem()])
+    expect(item?.productName).toBe("祖母綠單鑽戒指")
+  })
+
+  it("H29: DB name null → throw", async () => {
+    const mock = buildMock({ base_price: 10000, name: null }, GEM_OPTIONS)
+    await expect(verifyCartPrices(mock, [makeItem()])).rejects.toThrow(
+      "商品名稱資料異常",
+    )
+  })
+
+  it("H30: DB name empty/whitespace string → throw", async () => {
+    const mock = buildMock({ base_price: 10000, name: "  " }, GEM_OPTIONS)
+    await expect(verifyCartPrices(mock, [makeItem()])).rejects.toThrow(
+      "商品名稱資料異常",
+    )
+  })
+
+  it("H31: DB name non-string (number) → throw", async () => {
+    const mock = buildMock({ base_price: 10000, name: 123 }, GEM_OPTIONS)
+    await expect(verifyCartPrices(mock, [makeItem()])).rejects.toThrow(
+      "商品名稱資料異常",
+    )
   })
 })

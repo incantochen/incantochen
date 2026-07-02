@@ -135,6 +135,8 @@
 ```
 `unit_price_snapshot` ＝ `base_price ＋ Σ price_delta`（＝ `line_unit_price`）；行小計 ＝ `unit_price_snapshot × quantity`。
 
+**商品名稱快照（T65，migration 0005）**：`OrderItem` 另有 `product_name_snapshot text` 欄位，`createOrder` 寫入時與價格同一次伺服器驗證取得、一併釘住；顯示端（會員／後台／Email／ECPay ItemName）一律快照優先，join `product.name` 現值僅作 null 窗口 fallback。刻意 nullable（避免部署窗口期 NOT NULL violation 中斷結帳），既有資料由 migration 回填。`CartItem` 不加名稱快照——購物車為暫態，顯示現值是正確行為。
+
 ### 4.3 Order 內嵌收件與物流
 不另開地址表／工單表；`recipient_*`、`shipping_address`、`tracking_no`（人工填）內嵌於 `Order`。→ 故會員中心**不做通訊錄**。
 

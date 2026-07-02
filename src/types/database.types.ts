@@ -256,6 +256,7 @@ export type Database = {
           id: string
           order_id: string
           product_id: string
+          product_name_snapshot: string | null
           quantity: number
           unit_price_snapshot: number
         }
@@ -265,6 +266,7 @@ export type Database = {
           id?: string
           order_id: string
           product_id: string
+          product_name_snapshot?: string | null
           quantity: number
           unit_price_snapshot: number
         }
@@ -274,6 +276,7 @@ export type Database = {
           id?: string
           order_id?: string
           product_id?: string
+          product_name_snapshot?: string | null
           quantity?: number
           unit_price_snapshot?: number
         }
