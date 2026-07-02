@@ -69,7 +69,7 @@ T61,M5,法務,◆ 賣家資訊揭露＋聯絡頁,通訊交易應載明事項(賣
 T63,M5,法務,◆ 當事人個資權利處理流程,查詢／更正／刪除個資請求（初期人工 email）｜對齊 0001：因 orders 對 member 為 FK RESTRICT，有訂單的會員無法實體刪除；當事人刪除請求走「匿名化」（洗去姓名/email、保留帳務），非真刪。,T08,0.5,90,P1,未開始
 T37,M5,上線,基本錯誤監控,Sentry 或等價,T04,0.5,90.5,P1,未開始
 T33,M2,售後,售後申請（分類）,七天退(限適用品)/瑕疵申訴/維修保養，不同流程時限｜✅ 完成（2026-07-02）：新增 support_request 表（migration 0006，破例增表）；業務拍板半客製＝法定客製品無七天鑑賞退；客戶端單一入口「商品問題回報」（存 return_defect）；`/account/orders/[id]/support` 申請頁＋訂單詳情頁入口；`/admin/orders/[id]` 售後區塊（狀態更新＋手動建維修/保養案件）；email 通知店家。完整審核分流＋綠界退刷 API 自動化留 T47（M5）,T08,1.5,92,P1,完成
-T38,M5,上線,整體測試與上線檢查（戒指）,E2E 走查、checklist,—,2,94,P0,未開始
+T38,M5,上線,整體測試與上線檢查（戒指）,E2E 走查、checklist｜checklist 須檢核四項 dashboard 設定已完成：T34 備份／T50 寄件網域／T82 環境分離＋Deployment Protection／T83 Auth production 設定（2026-07-02 環境審查補充）,—,2,94,P0,未開始
 T45,後續,擴充,擴充其他品類（耳環／項鍊／手鍊）,靠後台自行上架＋素材,T13,2,96,P2,未開始
 T67,M2,金流,◆ 修正 order-result 訂單號重組錯誤,審查發現（2026-07-02）：order-result route 用 slice(11) 重組訂單號、會把 T53 的 2 碼隨機後綴一併帶入→成功頁查無訂單靜默導回首頁；每位付款客人都會踩到。改 slice(11,17)（notify fallback 已是正確寫法）。,T53,0.25,96.25,P0,未開始
 T68,M2,金流,◆ Webhook 錯誤處理與金額核對強化,審查發現：notify 外層 catch 回 1|OK→暫時性 DB 故障時 ECPay 不重送、付款通知永久遺失；改非預期例外回 0|Error（僅處理完成／冪等路徑回 1|OK）。加標記 paid 前核對 TradeAmt 與 payment.amount（縱深防禦）。,T26,0.5,96.75,P0,未開始
@@ -87,3 +87,4 @@ T79,M5,會員,findOrCreateMember 錯誤處理,審查發現：insert 錯誤被完
 T80,M5,安全,PII 稽核 log 留存強化,審查發現：logPiiAccess 走 console→Vercel logs 留存短（依方案數小時到數天）、稽核形同揮發。接 log drain 或改落 DB 表。,T64,0.5,102.75,P2,未開始
 T81,後續,購物車,會員購物車合併（登入併 guest cart）,審查發現：cart.member_id 欄位存在但全程未用、購物車完全綁 cookie——會員換裝置／清 cookie 即遺失。登入時將 guest cart 併入會員 cart（0001 schema 註解原本即預期此行為）。,T08,1,103.75,P2,未開始
 T82,M5,基礎建設,◆ Vercel 環境變數分離（Preview／Production）,環境審查發現（2026-07-02）：13 個變數全部 Preview＋Production 共用→①staging 直接寫 production DB（已證實：production 有 7 張 sandbox 測試單）②T35 換正式 ECPay 金鑰時 preview 也會拿到真收單金鑰③NEXT_PUBLIC_SITE_URL 單一值致 webhook 回打錯環境④service role key 暴露給所有 preview build。修法：Preview 指向獨立 Supabase 專案／branch、ECPay 永遠留 sandbox 於 Preview、SITE_URL 分環境；順帶確認 Deployment Protection 開啟。完成後清除 production 測試資料（orders／payment／member／cart＋auth.users 測試帳號，寫一次性 script）。**必須在 T35 之前完成**。Dashboard 操作由使用者本人執行。,T52,1,104.75,P0,未開始
+T83,M5,會員,◆ Supabase Auth production 設定完成＋驗證,環境審查補列（2026-07-02）：T05 標完成但 production 端 Dashboard 設定（Site URL／Redirect URLs／Magic Link 範本套用）一直懸置、僅記在說明文字易被遺忘；另確認 OTP 效期設定。完成後在 production 實測一次 magic link 登入全流程（OTP 已驗證可用，缺的是 magic link 落地路徑）。Dashboard 操作由使用者本人執行。上線前必完成。,T05,0.5,105.25,P0,未開始
