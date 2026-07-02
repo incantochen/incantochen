@@ -494,13 +494,25 @@
 
 ---
 
+#### #T64 / M2 安全 / 後台 PII 遮罩＋存取稽核
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-07-02） |
+| 產出 | `src/lib/pii/mask.ts`（新增，4 個遮罩純函式）、`src/lib/pii/mask.test.ts`（新增，16 個單測）、`src/lib/pii/audit.ts`（新增，應用層稽核 log）、`src/app/admin/orders/[id]/actions.ts`（修改，加 `revealOrderPii`）、`src/app/admin/orders/[id]/customer-info.tsx`（新增，client component）、`src/app/admin/orders/[id]/page.tsx`（修改）、`src/app/admin/orders/page.tsx`（修改） |
+| 更新描述 | 1. **遮罩規則**（`mask.ts` 純函式，可單測）：電話保留前 4 後 3（`0912-***-678`，先去非數字，<8 碼整串遮）；Email local part 保留前 2 字元、網域完整（`fi***@gmail.com`）；姓名保留首字＋3 字以上另保留末字（`王○明`）；地址保留前 6 字元約至行政區（`台北市大安區***`），空值一律顯示 `—`。2. **套用範圍**：`/admin/orders` 列表（姓名/Email）與 `/admin/orders/[id]` 詳情（姓名/電話/Email/地址）預設一律遮罩；郵遞區號不遮。搜尋不受影響（ilike 在 DB 端比對原值）。3. **存取稽核**：詳情頁「客人資訊」改成 client component `customer-info.tsx`，按「顯示完整個資」→ server action `revealOrderPii(orderId)`（`requireAdmin()` 守門）→ 完整個資離開伺服器前先寫結構化 JSON log（`logPiiAccess`：type=pii_access、actorId/actorEmail、orderId、fields、ISO 時間戳）→ 回傳完整值。依 `docs/data-model.md` 定案走**應用層 log 不新增 DB 表**（本機在終端機可見，production 由 Vercel function logs 收集）。再次隱藏／重新顯示為純前端切換（同一頁已取回的資料不重複記 log）。4. 狀態時間軸的 `actor.email`（管理員自己）非顧客 PII，不遮罩。 |
+| 待辦 | （無，已完成） |
+| 驗收 | `pnpm lint` ✅、`pnpm tsc --noEmit` ✅、`pnpm test` 46/46 ✅（新增 16 個遮罩單測）、`pnpm build` ✅；Playwright E2E（`admin.generateLink` 登入 admin 帳號，不寄真信）：列表客人欄顯示 `E○○○e`/`fi***@gmail.com` → 詳情頁電話 `0912-***-854`、地址 `103 台北市重慶南***` → 按「顯示完整個資」正確揭示完整值且 dev server stdout 出現 `pii_access` 稽核 JSON（actor/orderId/fields 齊全）→ 再按隱藏恢復遮罩、無 console error。 |
+| 依賴 | T31 ✅ |
+
+---
+
 ### 下次作業
 
 | 優先 | 任務 | 說明 |
 |------|------|------|
 | 1 | T33 售後申請（分類） | 七天退/瑕疵申訴/維修保養，僅從訂單詳情頁發起，依賴 T08 ✅、T32 ✅ |
-| 2 | T64 後台 PII 遮罩 | 後台電話顯示遮罩（09xx-***-123），依賴 T31 ✅ |
-| 3 | T65 OrderItem 補 product_name_snapshot | 涉及 migration，動手前先 plan mode，依賴 T23 ✅ |
+| 2 | T65 OrderItem 補 product_name_snapshot | 涉及 migration，動手前先 plan mode，依賴 T23 ✅ |
 
 ---
 

@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
+import { maskEmail, maskName } from "@/lib/pii/mask";
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending_payment: "bg-amber-100 text-amber-800",
@@ -168,8 +169,10 @@ export default async function AdminOrdersPage({
                       </Link>
                     </td>
                     <td className="px-4 py-3">
-                      <div>{order.recipient_name}</div>
-                      <div className="text-gray-400 text-xs">{memberData?.email}</div>
+                      <div>{maskName(order.recipient_name)}</div>
+                      <div className="text-gray-400 text-xs">
+                        {memberData?.email ? maskEmail(memberData.email) : ""}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status as OrderStatus]}`}>

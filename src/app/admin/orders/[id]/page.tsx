@@ -4,7 +4,9 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
+import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
 import { OrderActions } from "./order-actions";
+import { CustomerInfo } from "./customer-info";
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending_payment: "bg-amber-100 text-amber-800",
@@ -121,33 +123,15 @@ export default async function AdminOrderDetailPage({
               </dl>
             </section>
 
-            {/* 客人資訊 */}
-            <section className="bg-white rounded-lg border border-gray-200 p-5">
-              <h2 className="text-sm font-semibold text-gray-600 mb-4 uppercase tracking-wide">
-                客人資訊
-              </h2>
-              <dl className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <dt className="text-gray-500">姓名</dt>
-                  <dd>{order.recipient_name}</dd>
-                </div>
-                <div>
-                  <dt className="text-gray-500">電話</dt>
-                  <dd>{order.recipient_phone}</dd>
-                </div>
-                <div className="col-span-2">
-                  <dt className="text-gray-500">Email</dt>
-                  <dd>{member?.email ?? "—"}</dd>
-                </div>
-                <div className="col-span-2">
-                  <dt className="text-gray-500">收件地址</dt>
-                  <dd>
-                    {order.zip_code ? `${order.zip_code} ` : ""}
-                    {order.shipping_address}
-                  </dd>
-                </div>
-              </dl>
-            </section>
+            {/* 客人資訊（T64：預設遮罩，揭示完整個資走 server action 並記稽核 log） */}
+            <CustomerInfo
+              orderId={order.id}
+              maskedName={maskName(order.recipient_name)}
+              maskedPhone={maskPhone(order.recipient_phone)}
+              maskedEmail={maskEmail(member?.email)}
+              maskedAddress={maskAddress(order.shipping_address)}
+              zipCode={order.zip_code}
+            />
 
             {/* 品項 */}
             <section className="bg-white rounded-lg border border-gray-200 p-5">
