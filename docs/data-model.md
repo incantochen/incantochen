@@ -1,6 +1,6 @@
-# data-model — incantochen 13 張表 ER 定稿規格（v1）
+# data-model — incantochen 14 張表 ER 定稿規格（v1 + T33 addendum）
 
-> 文件更新日期：2026-06-24
+> 文件更新日期：2026-07-02（T33 新增 `support_request` 表，13→14 張，見 §8）
 
 > 任務：T03 前置（M1/M0 建表規格）。依賴 `jewelry_mvp_ER.mermaid`／`jewelry_mvp_ER.pdf`、`memory.md` §5、`CLAUDE.md` §5、`docs/migration-guide.md`。
 > 範圍：13 張表的欄位級定稿規格、約束、索引、RLS 分類、快照 JSON 契約；含本次 review 發現的缺口與待決策。
@@ -21,34 +21,35 @@
 
 ## 1. 本次 review 結論（對齊最新終端機狀態）
 
-| 項目 | 現況 |
-|---|---|
-| repo 階段 | M0 骨架完成；Supabase／Zod／ECPay／測試框架**尚未安裝**；**13 張表尚未建立**（T03 未開始） |
-| migration 工具 | ✅ **Supabase CLI**（`docs/migration-guide.md` v1 已定）— 手寫 SQL 於 `supabase/migrations/` |
-| ER 結構（13 張表＋關聯） | 大方向正確、可進 T03；本次補 **7 項欄位級缺口**（見 §3），不動表數 |
-| 三個核心設計 | 白名單三層、快照欄位、Order 內嵌收件 —— 結構皆在，本次把「契約」釘死（見 §5） |
+| 項目                     | 現況                                                                                         |
+| ------------------------ | -------------------------------------------------------------------------------------------- |
+| repo 階段                | M0 骨架完成；Supabase／Zod／ECPay／測試框架**尚未安裝**；**13 張表尚未建立**（T03 未開始）   |
+| migration 工具           | ✅ **Supabase CLI**（`docs/migration-guide.md` v1 已定）— 手寫 SQL 於 `supabase/migrations/` |
+| ER 結構（13 張表＋關聯） | 大方向正確、可進 T03；本次補 **7 項欄位級缺口**（見 §3），不動表數                           |
+| 三個核心設計             | 白名單三層、快照欄位、Order 內嵌收件 —— 結構皆在，本次把「契約」釘死（見 §5）                |
 
 > ⚠️ 同步落差：`memory.md` §6 第 12 項與 §10 仍把 migration 工具列為「待決策」，但 `CLAUDE.md` §2 與 `docs/migration-guide.md` 已定案 Supabase CLI。**請回填 memory.md**（見 §8 🔁）。
 
 ---
 
-## 2. 13 張表總覽（4 組 ＋ RLS 分類）
+## 2. 14 張表總覽（5 組 ＋ RLS 分類，含 T33 新增）
 
-| 組 | 表 | 用途 | RLS 類別 |
-|---|---|---|---|
-| 商品與選項 | `Product` | 款式（含 `category`、`base_price`、上下架 `status`） | 公開唯讀 |
-| | `OptionType` | 選項類別（層1 `applies_to`） | 公開唯讀 |
-| | `OptionValue` | 選項值（祖母綠／18K黃金／#11） | 公開唯讀 |
-| | `ProductOption` | 此款套用哪些選項（層2） | 公開唯讀 |
-| | `ProductOptionValue` | 此款此值的白名單＋加價（層3） | 公開唯讀 |
-| 會員與購物車 | `Member` | 會員資料（綁 Supabase Auth uid） | 本人 |
-| | `Cart` | 購物車（會員或訪客） | 本人／訪客（後端） |
-| | `CartItem` | 車內項目＋**快照** | 本人／訪客（後端） |
-| 訂單與金流 | `Order` | 訂單（內嵌收件、`custom_consent`、金額） | 本人讀／後端寫 |
-| | `OrderItem` | 訂單項目＋**快照** | 本人讀／後端寫 |
-| | `Payment` | 付款（綠界，多次重試掛同一訂單） | 後端寫；本人讀 |
-| 通知與狀態 | `OrderStatusLog` | 狀態轉換稽核 | 後端寫；本人讀 |
-| | `Notification` | 寄信紀錄 | 後端 |
+| 組           | 表                   | 用途                                                 | RLS 類別                     |
+| ------------ | -------------------- | ---------------------------------------------------- | ---------------------------- |
+| 商品與選項   | `Product`            | 款式（含 `category`、`base_price`、上下架 `status`） | 公開唯讀                     |
+|              | `OptionType`         | 選項類別（層1 `applies_to`）                         | 公開唯讀                     |
+|              | `OptionValue`        | 選項值（祖母綠／18K黃金／#11）                       | 公開唯讀                     |
+|              | `ProductOption`      | 此款套用哪些選項（層2）                              | 公開唯讀                     |
+|              | `ProductOptionValue` | 此款此值的白名單＋加價（層3）                        | 公開唯讀                     |
+| 會員與購物車 | `Member`             | 會員資料（綁 Supabase Auth uid）                     | 本人                         |
+|              | `Cart`               | 購物車（會員或訪客）                                 | 本人／訪客（後端）           |
+|              | `CartItem`           | 車內項目＋**快照**                                   | 本人／訪客（後端）           |
+| 訂單與金流   | `Order`              | 訂單（內嵌收件、`custom_consent`、金額）             | 本人讀／後端寫               |
+|              | `OrderItem`          | 訂單項目＋**快照**                                   | 本人讀／後端寫               |
+|              | `Payment`            | 付款（綠界，多次重試掛同一訂單）                     | 後端寫；本人讀               |
+| 通知與狀態   | `OrderStatusLog`     | 狀態轉換稽核                                         | 後端寫；本人讀               |
+|              | `Notification`       | 寄信紀錄                                             | 後端                         |
+| 售後（T33）  | `support_request`    | 售後申請（商品問題回報／維修保養），見 §8            | 本人 select-only；寫入走後端 |
 
 ---
 
@@ -60,10 +61,10 @@
 
 登入走 Supabase Auth（OTP 主／magic link 輔），會產生 `auth.users.id`。目前 `Member` 與它沒有對應欄位，RLS「會員只讀自己訂單」無從寫起。
 
-| 方案 | 做法 | RLS 寫法 |
-|---|---|---|
+| 方案               | 做法                                               | RLS 寫法                         |
+| ------------------ | -------------------------------------------------- | -------------------------------- |
 | **(建議) 共用 PK** | `Member.id` ＝ `auth.users.id`（1:1 profile 延伸） | `member_id = auth.uid()`，最乾淨 |
-| 另立 FK | 另開 `Member.auth_user_id uuid UK → auth.users.id` | 需多一層 join，RLS 較囉嗦 |
+| 另立 FK            | 另開 `Member.auth_user_id uuid UK → auth.users.id` | 需多一層 join，RLS 較囉嗦        |
 
 **建議採共用 PK**：OTP 驗證成功後，以 `auth.uid()` 建立／辨識 `Member`（對齊 T23「用 email 建會員或辨識既有會員」）。→ 寫 T05/T46/T23 前定案。
 
@@ -116,9 +117,11 @@
 ## 4. 三個核心設計的落實契約
 
 ### 4.1 白名單三層（資料驅動配置器）
+
 `OptionType.applies_to`（層1 品類過濾）→ `ProductOption`（層2 此款套用）→ `ProductOptionValue`（層3 此款此值＋`price_delta`＋`is_default`）。**前端只能顯示層3 白名單內的值；驗價以伺服器端白名單為準（T41 紅線），絕不信任前端價格。** 配置器**於 PDP 內展開、無 `/configure` 路由**。
 
 ### 4.2 快照契約（`config_snapshot` jsonb 標準形狀）
+
 下單／加車當下釘住，後台日後調價不影響已成立項目。建議標準形狀（T19 定、T41 重算對照）：
 
 ```json
@@ -126,39 +129,56 @@
   "product_id": "uuid",
   "base_price": 32000,
   "selections": [
-    { "option_type_code": "gem_color",  "option_value_code": "emerald", "label": "祖母綠",  "price_delta": 0 },
-    { "option_type_code": "metal_color", "option_value_code": "gold18k", "label": "18K黃金", "price_delta": 3000 },
-    { "option_type_code": "ring_size",  "option_value_code": "us6",     "label": "#11",     "price_delta": 0 }
+    {
+      "option_type_code": "gem_color",
+      "option_value_code": "emerald",
+      "label": "祖母綠",
+      "price_delta": 0
+    },
+    {
+      "option_type_code": "metal_color",
+      "option_value_code": "gold18k",
+      "label": "18K黃金",
+      "price_delta": 3000
+    },
+    {
+      "option_type_code": "ring_size",
+      "option_value_code": "us6",
+      "label": "#11",
+      "price_delta": 0
+    }
   ],
   "line_unit_price": 35000
 }
 ```
+
 `unit_price_snapshot` ＝ `base_price ＋ Σ price_delta`（＝ `line_unit_price`）；行小計 ＝ `unit_price_snapshot × quantity`。
 
 **商品名稱快照（T65，migration 0005）**：`OrderItem` 另有 `product_name_snapshot text` 欄位，`createOrder` 寫入時與價格同一次伺服器驗證取得、一併釘住；顯示端（會員／後台／Email／ECPay ItemName）一律快照優先，join `product.name` 現值僅作 null 窗口 fallback。刻意 nullable（避免部署窗口期 NOT NULL violation 中斷結帳），既有資料由 migration 回填。`CartItem` 不加名稱快照——購物車為暫態，顯示現值是正確行為。
 
 ### 4.3 Order 內嵌收件與物流
+
 不另開地址表／工單表；`recipient_*`、`shipping_address`、`tracking_no`（人工填）內嵌於 `Order`。→ 故會員中心**不做通訊錄**。
 
 ---
 
 ## 5. 約束與索引清單（T03 直接照建）
 
-| 表 | 唯一鍵／約束 | 索引 |
-|---|---|---|
-| `Product` | `slug` UK；`status` enum | `(category, status)`（目錄 T14） |
-| `OptionType` | `code` UK | — |
-| `OptionValue` | `(option_type_id, code)` UK | `option_type_id` |
-| `ProductOption` | `(product_id, option_type_id)` UK | `product_id` |
-| `ProductOptionValue` | `(product_option_id, option_value_id)` UK | `product_option_id` |
-| `Member` | `id` ＝ auth.uid()（§3.1）；`email` UK | — |
-| `Cart` | `member_id` 與 `guest_token` 至少一非空（§3.2 CHECK） | `member_id`、`guest_token` |
-| `CartItem` | — | `cart_id`、`product_id` |
-| `Order` | `order_no` UK；`status` enum | `member_id`、`status` |
-| `OrderItem` | — | `order_id`、`product_id` |
-| `Payment` | `merchant_trade_no` UK；每單最多一筆 paid（§3.3 部分唯一索引） | `order_id` |
-| `OrderStatusLog` | 只可 insert | `order_id` |
-| `Notification` | `(order_id, type)` UK（關鍵信，§3.7） | `order_id` |
+| 表                   | 唯一鍵／約束                                                   | 索引                             |
+| -------------------- | -------------------------------------------------------------- | -------------------------------- |
+| `Product`            | `slug` UK；`status` enum                                       | `(category, status)`（目錄 T14） |
+| `OptionType`         | `code` UK                                                      | —                                |
+| `OptionValue`        | `(option_type_id, code)` UK                                    | `option_type_id`                 |
+| `ProductOption`      | `(product_id, option_type_id)` UK                              | `product_id`                     |
+| `ProductOptionValue` | `(product_option_id, option_value_id)` UK                      | `product_option_id`              |
+| `Member`             | `id` ＝ auth.uid()（§3.1）；`email` UK                         | —                                |
+| `Cart`               | `member_id` 與 `guest_token` 至少一非空（§3.2 CHECK）          | `member_id`、`guest_token`       |
+| `CartItem`           | —                                                              | `cart_id`、`product_id`          |
+| `Order`              | `order_no` UK；`status` enum                                   | `member_id`、`status`            |
+| `OrderItem`          | —                                                              | `order_id`、`product_id`         |
+| `Payment`            | `merchant_trade_no` UK；每單最多一筆 paid（§3.3 部分唯一索引） | `order_id`                       |
+| `OrderStatusLog`     | 只可 insert                                                    | `order_id`                       |
+| `Notification`       | `(order_id, type)` UK（關鍵信，§3.7）                          | `order_id`                       |
 
 外鍵刪除策略：商品被引用時不得硬刪（用 `status` 下架）；`CartItem`→`Cart` 可 `ON DELETE CASCADE`；`OrderItem`/`Payment`/`Log`/`Notification`→`Order` **不 cascade**（訂單為帳務，保留）。
 
@@ -166,11 +186,11 @@
 
 ## 6. RLS 分類（T46 照表寫 policy）
 
-| 類別 | 表 | policy 要點 |
-|---|---|---|
-| 公開唯讀 | `Product`、`OptionType`、`OptionValue`、`ProductOption`、`ProductOptionValue` | `select` 全開；寫入僅後端（service role） |
-| 本人 | `Member`、`Order`、`OrderItem`、`Payment`、`OrderStatusLog`、`Notification` | `select` 限 `member_id = auth.uid()`（Order 子表用 join Order）；寫入走後端 |
-| 訪客／本人 | `Cart`、`CartItem` | 會員 `auth.uid()`；訪客以 `guest_token` 走後端驗證寫入，不開前端直寫 |
+| 類別       | 表                                                                            | policy 要點                                                                 |
+| ---------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 公開唯讀   | `Product`、`OptionType`、`OptionValue`、`ProductOption`、`ProductOptionValue` | `select` 全開；寫入僅後端（service role）                                   |
+| 本人       | `Member`、`Order`、`OrderItem`、`Payment`、`OrderStatusLog`、`Notification`   | `select` 限 `member_id = auth.uid()`（Order 子表用 join Order）；寫入走後端 |
+| 訪客／本人 | `Cart`、`CartItem`                                                            | 會員 `auth.uid()`；訪客以 `guest_token` 走後端驗證寫入，不開前端直寫        |
 
 > 紅線提醒：所有敏感寫入走後端、白名單驗價在伺服器端（T41）；授權不可只靠 `proxy.ts`，後端 API 與 RLS 各自獨立驗證。
 
@@ -188,3 +208,40 @@
   - `memory.md`：§6/§10 把「migration 工具」由待決策改為**已定（Supabase CLI）**；§5 補本檔三個契約與 7 項修正摘要；§產出清單加 `docs/data-model.md`；§待辦更新。
   - `CLAUDE.md`：§5 資料模型補「`Member` 綁 auth.uid()／訪客 `guest_token`／`Payment` 退款＋gateway 欄位＋每單一筆 paid／`quantity` 走行數量」幾條具體規則。
 - ⏭️ **下一步**：你拍板 §7 三項待決策 → 我把確認後的決策**回寫 `jewelry_mvp_ER.mermaid`（並可重出 PDF）**，同步回填 memory.md／CLAUDE.md → 即可進 **T03 建表 SQL（Supabase CLI）→ T46 RLS → T43 種子**。
+
+---
+
+## 8. T33 新增：`support_request`（14 張表，2026-07-02）
+
+> ⚠️ 破例增表：本檔 §0 原則「不增刪表」在 T33 破例——現有 13 張表沒有能存售後申請內容的表（`Notification` 只是寄信 log，`unique(order_id,type)` 會擋同訂單多次申請），故一次到位新增，供 T47（完整 RMA 狀態機＋退刷）沿用。migration：`supabase/migrations/0006_add_support_request.sql`。
+
+**業務決策**：半客製品＝法定客製品，無七天鑑賞退貨（§3.1 A1 已拍板）。客戶端僅開放單一入口「商品問題回報」（`return_defect`）；`repair_maintenance`（維修/保養）僅供後台手動建立。
+
+### 8.1 欄位
+
+| 欄位                        | 型別          | 約束                                                       | 說明                                                                                                                                         |
+| --------------------------- | ------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                        | `uuid`        | PK, `gen_random_uuid()`                                    |                                                                                                                                              |
+| `order_id`                  | `uuid`        | NOT NULL, FK → `orders(id)` ON DELETE RESTRICT             |                                                                                                                                              |
+| `member_id`                 | `uuid`        | NOT NULL, FK → `member(id)` ON DELETE RESTRICT             | 冗餘存放（不透過 order join），供 RLS 直接 `member_id = auth.uid()` 判斷歸屬                                                                 |
+| `request_type`              | `text`        | NOT NULL, CHECK IN (`return_defect`, `repair_maintenance`) | text+check 非 enum：日後增類型（改圈/換尺寸）只需 drop/recreate constraint，enum 值無法移除                                                  |
+| `description`               | `text`        | NOT NULL, CHECK 長度 1–2000                                | 客人自填說明                                                                                                                                 |
+| `status`                    | `text`        | NOT NULL, DEFAULT `'pending'`，**刻意不加 check**          | RMA 狀態機 T47 定案後補 `check ... not valid` + `validate constraint`；MVP app 層僅用 4 值（`pending`/`in_progress`/`completed`/`rejected`） |
+| `created_at` / `updated_at` | `timestamptz` | NOT NULL, DEFAULT `now()`                                  | `updated_at` 由 `trg_support_request_updated_at` trigger（沿用 0001 `set_updated_at()`）維護                                                 |
+
+### 8.2 索引與 FK 策略
+
+- `idx_support_request_order` on `(order_id)`、`idx_support_request_member` on `(member_id)`。
+- FK 一律 `RESTRICT`（帳務鏈慣例，同 §5）。
+
+### 8.3 RLS（deny-by-default，同 §6 分類原則）
+
+- `enable row level security`。
+- `support_request_select_own`：`select` for `authenticated`，`using (member_id = (select auth.uid()))`。
+- **無 insert/update/delete policy**——寫入一律走 service role（後端）；`revoke delete` 雙保險，售後紀錄視為帳務類證據禁硬刪。
+
+### 8.4 已知限制／待決策（留給 T47）
+
+- `status` 無 check constraint，完整 RMA 狀態機（申請中／審核中／已核准／已退款／已駁回／維修中／已完成）待 T47 定案。
+- 過渡期退款走綠界廠商後台手動退刷＋既有 Admin Override 改 `orders.status = 'refunded'`（T31），退刷 API 自動化留 T47。
+- 不支援佐證照片上傳；不做重複申請時效限制（§3.1 G19 已拍板不硬擋）。
