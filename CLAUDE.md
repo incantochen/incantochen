@@ -172,6 +172,7 @@
 - **完成檢核**：實作 → 自行驗收（見下方各任務驗收指令）→ 跑 lint → dev 確認無錯誤 → 才算完成。
 - **完成後停下回報**：列出改了什麼、產出什麼、驗收結果，**等確認後再進下一個任務**。
 - **commit 規範**：Conventional Commits（`feat:`、`fix:`、`chore:`）。一個任務一支 commit。
+- **PR 審查（2026-07-03 起）**：Claude 開完 PR 回報時，**必須評估該 diff 是否建議跑 `/code-review ultra <PR#>` 並附理由**。判斷基準採**反向白名單**：只有「純 docs／UI 樣式與文案／測試檔」的 diff 可省略，**其餘一律建議跑**（本專案幾乎每條路徑都碰錢或個資；2026-07-02 審查證實高風險區不只 auth／金流／訂單／migration，還包括 Email 模板、購物車與 guest token、service role action 的擁有權檢查、識別碼格式互轉、next.config 與 env）。ultra 是雲端多代理審查，計費、由**使用者本人**觸發，Claude 無法代跑；建議跑的 PR，findings 修完才 merge。（里程碑層另有 `/dev-review` 全專案審查＋週一四排程，兩者互補不互代。）
 - **不確定就問**：規格、定價邏輯、法規用詞有疑慮時先問，不要自行假設。
 
 ### 各任務自驗收指令
