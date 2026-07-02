@@ -1,9 +1,12 @@
 import { notFound } from "next/navigation"
 import { requireUser } from "@/lib/auth/require-user"
 import { createClient } from "@/lib/supabase/server"
-import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { formatCurrency, formatDateTime } from "@/lib/utils"
-import { STATUS_LABELS, STATUS_PILL_STYLES, type OrderStatus } from "@/lib/order/order-status"
+import {
+  STATUS_LABELS,
+  STATUS_PILL_STYLES,
+  type OrderStatus,
+} from "@/lib/order/order-status"
 
 export default async function OrderDetailPage({
   params,
@@ -26,7 +29,9 @@ export default async function OrderDetailPage({
   const [{ data: items }, { data: logs }] = await Promise.all([
     supabase
       .from("order_item")
-      .select("id, product_id, quantity, unit_price_snapshot, config_snapshot")
+      .select(
+        "id, product_id, product_name_snapshot, quantity, unit_price_snapshot, config_snapshot",
+      )
       .eq("order_id", id)
       .order("created_at"),
     supabase
@@ -35,13 +40,6 @@ export default async function OrderDetailPage({
       .eq("order_id", id)
       .order("created_at"),
   ])
-
-  const productIds = [...new Set((items ?? []).map((item) => item.product_id))]
-  const serviceRole = createServiceRoleClient()
-  const { data: products } = productIds.length
-    ? await serviceRole.from("product").select("id, name").in("id", productIds)
-    : { data: [] }
-  const productNames = new Map((products ?? []).map((p) => [p.id, p.name]))
 
   const status = order.status as OrderStatus
 
@@ -54,12 +52,16 @@ export default async function OrderDetailPage({
         >
           {STATUS_LABELS[status]}
         </span>
-        <span className="text-sm text-ash">{formatDateTime(order.created_at)}</span>
+        <span className="text-sm text-ash">
+          {formatDateTime(order.created_at)}
+        </span>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="rounded-lg border border-border p-6">
-          <h3 className="mb-4 text-[11px] tracking-[0.16em] text-ash uppercase">處理進度</h3>
+          <h3 className="mb-4 text-[11px] tracking-[0.16em] text-ash uppercase">
+            處理進度
+          </h3>
           {logs && logs.length > 0 ? (
             <ol>
               {logs.map((log, i) => (
@@ -78,7 +80,9 @@ export default async function OrderDetailPage({
                       STATUS_LABELS[log.to_status as OrderStatus]
                     )}
                   </div>
-                  <div className="mt-0.5 text-xs text-ash">{formatDateTime(log.created_at)}</div>
+                  <div className="mt-0.5 text-xs text-ash">
+                    {formatDateTime(log.created_at)}
+                  </div>
                 </li>
               ))}
             </ol>
@@ -89,7 +93,9 @@ export default async function OrderDetailPage({
           <div className="mt-4 rounded-lg border border-border bg-cloud px-4 py-3 text-sm">
             物流單號：
             {order.tracking_no ? (
-              <span className="ml-1 font-mono text-ink">{order.tracking_no}</span>
+              <span className="ml-1 font-mono text-ink">
+                {order.tracking_no}
+              </span>
             ) : (
               <span className="ml-1 text-ash">尚未出貨</span>
             )}
@@ -97,26 +103,40 @@ export default async function OrderDetailPage({
         </div>
 
         <div className="rounded-lg border border-border p-6">
-          <h3 className="mb-4 text-[11px] tracking-[0.16em] text-ash uppercase">品項</h3>
+          <h3 className="mb-4 text-[11px] tracking-[0.16em] text-ash uppercase">
+            品項
+          </h3>
           <div className="space-y-4">
             {(items ?? []).map((item) => {
-              const snapshot = item.config_snapshot as { selections?: { label: string }[] } | null
-              const selectionsSummary = (snapshot?.selections ?? []).map((s) => s.label).join(" · ")
+              const snapshot = item.config_snapshot as {
+                selections?: { label: string }[]
+              } | null
+              const selectionsSummary = (snapshot?.selections ?? [])
+                .map((s) => s.label)
+                .join(" · ")
               return (
-                <div key={item.id} className="flex items-start justify-between gap-4 text-sm">
+                <div
+                  key={item.id}
+                  className="flex items-start justify-between gap-4 text-sm"
+                >
                   <div>
                     <div className="text-ink">
-                      {productNames.get(item.product_id) ?? item.product_id}
+                      {item.product_name_snapshot ?? item.product_id}
                     </div>
                     {selectionsSummary && (
-                      <div className="mt-0.5 text-xs text-ash">{selectionsSummary}</div>
+                      <div className="mt-0.5 text-xs text-ash">
+                        {selectionsSummary}
+                      </div>
                     )}
                     <div className="mt-0.5 text-xs text-ash">
-                      {formatCurrency(Number(item.unit_price_snapshot))} × {item.quantity}
+                      {formatCurrency(Number(item.unit_price_snapshot))} ×{" "}
+                      {item.quantity}
                     </div>
                   </div>
                   <div className="shrink-0 text-primary">
-                    {formatCurrency(Number(item.unit_price_snapshot) * item.quantity)}
+                    {formatCurrency(
+                      Number(item.unit_price_snapshot) * item.quantity,
+                    )}
                   </div>
                 </div>
               )
@@ -124,7 +144,9 @@ export default async function OrderDetailPage({
           </div>
           <div className="mt-4 flex justify-between border-t border-border pt-4 text-sm">
             <span>合計</span>
-            <span className="text-primary">{formatCurrency(Number(order.total_amount))}</span>
+            <span className="text-primary">
+              {formatCurrency(Number(order.total_amount))}
+            </span>
           </div>
         </div>
       </div>

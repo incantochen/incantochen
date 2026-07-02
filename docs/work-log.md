@@ -507,12 +507,26 @@
 
 ---
 
+#### #T65 / M2 訂單 / OrderItem 補 product_name_snapshot
+
+| 項目 | 內容 |
+|------|------|
+| 狀態 | ✅ 完成（2026-07-02） |
+| 產出 | `supabase/migrations/0005_add_product_name_snapshot_to_order_item.sql`（新增）、`src/types/database.types.ts`（手動補欄位型別）、`src/lib/quote/verify-prices.ts`（修改）、`src/app/checkout/actions.ts`（修改）、`src/app/account/orders/[id]/page.tsx`（修改）、`src/app/admin/orders/[id]/page.tsx`（修改）、`src/lib/email/order-confirmation.ts`／`new-order-notification.ts`（修改）、`src/app/checkout/pay/page.tsx`（修改）、`src/lib/quote/verify-prices.test.ts`（修改）、`docs/tasks.csv`（T65 完成＋新增 T66）、`docs/data-model.md`（§4.2 補快照契約） |
+| 更新描述 | 1. **Migration 0005**：`order_item` 加 `product_name_snapshot text`＋回填既有訂單。**刻意 nullable**——若設 NOT NULL，「migration 已套用、舊版 createOrder 還在線上」的窗口期舊程式 insert 會爆 NOT NULL violation 中斷結帳；nullable＋回填＋顯示端 fallback 讓兩種部署順序都安全。2. **寫入端**：`verifyCartPrices` 的 product 查詢加 `name`（與價格同一次驗證查詢，來源一致），比照 base_price 防呆風格驗 name 非空字串，`VerifiedItem` 加 `productName`；`createOrder` 步驟⑦ 寫入 `product_name_snapshot`。3. **讀取端（快照優先）**：會員訂單詳情頁改讀快照、**整段移除 T32 的 service role 補查 workaround**；後台詳情頁／兩封 Email／ECPay ItemName 改 `product_name_snapshot ?? join 現值 ?? fallback`。4. **設計決策（plan mode 定案）**：訂單成立即契約，商品資訊修改不回寫已成立訂單、前端刻意不更新；付款重試不重驗價（避免「頁面顯示 A、實刷 B」的 T41 反模式）；例外由店家後台 Admin Override 轉 cancelled 處理，不做商品連動；殘留風險（待付款無時效）記為 **T66**（pending_payment 逾期自動取消，72h 走狀態機）。5. **範圍界定**：`cart_item` 不加名稱快照（購物車為暫態，join 現值是正確行為）。6. 測試 mock 補預設 name，新增 H 區塊 4 測項（name 正確回傳／null／空字串／非字串 → 擋單）。 |
+| 待辦 | 使用者本機：`supabase db push` 套用 0005 → `pnpm supabase gen types typescript` 確認無 diff → E2E（下測試單→改 archived→會員訂單頁仍正確顯示名稱）。**部署順序：先 db push、再 merge PR。** |
+| 驗收 | `pnpm lint` ✅、`pnpm tsc --noEmit` ✅、`pnpm test` 50/50 ✅（46＋4 新測項）、`pnpm build` ✅（cloud 環境以假 env vars 驗證編譯；本機真環境驗證留使用者） |
+| 依賴 | T23 ✅ |
+
+---
+
 ### 下次作業
 
 | 優先 | 任務 | 說明 |
 |------|------|------|
 | 1 | T33 售後申請（分類） | 七天退/瑕疵申訴/維修保養，僅從訂單詳情頁發起，依賴 T08 ✅、T32 ✅ |
-| 2 | T65 OrderItem 補 product_name_snapshot | 涉及 migration，動手前先 plan mode，依賴 T23 ✅ |
+| 2 | T30b 其餘狀態通知（出貨等） | 出貨／配送 email，依賴 T28 ✅ |
+| 備選 | T66 待付款訂單逾期自動取消 | T65 規劃時定案的新追蹤項（72h 走 transitionOrder 狀態機），依賴 T28 ✅ |
 
 ---
 

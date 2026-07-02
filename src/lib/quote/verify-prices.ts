@@ -20,9 +20,10 @@ const configSnapshotSchema = z.object({
 export type VerifiedItem = {
   cartItemId: string
   productId: string
+  productName: string // DB 當下名稱，寫入 order_item.product_name_snapshot（T65）
   quantity: number
   verifiedUnitPrice: number
-  configSnapshot: Json   // rebuilt from DB, not copied from cart snapshot
+  configSnapshot: Json // rebuilt from DB, not copied from cart snapshot
   priceChanged: boolean
 }
 
@@ -51,10 +52,10 @@ export async function verifyCartPrices(
     }
     const config = parsed.data
 
-    // Re-fetch current base_price; reject if product is inactive/missing
+    // Re-fetch current base_price + name; reject if product is inactive/missing
     const { data: product } = await serviceRole
       .from("product")
-      .select("base_price")
+      .select("base_price, name")
       .eq("id", config.product_id)
       .eq("status", "active")
       .maybeSingle()
@@ -65,18 +66,30 @@ export async function verifyCartPrices(
 
     // Guard against DB-side base_price corruption (NaN, Infinity, negative)
     const rawBasePrice: unknown = product.base_price
-    if (typeof rawBasePrice !== "number" || !Number.isFinite(rawBasePrice) || rawBasePrice < 0) {
+    if (
+      typeof rawBasePrice !== "number" ||
+      !Number.isFinite(rawBasePrice) ||
+      rawBasePrice < 0
+    ) {
       throw new Error(`商品定價資料異常，無法建立訂單`)
+    }
+
+    // Guard against DB-side name corruption (null, empty, non-string)
+    const rawName: unknown = product.name
+    if (typeof rawName !== "string" || rawName.trim() === "") {
+      throw new Error(`商品名稱資料異常，無法建立訂單`)
     }
 
     // Re-fetch option whitelist (same join as addToCart) — add label so we can
     // rebuild a self-consistent configSnapshot with current DB data
     const { data: productOptions } = await serviceRole
       .from("product_option")
-      .select(`
+      .select(
+        `
         option_type:option_type_id ( code ),
         product_option_value ( price_delta, option_value:option_value_id ( code, label ) )
-      `)
+      `,
+      )
       .eq("product_id", config.product_id)
 
     if (!productOptions) {
@@ -84,14 +97,20 @@ export async function verifyCartPrices(
     }
 
     // Map: option_type_code → option_value_code → { priceDelta, label }
-    const priceMap = new Map<string, Map<string, { priceDelta: number; label: string }>>()
+    const priceMap = new Map<
+      string,
+      Map<string, { priceDelta: number; label: string }>
+    >()
     for (const po of productOptions) {
       const typeCode = po.option_type.code
       const valueMap = new Map<string, { priceDelta: number; label: string }>()
       for (const pov of po.product_option_value) {
         // Guard against DB-side price_delta corruption (null, NaN, Infinity, string)
         const rawPriceDelta: unknown = pov.price_delta
-        if (typeof rawPriceDelta !== "number" || !Number.isFinite(rawPriceDelta)) {
+        if (
+          typeof rawPriceDelta !== "number" ||
+          !Number.isFinite(rawPriceDelta)
+        ) {
           throw new Error(`選項定價資料異常，無法建立訂單`)
         }
         valueMap.set(pov.option_value.code, {
@@ -114,11 +133,15 @@ export async function verifyCartPrices(
     for (const sel of config.selections) {
       const typeMap = priceMap.get(sel.option_type_code)
       if (!typeMap) {
-        throw new Error(`選項類別「${sel.option_type_code}」不在此商品白名單，無法建立訂單`)
+        throw new Error(
+          `選項類別「${sel.option_type_code}」不在此商品白名單，無法建立訂單`,
+        )
       }
       const entry = typeMap.get(sel.option_value_code)
       if (entry === undefined) {
-        throw new Error(`選項值「${sel.option_value_code}」不在此商品白名單，無法建立訂單`)
+        throw new Error(
+          `選項值「${sel.option_value_code}」不在此商品白名單，無法建立訂單`,
+        )
       }
       verifiedUnitPrice += entry.priceDelta
       verifiedSelections.push({
@@ -149,6 +172,7 @@ export async function verifyCartPrices(
     results.push({
       cartItemId: item.id,
       productId: item.product_id,
+      productName: rawName,
       quantity: item.quantity,
       verifiedUnitPrice,
       configSnapshot: verifiedConfigSnapshot,

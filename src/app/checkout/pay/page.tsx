@@ -39,7 +39,7 @@ export default async function CheckoutPayPage({
 
   const { data: orderItems } = await serviceRole
     .from("order_item")
-    .select("quantity, product:product_id ( name )")
+    .select("quantity, product_name_snapshot, product:product_id ( name )")
     .eq("order_id", order.id)
 
   if (!orderItems || orderItems.length === 0) {
@@ -77,18 +77,30 @@ export default async function CheckoutPayPage({
 
   const items = orderItems.map((item) => ({
     quantity: item.quantity,
-    productName: item.product.name,
+    // 快照優先（下單當下名稱）；join 現值僅供 null 窗口 fallback
+    productName: item.product_name_snapshot ?? item.product.name,
   }))
 
-  const params = buildAioParams(order, items, merchantTradeNo, serverEnv.NEXT_PUBLIC_SITE_URL)
+  const params = buildAioParams(
+    order,
+    items,
+    merchantTradeNo,
+    serverEnv.NEXT_PUBLIC_SITE_URL,
+  )
 
   return (
     <main className="min-h-screen bg-paper flex items-center justify-center px-4">
       <div className="max-w-md w-full text-center">
         <h1 className="font-head text-2xl text-ink mb-2">正在轉導至付款頁</h1>
-        <p className="text-sm text-ash mb-8">請稍候，系統正在為您導向 ECPay 付款頁面...</p>
+        <p className="text-sm text-ash mb-8">
+          請稍候，系統正在為您導向 ECPay 付款頁面...
+        </p>
 
-        <form id="ecpay-form" action={serverEnv.ECPAY_PAYMENT_URL} method="POST">
+        <form
+          id="ecpay-form"
+          action={serverEnv.ECPAY_PAYMENT_URL}
+          method="POST"
+        >
           {Object.entries(params).map(([key, value]) => (
             <input key={key} type="hidden" name={key} value={value} />
           ))}
