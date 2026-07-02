@@ -45,6 +45,11 @@
 - [ ] 在此資料夾打開 Claude Code。
 - [ ] 輸入 `/hooks`，確認六個 hook 都載入（protect-env、protect-migration、dangerous-bash、auto-format、completion-check、session-start）。
 - [ ] 請 Claude Code 核對 `CLAUDE.md` 第 3、4 節與實際結構／指令是否一致，有出入就微調 CLAUDE.md。
+- [ ] **安裝 ECPay 官方 skill**（刻意不進版控，`.gitignore` 已排除；環境重建時照裝）：
+  ```bash
+  git clone https://github.com/ECPay/ECPay-API-Skill .claude/skills/ecpay
+  ```
+  安裝當下版本 v3.3（2026-06-26）。綠界官方維護、與 API 同步更新，**不要本地修改**（更新會被蓋掉；License All-Rights-Reserved）。本專案特定的 ECPay 踩坑（IPv4 強制、shell 中文編碼、19 碼 trade no）記在 `CLAUDE.md` T24/T25 條目，不依賴此 skill。
 
 ## F. 首次 commit
 

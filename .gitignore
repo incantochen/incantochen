@@ -43,5 +43,8 @@ next-env.d.ts
 .claude/.allow-migration
 .claude/settings.local.json
 
+# ECPay 官方 skill：第三方 vendored 內容不進版控（安裝方式見 docs/setup-checklist.md §E）
+.claude/skills/ecpay/
+
 .vercel
 .env*
