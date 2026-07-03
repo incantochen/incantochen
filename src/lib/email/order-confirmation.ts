@@ -212,7 +212,7 @@ export async function sendOrderConfirmation(orderId: string): Promise<void> {
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`
 
-  await resend.emails.send({
+  const { error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: email,
     subject: `感謝您的訂購 — 訂單 ${order.order_no} 已確認`,
@@ -226,4 +226,11 @@ export async function sendOrderConfirmation(orderId: string): Promise<void> {
       items,
     }),
   })
+  // Resend API 層級錯誤（驗證失敗/超額/退信等）不會 throw，只回傳 { error }；
+  // 必須明確轉成 throw，sendOnce（T69）才能正確判斷失敗並標記 failed 以利重試。
+  if (error) {
+    throw new Error(
+      `Resend error: ${error.name} ${error.message} (status ${error.statusCode})`,
+    )
+  }
 }

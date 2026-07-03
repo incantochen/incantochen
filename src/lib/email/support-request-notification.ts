@@ -79,11 +79,18 @@ export async function sendSupportRequestNotification(
 </td></tr></table>
 </body></html>`;
 
-  await resend.emails.send({
+  const { error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: OWNER_EMAIL,
     replyTo: customerEmail ?? undefined,
     subject: `[售後申請] ${order?.order_no ?? "—"} — ${typeLabel}`,
     html,
   });
+  // Resend API 層級錯誤不會 throw，只回傳 { error }；明確轉成 throw
+  // 才能讓呼叫端（support/actions.ts）的 log／後續處理知道信其實沒寄出。
+  if (error) {
+    throw new Error(
+      `Resend error: ${error.name} ${error.message} (status ${error.statusCode})`,
+    );
+  }
 }

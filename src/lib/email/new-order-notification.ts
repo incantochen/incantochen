@@ -129,10 +129,17 @@ export async function sendNewOrderNotification(orderId: string): Promise<void> {
 </td></tr></table>
 </body></html>`
 
-  await resend.emails.send({
+  const { error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: OWNER_EMAIL,
     subject: `[新訂單] ${order.order_no} — NT$${order.total_amount.toLocaleString()}`,
     html,
   })
+  // Resend API 層級錯誤不會 throw，只回傳 { error }；必須明確轉成 throw，
+  // sendOnce（T69）才能正確判斷失敗並標記 failed 以利重試。
+  if (error) {
+    throw new Error(
+      `Resend error: ${error.name} ${error.message} (status ${error.statusCode})`,
+    )
+  }
 }
