@@ -21,16 +21,50 @@ async function notifyOrderPaid(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
 ) {
-  await sendOnce(serviceRole, {
-    orderId,
-    type: "order_confirmation",
-    send: () => sendOrderConfirmation(orderId),
-  });
-  await sendOnce(serviceRole, {
-    orderId,
-    type: "new_order_notification",
-    send: () => sendNewOrderNotification(orderId),
-  });
+  // sendOnce 保證不往外拋例外，兩通知彼此獨立，可安全平行處理。
+  await Promise.all([
+    sendOnce(serviceRole, {
+      orderId,
+      type: "order_confirmation",
+      send: () => sendOrderConfirmation(orderId),
+    }),
+    sendOnce(serviceRole, {
+      orderId,
+      type: "new_order_notification",
+      send: () => sendNewOrderNotification(orderId),
+    }),
+  ]);
+}
+
+async function promoteOrderToPaid(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+) {
+  // 條件式 UPDATE：只有真正搶到這次推進的請求才會拿到 promoted，
+  // 避免兩個近乎同時抵達的重送請求都各自寫入 order_status_log（該表無 unique 約束）。
+  const { data: promoted } = await serviceRole
+    .from("orders")
+    .update({ status: "paid" })
+    .eq("id", orderId)
+    .eq("status", "pending_payment")
+    .select("id")
+    .maybeSingle();
+
+  if (!promoted) return;
+
+  const { error: logError } = await serviceRole
+    .from("order_status_log")
+    .insert({
+      order_id: orderId,
+      from_status: "pending_payment",
+      to_status: "paid",
+      note: "ECPay webhook",
+      actor_id: null,
+      is_override: false,
+    });
+  if (logError) console.error("[order_status_log] insert failed", logError);
+
+  await notifyOrderPaid(serviceRole, orderId);
 }
 
 export async function POST(request: Request) {
@@ -90,7 +124,13 @@ export async function POST(request: Request) {
       // 金額核對（縱深防禦）：ECPay 回傳金額須與訂單金額一致才可標記 paid
       // Number(...) 轉型：total_amount 為 numeric(12,0)，PostgREST 有時會序列化成字串，
       // 直接用 !== 比對 number 與 string 永遠不相等，會誤判所有正常付款為金額不符。
+      // Number.isFinite 防呆：TradeAmt 若為空字串／非數字格式，parseInt 回傳 NaN，
+      // 明確擋下並記錄，避免用 NaN 跟任何數字比對都不相等而誤判金額不符。
       const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
+      if (isPaid && !Number.isFinite(tradeAmt)) {
+        console.error("[ecpay/notify] TradeAmt 格式異常", params.TradeAmt);
+        return ERR("Amount mismatch");
+      }
       if (isPaid && tradeAmt !== Number(order.total_amount)) {
         return ERR("Amount mismatch");
       }
@@ -113,19 +153,7 @@ export async function POST(request: Request) {
       }
 
       if (isPaid && order.status === "pending_payment") {
-        await serviceRole
-          .from("orders")
-          .update({ status: "paid" })
-          .eq("id", order.id);
-        void serviceRole.from("order_status_log").insert({
-          order_id: order.id,
-          from_status: "pending_payment",
-          to_status: "paid",
-          note: "ECPay webhook",
-          actor_id: null,
-          is_override: false,
-        });
-        await notifyOrderPaid(serviceRole, order.id);
+        await promoteOrderToPaid(serviceRole, order.id);
       }
 
       return OK();
@@ -141,7 +169,12 @@ export async function POST(request: Request) {
 
     // 金額核對（縱深防禦）：ECPay 回傳金額須與 payment 記錄金額一致才可標記 paid
     // Number(...) 轉型原因同上：payment.amount 也是 numeric(12,0)。
+    // Number.isFinite 防呆原因同上。
     const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
+    if (isPaid && !Number.isFinite(tradeAmt)) {
+      console.error("[ecpay/notify] TradeAmt 格式異常", params.TradeAmt);
+      return ERR("Amount mismatch");
+    }
     if (isPaid && tradeAmt !== Number(payment.amount)) {
       return ERR("Amount mismatch");
     }
@@ -167,19 +200,7 @@ export async function POST(request: Request) {
         .single();
 
       if (order?.status === "pending_payment") {
-        await serviceRole
-          .from("orders")
-          .update({ status: "paid" })
-          .eq("id", payment.order_id);
-        void serviceRole.from("order_status_log").insert({
-          order_id: payment.order_id,
-          from_status: "pending_payment",
-          to_status: "paid",
-          note: "ECPay webhook",
-          actor_id: null,
-          is_override: false,
-        });
-        await notifyOrderPaid(serviceRole, payment.order_id);
+        await promoteOrderToPaid(serviceRole, payment.order_id);
       }
     }
 

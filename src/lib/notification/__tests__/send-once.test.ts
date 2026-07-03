@@ -7,6 +7,7 @@ type NotificationRow = { id: string; status: string };
 const notifications = new Map<string, NotificationRow>();
 let insertMode: "normal" | "throw" | "error" = "normal";
 let updateByIdMode: "normal" | "throw" = "normal";
+let reclaimMode: "normal" | "throw" = "normal";
 
 function key(orderId: string, type: string) {
   return `${orderId}:${type}`;
@@ -48,6 +49,9 @@ function makeServiceRole() {
             },
             select: () => ({
               maybeSingle: () => {
+                if (reclaimMode === "throw") {
+                  throw new Error("simulated reclaim failure");
+                }
                 // 條件式 reclaim：update(...).eq('order_id',x).eq('type',y).eq('status','failed').select('id').maybeSingle()
                 const row = notifications.get(
                   key(filters.order_id ?? "", filters.type ?? ""),
@@ -81,6 +85,7 @@ beforeEach(() => {
   notifications.clear();
   insertMode = "normal";
   updateByIdMode = "normal";
+  reclaimMode = "normal";
 });
 
 import { sendOnce } from "../send-once";
@@ -254,5 +259,27 @@ describe("sendOnce", () => {
 
     expect(firstSend).toHaveBeenCalledTimes(1);
     expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
+  });
+
+  it("reclaim UPDATE 本身拋例外 → sendOnce 整體不往外拋，只記 log（review round 2）", async () => {
+    const sr = makeServiceRole();
+    notifications.set(key("o1", "order_confirmation"), {
+      id: "n0",
+      status: "failed",
+    });
+    reclaimMode = "throw";
+
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sendOnce(sr as any, {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(send).not.toHaveBeenCalled();
   });
 });

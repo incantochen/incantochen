@@ -53,12 +53,14 @@ type DbState = {
   orderStatus: string | null;
   order: { id: string; status: string; total_amount: number } | null;
   throwOnPaymentQuery: boolean;
+  orderRaceLost: boolean;
 };
 const db: DbState = {
   payment: null,
   orderStatus: null,
   order: null,
   throwOnPaymentQuery: false,
+  orderRaceLost: false,
 };
 const recorded: { table: string; op: string; values?: unknown }[] = [];
 
@@ -92,6 +94,16 @@ function makeChain(table: string) {
         return Promise.resolve({ data: db.payment });
       }
       if (table === "orders") {
+        if (chain._op === "update") {
+          // promoteOrderToPaid 的條件式 UPDATE...WHERE status='pending_payment'：
+          // orderRaceLost 模擬「這次 UPDATE 送出前，狀態已被別的請求搶先改掉」。
+          if (db.orderRaceLost) return Promise.resolve({ data: null });
+          const currentStatus = db.order ? db.order.status : db.orderStatus;
+          if (currentStatus === "pending_payment") {
+            return Promise.resolve({ data: { id: "promoted" } });
+          }
+          return Promise.resolve({ data: null });
+        }
         return Promise.resolve({ data: db.order });
       }
       return Promise.resolve({ data: null });
@@ -160,6 +172,7 @@ beforeEach(() => {
   db.orderStatus = null;
   db.order = null;
   db.throwOnPaymentQuery = false;
+  db.orderRaceLost = false;
   sendOrderConfirmation.mockClear();
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
@@ -355,5 +368,53 @@ describe("金額核對：numeric 欄位為字串型別", () => {
     const orderUpdate = updatesTo("orders")[0]?.values as any;
     expect(orderUpdate.status).toBe("paid");
     expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TradeAmt 格式異常（NaN 防呆）
+// ---------------------------------------------------------------------------
+
+describe("金額核對：TradeAmt 格式異常", () => {
+  it("TradeAmt 為空字串 → parseInt 得到 NaN，明確擋下、不誤判為金額相符", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(updatesTo("payment")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 並發保護：promoteOrderToPaid 的條件式 UPDATE（T68 review round 2）
+// ---------------------------------------------------------------------------
+
+describe("並發：訂單推進的條件式 UPDATE 沒搶到 → 不重複寫 log、不重複寄信", () => {
+  it("正常路徑：UPDATE...WHERE status='pending_payment' 沒匹配到任何列 → 跳過 log 與通知，仍回 1|OK", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.orderRaceLost = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
+  });
+
+  it("fallback 路徑：同上情境", async () => {
+    db.payment = null;
+    db.order = { id: "o1", status: "pending_payment", total_amount: 25000 };
+    db.orderRaceLost = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
   });
 });
