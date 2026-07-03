@@ -2,7 +2,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-type NotificationRow = { id: string; status: string };
+type NotificationRow = { id: string; status: string; createdAt: number };
 
 const notifications = new Map<string, NotificationRow>();
 let insertMode: "normal" | "throw" | "error" = "normal";
@@ -36,15 +36,24 @@ function makeServiceRole() {
           if (insertMode === "error") {
             return Promise.resolve({ error: { code: "OTHER" } });
           }
-          notifications.set(k, { id: values.id, status: values.status });
+          notifications.set(k, {
+            id: values.id,
+            status: values.status,
+            createdAt: Date.now(),
+          });
           return Promise.resolve({ error: null });
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         update: (values: Record<string, unknown>): any => {
           const filters: Record<string, string> = {};
+          let ltFilter: { col: string; val: string } | undefined;
           const chain = {
             eq: (col: string, val: string) => {
               filters[col] = val;
+              return chain;
+            },
+            lt: (col: string, val: string) => {
+              ltFilter = { col, val };
               return chain;
             },
             select: () => ({
@@ -52,15 +61,22 @@ function makeServiceRole() {
                 if (reclaimMode === "throw") {
                   throw new Error("simulated reclaim failure");
                 }
-                // 條件式 reclaim：update(...).eq('order_id',x).eq('type',y).eq('status','failed').select('id').maybeSingle()
+                // 條件式 reclaim：
+                // update(...).eq('order_id',x).eq('type',y).eq('status',s)[.lt('created_at',t)].select('id').maybeSingle()
                 const row = notifications.get(
                   key(filters.order_id ?? "", filters.type ?? ""),
                 );
-                if (row && row.status === filters.status) {
-                  Object.assign(row, values);
-                  return Promise.resolve({ data: { id: row.id } });
+                if (!row || row.status !== filters.status) {
+                  return Promise.resolve({ data: null });
                 }
-                return Promise.resolve({ data: null });
+                if (ltFilter?.col === "created_at") {
+                  const threshold = new Date(ltFilter.val).getTime();
+                  if (!(row.createdAt < threshold)) {
+                    return Promise.resolve({ data: null });
+                  }
+                }
+                Object.assign(row, values);
+                return Promise.resolve({ data: { id: row.id } });
               },
             }),
             then: (resolve: (v: unknown) => void) => {
@@ -223,6 +239,7 @@ describe("sendOnce", () => {
     notifications.set(key("o1", "order_confirmation"), {
       id: "n0",
       status: "failed",
+      createdAt: Date.now(),
     });
 
     let resolveFirstSend: () => void = () => {};
@@ -266,6 +283,7 @@ describe("sendOnce", () => {
     notifications.set(key("o1", "order_confirmation"), {
       id: "n0",
       status: "failed",
+      createdAt: Date.now(),
     });
     reclaimMode = "throw";
 
@@ -281,5 +299,45 @@ describe("sendOnce", () => {
     ).resolves.toBeUndefined();
 
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("pending 卡太久（process 疑似被砍斷）→ 視為卡住，reclaim 後重試（review round 3）", async () => {
+    const sr = makeServiceRole();
+    notifications.set(key("o1", "order_confirmation"), {
+      id: "n0",
+      status: "pending",
+      createdAt: Date.now() - 5 * 60 * 1000, // 5 分鐘前，早已超過 2 分鐘門檻
+    });
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendOnce(sr as any, {
+      orderId: "o1",
+      type: "order_confirmation",
+      send,
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
+  });
+
+  it("pending 剛建立不久（可能真的還在處理中）→ 不會被誤撿去重寄", async () => {
+    const sr = makeServiceRole();
+    notifications.set(key("o1", "order_confirmation"), {
+      id: "n0",
+      status: "pending",
+      createdAt: Date.now(), // 剛剛才建立
+    });
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendOnce(sr as any, {
+      orderId: "o1",
+      type: "order_confirmation",
+      send,
+    });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(notifications.get("o1:order_confirmation")?.status).toBe("pending");
   });
 });

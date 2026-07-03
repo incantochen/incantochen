@@ -6,6 +6,10 @@ type ServiceRole = ReturnType<typeof createServiceRoleClient>;
 
 type ClaimResult = "claimed" | "conflict" | "unknown";
 
+// stale pending 門檻：安全超過任何合理的 serverless function 執行時間，
+// 用來判斷「這筆 pending 是真的還在處理中，還是 process 被砍斷卡住了」。
+const STALE_PENDING_MS = 2 * 60 * 1000;
+
 // notification(order_id, type) 有 unique constraint（T69）：
 // insert 先佔位 status='pending'，send() 完成才回填 sent/failed，
 // 避免「insert 成功但送信失敗」被誤判為已寄出、之後 webhook 重送也不會再試。
@@ -48,17 +52,42 @@ async function sendOnceInner(
 
   // conflict：已有紀錄。用條件式 UPDATE 原子性地把 failed 轉回 pending 才重試，
   // 避免兩個並發請求同時讀到 failed、都各自呼叫 send() 造成重複寄信。
-  const { data: reclaimed } = await serviceRole
-    .from("notification")
-    .update({ status: "pending" })
-    .eq("order_id", orderId)
-    .eq("type", type)
-    .eq("status", "failed")
-    .select("id")
-    .maybeSingle();
+  let reclaimed = await tryReclaim(serviceRole, orderId, type, (q) =>
+    q.eq("status", "failed"),
+  );
+
+  if (!reclaimed) {
+    // 找不到 failed 可撿：再試著撿「pending 太久」的紀錄——process 可能在
+    // attemptSend 執行到一半就被砍斷（serverless 執行時間上限等），導致
+    // 卡在 pending 永遠沒人處理。created_at 早於門檻才視為卡住，避免誤
+    // 撿到真的還在處理中的並發請求（那個情境已由上面的 failed reclaim
+    // 與最初的 claim insert 保護）。
+    const staleThreshold = new Date(
+      Date.now() - STALE_PENDING_MS,
+    ).toISOString();
+    reclaimed = await tryReclaim(serviceRole, orderId, type, (q) =>
+      q.eq("status", "pending").lt("created_at", staleThreshold),
+    );
+  }
 
   if (!reclaimed) return;
   return attemptSend(serviceRole, reclaimed.id, send);
+}
+
+async function tryReclaim(
+  serviceRole: ServiceRole,
+  orderId: string,
+  type: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  withCondition: (query: any) => any,
+): Promise<{ id: string } | null> {
+  const query = serviceRole
+    .from("notification")
+    .update({ status: "pending" })
+    .eq("order_id", orderId)
+    .eq("type", type);
+  const { data } = await withCondition(query).select("id").maybeSingle();
+  return data ?? null;
 }
 
 async function tryClaim(

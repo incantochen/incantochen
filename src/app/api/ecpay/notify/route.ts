@@ -36,12 +36,14 @@ async function notifyOrderPaid(
   ]);
 }
 
-async function promoteOrderToPaid(
+async function ensureOrderPaid(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
 ) {
   // 條件式 UPDATE：只有真正搶到這次推進的請求才會拿到 promoted，
   // 避免兩個近乎同時抵達的重送請求都各自寫入 order_status_log（該表無 unique 約束）。
+  // 訂單若已經是 paid（例如上次執行已推進成功、但通知半路失敗），這裡安全地
+  // 不做任何事——推進與寄通知是兩件互不依賴、各自冪等的事，見 ensureNotificationSent。
   const { data: promoted } = await serviceRole
     .from("orders")
     .update({ status: "paid" })
@@ -63,8 +65,25 @@ async function promoteOrderToPaid(
       is_override: false,
     });
   if (logError) console.error("[order_status_log] insert failed", logError);
+}
 
-  await notifyOrderPaid(serviceRole, orderId);
+async function ensureNotificationSent(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+) {
+  // 不依賴呼叫者是否剛推進成功，重新查一次目前狀態：無論是這次才推進、
+  // 還是先前已經推進但通知沒寄成功，只要訂單現在確實是 paid 就補寄。
+  // 只在 paid 才寄，避免對已取消／退款的訂單誤發「訂單確認」信
+  // （目前系統尚無取消／退款通知信，故此處不需要導去別的通知）。
+  const { data: order } = await serviceRole
+    .from("orders")
+    .select("status")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (order?.status === "paid") {
+    await notifyOrderPaid(serviceRole, orderId);
+  }
 }
 
 export async function POST(request: Request) {
@@ -108,7 +127,8 @@ export async function POST(request: Request) {
 
       if (!order) return ERR("Order not found");
 
-      // 冪等：已有 paid payment → 直接 1|OK
+      // 冪等：已有 paid payment → 確保訂單推進與通知都完成（避免上次執行半路
+      // 失敗卡住），再回 1|OK
       const { data: paidPayment } = await serviceRole
         .from("payment")
         .select("id")
@@ -116,7 +136,11 @@ export async function POST(request: Request) {
         .eq("status", "paid")
         .maybeSingle();
 
-      if (paidPayment) return OK();
+      if (paidPayment) {
+        await ensureOrderPaid(serviceRole, order.id);
+        await ensureNotificationSent(serviceRole, order.id);
+        return OK();
+      }
 
       const isPaid = params.RtnCode === "1";
       const now = new Date().toISOString();
@@ -152,8 +176,9 @@ export async function POST(request: Request) {
         return ERR("DB insert failed");
       }
 
-      if (isPaid && order.status === "pending_payment") {
-        await promoteOrderToPaid(serviceRole, order.id);
+      if (isPaid) {
+        await ensureOrderPaid(serviceRole, order.id);
+        await ensureNotificationSent(serviceRole, order.id);
       }
 
       return OK();
@@ -161,8 +186,13 @@ export async function POST(request: Request) {
 
     // 正常流程：payment 記錄已存在（由 pay page 預建）
 
-    // 冪等：已 paid → 直接 1|OK
-    if (payment.status === "paid") return OK();
+    // 冪等：已 paid → 確保訂單推進與通知都完成（避免上次執行半路失敗卡住），
+    // 再回 1|OK
+    if (payment.status === "paid") {
+      await ensureOrderPaid(serviceRole, payment.order_id);
+      await ensureNotificationSent(serviceRole, payment.order_id);
+      return OK();
+    }
 
     const isPaid = params.RtnCode === "1";
     const now = new Date().toISOString();
@@ -191,17 +221,11 @@ export async function POST(request: Request) {
       .eq("id", payment.id)
       .eq("status", "pending"); // 只從 pending 往前推，防競態覆寫
 
-    // 訂單狀態只從 pending_payment 往前推
+    // 訂單推進與通知寄送各自冪等，ensureOrderPaid 內部會重新確認目前狀態
+    // 才決定是否真的要推進，不需要在這裡先查一次 orders.status。
     if (isPaid) {
-      const { data: order } = await serviceRole
-        .from("orders")
-        .select("status")
-        .eq("id", payment.order_id)
-        .single();
-
-      if (order?.status === "pending_payment") {
-        await promoteOrderToPaid(serviceRole, payment.order_id);
-      }
+      await ensureOrderPaid(serviceRole, payment.order_id);
+      await ensureNotificationSent(serviceRole, payment.order_id);
     }
 
     return OK();
