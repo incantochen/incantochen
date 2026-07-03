@@ -159,6 +159,8 @@
 - **登入防護**：magic link 落地頁需使用者再按一次才消耗 token；token 高熵／單次／短效。
 - ✅ **T58 應用層安全防護（2026-06-27）**：Security headers（X-Frame-Options/nosniff/Referrer-Policy/Permissions-Policy/CSP/HSTS）已加入 `next.config.ts`。**CSP 注意**：`script-src` 在 dev 環境含 `unsafe-eval`（React dev mode 需要），production build 自動移除；上線前用 securityheaders.com 掃 staging URL 確認。登入 email 改用 `z.string().email()` + `trim().toLowerCase()`；OTP 速率限制（Upstash Redis）：requestOtp 雙重 IP+email 限制，verifyOtpCode IP 限制 30 req/min；IP 取得 fallback：`cf-connecting-ip → x-forwarded-for → x-real-ip → null`（null 時跳過 IP limit 避免共用 bucket 誤鎖）。
 
+**🧠 寫程式的思考系統（2026-07-04 起）**：動手寫任何程式碼前**必讀 [`docs/coding-system.md`](docs/coding-system.md)**——逆向推理（每個外部呼叫的四問）、系統性思考（狀態機／並發／重試迴路）、PR 前檢核清單、真實 bug 案例庫。本節下方的通則是它的摘要；完整思考步驟與 checklist 以該檔為準。
+
 **防禦性寫法通則（2026-07-04 起，源自 PR #30 三輪 ultrareview 的共通根因）：**
 
 - **SDK 錯誤回傳必檢查**：Supabase（`{data, error}`）、Resend（`{data, error}`）等「不 throw、用回傳值帶錯誤」的 SDK，**每次呼叫都必須解構並檢查 `error`**，不得只看 `data`。「查詢失敗」≠「查無資料」——只看 `data` 會把 DB 暫時性故障（timeout／連線池耗盡）誤判成「條件不符」而靜默跳過。`error` 非 null 時一律 throw 或明確處理（依呼叫端契約），禁止靜默略過。使用任何第三方 SDK 前先確認：失敗時是 throw 還是回傳錯誤物件？不預設「沒 throw 就是成功」。
