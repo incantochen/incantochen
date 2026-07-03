@@ -1,6 +1,6 @@
 # CLAUDE.md — incantochen（高端半客製彩色寶石電商）
 
-> 文件更新日期：2026-06-26
+> 文件更新日期：2026-07-04
 
 > 給 Claude Code 的專案施工圖。每次對話開始自動載入。
 > 規劃文件（含 memory、任務清單）放在 `docs/`；本檔是「開發層」的對齊版本。
@@ -159,6 +159,16 @@
 - **登入防護**：magic link 落地頁需使用者再按一次才消耗 token；token 高熵／單次／短效。
 - ✅ **T58 應用層安全防護（2026-06-27）**：Security headers（X-Frame-Options/nosniff/Referrer-Policy/Permissions-Policy/CSP/HSTS）已加入 `next.config.ts`。**CSP 注意**：`script-src` 在 dev 環境含 `unsafe-eval`（React dev mode 需要），production build 自動移除；上線前用 securityheaders.com 掃 staging URL 確認。登入 email 改用 `z.string().email()` + `trim().toLowerCase()`；OTP 速率限制（Upstash Redis）：requestOtp 雙重 IP+email 限制，verifyOtpCode IP 限制 30 req/min；IP 取得 fallback：`cf-connecting-ip → x-forwarded-for → x-real-ip → null`（null 時跳過 IP limit 避免共用 bucket 誤鎖）。
 
+**防禦性寫法通則（2026-07-04 起，源自 PR #30 三輪 ultrareview 的共通根因）：**
+
+- **SDK 錯誤回傳必檢查**：Supabase（`{data, error}`）、Resend（`{data, error}`）等「不 throw、用回傳值帶錯誤」的 SDK，**每次呼叫都必須解構並檢查 `error`**，不得只看 `data`。「查詢失敗」≠「查無資料」——只看 `data` 會把 DB 暫時性故障（timeout／連線池耗盡）誤判成「條件不符」而靜默跳過。`error` 非 null 時一律 throw 或明確處理（依呼叫端契約），禁止靜默略過。使用任何第三方 SDK 前先確認：失敗時是 throw 還是回傳錯誤物件？不預設「沒 throw 就是成功」。
+- **包裝函式須守住 throw 契約**：若上層邏輯（如 `sendOnce` 重試機制）依賴「失敗會 throw」，被包裝的 SDK 錯誤回傳必須在包裝層轉成 throw，否則上層的錯誤處理形同虛設。
+- **numeric 欄位比對前先 `Number()`**：PostgREST 對 Postgres `numeric` 欄位可能回傳字串（生成型別仍標 `number`），直接 `!==` 比對必失敗；`parseInt` 結果先用 `Number.isFinite()` 防 NaN。
+- **並發去重用條件式 UPDATE，且 SET 必須改動 WHERE 用到的欄位**：`UPDATE ... WHERE status='x'` 搶鎖時，SET 若不改變任何 WHERE 欄位，Postgres READ COMMITTED 下第二個並發請求重新檢查條件仍會命中（EvalPlanQual），兩邊都搶到。check-then-act（先 SELECT 再決定）在並發下必然有 race，一律改條件式 UPDATE／INSERT on conflict。
+- **serverless 禁 fire-and-forget**：`void promise.catch()` 在回應送出後 function 可能被凍結、工作沒做完；一律 `await`（或平台的 `waitUntil`）。
+- **識別碼格式互轉單一出處**：如 order_no ↔ MerchantTradeNo 的 slice 重組，只能有一份實作供 import，禁止各處手刻（T67 的 `slice(11)` bug 即散落複本失同步所致）。
+- **客人自由輸入插進 HTML（email 模板等）必先 escape**（T72/T84）。
+
 **未經明確同意，不得：** 修改 `.env*`、執行 DB migration、改動 auth／金流／session 邏輯、變更 RLS policy 或 CI 設定。
 
 **Hook 強制護欄（`.claude/`）：** protect-env / protect-migration / dangerous-bash / completion-check / auto-format / session-start。
@@ -172,6 +182,7 @@
 - **完成檢核**：實作 → 自行驗收（見下方各任務驗收指令）→ 跑 lint → dev 確認無錯誤 → 才算完成。
 - **完成後停下回報**：列出改了什麼、產出什麼、驗收結果，**等確認後再進下一個任務**。
 - **commit 規範**：Conventional Commits（`feat:`、`fix:`、`chore:`）。一個任務一支 commit。
+- **開 PR 前先本機審查（2026-07-04 起）**：涉及金流／webhook／auth／訂單／email 的改動，開 PR 前 Claude 先自行跑 `/code-review high`（本機、免費）並修完 findings 再開 PR——把 SDK 錯誤處理這類已知模式（§6 防禦性寫法通則）在本機先攔掉，ultra 額度留給深層問題（PR #30 三輪 ultrareview 的教訓：多數 findings 屬本機審查即可抓到的等級）。
 - **PR 審查（2026-07-03 起）**：Claude 開完 PR 回報時，**必須評估該 diff 是否建議跑 `/code-review ultra <PR#>` 並附理由**。判斷基準採**反向白名單**：只有「純 docs／UI 樣式與文案／測試檔」的 diff 可省略，**其餘一律建議跑**（本專案幾乎每條路徑都碰錢或個資；2026-07-02 審查證實高風險區不只 auth／金流／訂單／migration，還包括 Email 模板、購物車與 guest token、service role action 的擁有權檢查、識別碼格式互轉、next.config 與 env）。ultra 是雲端多代理審查，計費、由**使用者本人**觸發，Claude 無法代跑；建議跑的 PR，findings 修完才 merge。（里程碑層另有 `/dev-review` 全專案審查＋週一四排程，兩者互補不互代。）
 - **不確定就問**：規格、定價邏輯、法規用詞有疑慮時先問，不要自行假設。
 
