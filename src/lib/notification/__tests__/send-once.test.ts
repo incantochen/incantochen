@@ -5,6 +5,8 @@ vi.mock("server-only", () => ({}));
 type NotificationRow = { id: string; status: string };
 
 const notifications = new Map<string, NotificationRow>();
+let insertMode: "normal" | "throw" | "error" = "normal";
+let updateByIdMode: "normal" | "throw" = "normal";
 
 function key(orderId: string, type: string) {
   return `${orderId}:${type}`;
@@ -23,31 +25,53 @@ function makeServiceRole() {
           type: string;
           status: string;
         }) => {
+          if (insertMode === "throw") {
+            throw new Error("simulated insert failure");
+          }
           const k = key(values.order_id, values.type);
           if (notifications.has(k)) {
             return Promise.resolve({ error: { code: "23505" } });
           }
+          if (insertMode === "error") {
+            return Promise.resolve({ error: { code: "OTHER" } });
+          }
           notifications.set(k, { id: values.id, status: values.status });
           return Promise.resolve({ error: null });
         },
-        select: () => ({
-          eq: (_col1: string, orderId: string) => ({
-            eq: (_col2: string, type: string) => ({
-              maybeSingle: () =>
-                Promise.resolve({
-                  data: notifications.get(key(orderId, type)) ?? null,
-                }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        update: (values: Record<string, unknown>): any => {
+          const filters: Record<string, string> = {};
+          const chain = {
+            eq: (col: string, val: string) => {
+              filters[col] = val;
+              return chain;
+            },
+            select: () => ({
+              maybeSingle: () => {
+                // 條件式 reclaim：update(...).eq('order_id',x).eq('type',y).eq('status','failed').select('id').maybeSingle()
+                const row = notifications.get(
+                  key(filters.order_id ?? "", filters.type ?? ""),
+                );
+                if (row && row.status === filters.status) {
+                  Object.assign(row, values);
+                  return Promise.resolve({ data: { id: row.id } });
+                }
+                return Promise.resolve({ data: null });
+              },
             }),
-          }),
-        }),
-        update: (values: { status: string; sent_at?: string }) => ({
-          eq: (_col: string, id: string) => {
-            for (const row of notifications.values()) {
-              if (row.id === id) row.status = values.status;
-            }
-            return Promise.resolve({ error: null });
-          },
-        }),
+            then: (resolve: (v: unknown) => void) => {
+              // 非條件式 update-by-id：update(...).eq('id', id)
+              if (updateByIdMode === "throw") {
+                throw new Error("simulated update failure");
+              }
+              for (const row of notifications.values()) {
+                if (row.id === filters.id) Object.assign(row, values);
+              }
+              resolve({ error: null });
+            },
+          };
+          return chain;
+        },
       };
     },
   };
@@ -55,6 +79,8 @@ function makeServiceRole() {
 
 beforeEach(() => {
   notifications.clear();
+  insertMode = "normal";
+  updateByIdMode = "normal";
 });
 
 import { sendOnce } from "../send-once";
@@ -141,5 +167,92 @@ describe("sendOnce", () => {
     });
 
     expect(send2).toHaveBeenCalledTimes(1);
+  });
+
+  it("claim insert 拋例外 → best-effort 直接寄送，不因記錄不了而漏寄", async () => {
+    insertMode = "throw";
+    const send = vi.fn().mockResolvedValue(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendOnce(makeServiceRole() as any, {
+      orderId: "o1",
+      type: "order_confirmation",
+      send,
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(notifications.has("o1:order_confirmation")).toBe(false);
+  });
+
+  it("claim insert 回傳非 23505 錯誤 → best-effort 直接寄送", async () => {
+    insertMode = "error";
+    const send = vi.fn().mockResolvedValue(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendOnce(makeServiceRole() as any, {
+      orderId: "o1",
+      type: "order_confirmation",
+      send,
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(notifications.has("o1:order_confirmation")).toBe(false);
+  });
+
+  it("send 成功但標記 sent 失敗 → 不可回頭標成 failed（避免誤導成沒寄到）", async () => {
+    updateByIdMode = "throw";
+    const send = vi.fn().mockResolvedValue(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendOnce(makeServiceRole() as any, {
+      orderId: "o1",
+      type: "order_confirmation",
+      send,
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(notifications.get("o1:order_confirmation")?.status).not.toBe(
+      "failed",
+    );
+  });
+
+  it("並發：atomic reclaim 防止兩個請求同時看到 failed 而重複寄信", async () => {
+    const sr = makeServiceRole();
+    notifications.set(key("o1", "order_confirmation"), {
+      id: "n0",
+      status: "failed",
+    });
+
+    let resolveFirstSend: () => void = () => {};
+    const firstSend = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirstSend = resolve;
+        }),
+    );
+    const secondSend = vi.fn().mockResolvedValue(undefined);
+
+    const firstCall = sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      { orderId: "o1", type: "order_confirmation", send: firstSend },
+    );
+
+    // 讓第一個請求先完成「原子 UPDATE ... WHERE status=failed」這一步
+    // （status 已經被搶先改成 pending），但尚未完成 send()。
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendOnce(sr as any, {
+      orderId: "o1",
+      type: "order_confirmation",
+      send: secondSend,
+    });
+
+    // 第二個請求應該看到 status=pending（不是 failed），不會重寄。
+    expect(secondSend).not.toHaveBeenCalled();
+
+    resolveFirstSend();
+    await firstCall;
+
+    expect(firstSend).toHaveBeenCalledTimes(1);
+    expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
   });
 });

@@ -318,3 +318,42 @@ describe("金額核對", () => {
     expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// numeric 欄位以字串型別回傳時仍需正確比對（PostgREST numeric-as-string 防線）
+// ---------------------------------------------------------------------------
+
+describe("金額核對：numeric 欄位為字串型別", () => {
+  it('正常路徑：payment.amount 為字串 "25000" 且與 TradeAmt 相符 → 仍標記 paid、寄信', async () => {
+    db.payment = {
+      id: "p1",
+      status: "pending",
+      order_id: "o1",
+      amount: "25000" as unknown as number,
+    };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const paymentUpdate = updatesTo("payment")[0]?.values as any;
+    expect(paymentUpdate.status).toBe("paid");
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+
+  it('fallback 路徑：order.total_amount 為字串 "25000" 且與 TradeAmt 相符 → 仍標記 paid、寄信', async () => {
+    db.payment = null;
+    db.order = {
+      id: "o1",
+      status: "pending_payment",
+      total_amount: "25000" as unknown as number,
+    };
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+});

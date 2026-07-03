@@ -17,6 +17,22 @@ const ERR = (msg: string) =>
     headers: { "Content-Type": "text/plain" },
   });
 
+async function notifyOrderPaid(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+) {
+  await sendOnce(serviceRole, {
+    orderId,
+    type: "order_confirmation",
+    send: () => sendOrderConfirmation(orderId),
+  });
+  await sendOnce(serviceRole, {
+    orderId,
+    type: "new_order_notification",
+    send: () => sendNewOrderNotification(orderId),
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
@@ -72,8 +88,10 @@ export async function POST(request: Request) {
       const now = new Date().toISOString();
 
       // 金額核對（縱深防禦）：ECPay 回傳金額須與訂單金額一致才可標記 paid
+      // Number(...) 轉型：total_amount 為 numeric(12,0)，PostgREST 有時會序列化成字串，
+      // 直接用 !== 比對 number 與 string 永遠不相等，會誤判所有正常付款為金額不符。
       const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
-      if (isPaid && tradeAmt !== order.total_amount) {
+      if (isPaid && tradeAmt !== Number(order.total_amount)) {
         return ERR("Amount mismatch");
       }
 
@@ -82,7 +100,7 @@ export async function POST(request: Request) {
         order_id: order.id,
         merchant_trade_no: merchantTradeNo,
         gateway_trade_no: params.TradeNo ?? null,
-        amount: parseInt(params.TradeAmt ?? "0", 10),
+        amount: tradeAmt,
         provider: "ecpay",
         status: isPaid ? "paid" : "failed",
         paid_at: isPaid ? now : null,
@@ -107,16 +125,7 @@ export async function POST(request: Request) {
           actor_id: null,
           is_override: false,
         });
-        await sendOnce(serviceRole, {
-          orderId: order.id,
-          type: "order_confirmation",
-          send: () => sendOrderConfirmation(order.id),
-        });
-        await sendOnce(serviceRole, {
-          orderId: order.id,
-          type: "new_order_notification",
-          send: () => sendNewOrderNotification(order.id),
-        });
+        await notifyOrderPaid(serviceRole, order.id);
       }
 
       return OK();
@@ -131,8 +140,9 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
 
     // 金額核對（縱深防禦）：ECPay 回傳金額須與 payment 記錄金額一致才可標記 paid
+    // Number(...) 轉型原因同上：payment.amount 也是 numeric(12,0)。
     const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
-    if (isPaid && tradeAmt !== payment.amount) {
+    if (isPaid && tradeAmt !== Number(payment.amount)) {
       return ERR("Amount mismatch");
     }
 
@@ -169,16 +179,7 @@ export async function POST(request: Request) {
           actor_id: null,
           is_override: false,
         });
-        await sendOnce(serviceRole, {
-          orderId: payment.order_id,
-          type: "order_confirmation",
-          send: () => sendOrderConfirmation(payment.order_id),
-        });
-        await sendOnce(serviceRole, {
-          orderId: payment.order_id,
-          type: "new_order_notification",
-          send: () => sendNewOrderNotification(payment.order_id),
-        });
+        await notifyOrderPaid(serviceRole, payment.order_id);
       }
     }
 
