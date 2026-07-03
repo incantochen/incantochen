@@ -81,9 +81,13 @@ async function tryReclaim(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   withCondition: (query: any) => any,
 ): Promise<{ id: string } | null> {
+  // SET 一併更新 created_at（一個 WHERE 有用到的欄位）：若兩個並發請求同時
+  // reclaim 同一筆卡住的紀錄，第一個成功後，第二個重新檢查 WHERE 條件
+  // （Postgres EvalPlanQual）會因為 created_at 已經變成剛剛的時間、不再早於
+  // staleThreshold 而落空，避免兩邊都搶到、都重寄一次。
   const query = serviceRole
     .from("notification")
-    .update({ status: "pending" })
+    .update({ status: "pending", created_at: new Date().toISOString() })
     .eq("order_id", orderId)
     .eq("type", type);
   const { data } = await withCondition(query).select("id").maybeSingle();
@@ -131,7 +135,14 @@ async function attemptSend(
   }
 
   // send() 已成功：這裡萬一失敗也不能回頭標成 failed（會誤導成「沒寄到」）。
-  // 頂多留在 pending，之後的去重邏輯只會跳過、不會重寄，不會造成重複寄信。
+  // 頂多留在 pending——但這代表「send() 成功、只是回填 sent 失敗」跟「process
+  // 被砍斷、send() 根本沒跑完」在資料庫裡是同一種狀態（都是 pending、
+  // sent_at 皆為 null，因為兩者是同一個 UPDATE 語句一起寫入），無法區分。
+  // 超過 STALE_PENDING_MS 後的 reclaim 機制會把這種 pending 當成「卡住」而
+  // 重新寄送，所以此處的失敗理論上仍可能造成一次重複寄信（機率低：需要
+  // send 成功但這個 UPDATE 恰好失敗，且之後真的有請求在 2 分鐘後重新
+  // 觸發同一筆通知）。這是目前設計已知、刻意接受的殘餘風險，優於「永久
+  // 不重試、信件真的漏寄」。
   try {
     await serviceRole
       .from("notification")

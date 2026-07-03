@@ -57,6 +57,8 @@ type DbState = {
   order: { id: string; total_amount: number } | null;
   throwOnPaymentQuery: boolean;
   orderRaceLost: boolean;
+  ordersUpdateError: boolean;
+  ordersSelectError: boolean;
 };
 const db: DbState = {
   payment: null,
@@ -65,6 +67,8 @@ const db: DbState = {
   order: null,
   throwOnPaymentQuery: false,
   orderRaceLost: false,
+  ordersUpdateError: false,
+  ordersSelectError: false,
 };
 const recorded: { table: string; op: string; values?: unknown }[] = [];
 
@@ -108,22 +112,38 @@ function makeChain(table: string) {
       if (table === "orders") {
         if (chain._op === "update") {
           // ensureOrderPaid 的條件式 UPDATE...WHERE status='pending_payment'：
+          // ordersUpdateError 模擬 Supabase 回傳 { error }（暫時性 DB 故障，
+          // 非網路層失敗，不會 throw）——ensureOrderPaid 必須自己檢查並轉成 throw。
+          if (db.ordersUpdateError) {
+            return Promise.resolve({
+              data: null,
+              error: { message: "simulated update error" },
+            });
+          }
           // orderRaceLost 模擬「這次 UPDATE 送出前，狀態已被別的請求搶先改掉」。
-          if (db.orderRaceLost) return Promise.resolve({ data: null });
+          if (db.orderRaceLost) return Promise.resolve({ data: null, error: null });
           if (db.orderStatus === "pending_payment") {
             db.orderStatus = "paid"; // 模擬 UPDATE 真的把狀態改掉
-            return Promise.resolve({ data: { id: "promoted" } });
+            return Promise.resolve({ data: { id: "promoted" }, error: null });
           }
-          return Promise.resolve({ data: null });
+          return Promise.resolve({ data: null, error: null });
         }
         // select 查詢：fallback 分支的訂單查找 / ensureNotificationSent 的狀態確認
-        if (db.orderStatus === null) return Promise.resolve({ data: null });
+        // ordersSelectError 模擬同上，用於 ensureNotificationSent 的錯誤處理測試。
+        if (db.ordersSelectError) {
+          return Promise.resolve({
+            data: null,
+            error: { message: "simulated select error" },
+          });
+        }
+        if (db.orderStatus === null) return Promise.resolve({ data: null, error: null });
         return Promise.resolve({
           data: {
             id: db.order?.id ?? "o1",
             status: db.orderStatus,
             total_amount: db.order?.total_amount ?? 0,
           },
+          error: null,
         });
       }
       return Promise.resolve({ data: null });
@@ -190,6 +210,8 @@ beforeEach(() => {
   db.order = null;
   db.throwOnPaymentQuery = false;
   db.orderRaceLost = false;
+  db.ordersUpdateError = false;
+  db.ordersSelectError = false;
   sendOrderConfirmation.mockClear();
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
@@ -480,5 +502,40 @@ describe("並發：ensureOrderPaid 沒搶到推進（已被其他並發請求搶
     expect(await res.text()).toBe("1|OK");
     expect(insertsTo("order_status_log")).toHaveLength(0);
     expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ensureOrderPaid / ensureNotificationSent 需檢查 Supabase 的 { error }
+// （ultrareview 第二輪 bug_002：暫時性 DB 錯誤不會 throw，只回傳 { error }，
+// 若不檢查會被誤判為「沒符合更新條件」而靜默跳過，讓 webhook 錯誤回 1|OK）
+// ---------------------------------------------------------------------------
+
+describe("ensureOrderPaid / ensureNotificationSent 的 Supabase 錯誤處理", () => {
+  it("ensureOrderPaid 的條件式 UPDATE 回傳 { error }（非 throw）→ 回 0|Internal Error，不靜默跳過", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.ordersUpdateError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("ensureNotificationSent 的狀態查詢回傳 { error }（非 throw）→ 回 0|Internal Error，不靜默跳過", async () => {
+    // payment 已是 paid（走冪等短路，ensureOrderPaid 因訂單已非 pending_payment
+    // 而安全跳過、不觸發 ordersUpdateError），接著呼叫 ensureNotificationSent
+    // 查詢 orders.status 時遇到 { error }。
+    db.payment = { id: "p1", status: "paid", order_id: "o1", amount: 25000 };
+    db.orderStatus = "paid";
+    db.ordersSelectError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
   });
 });

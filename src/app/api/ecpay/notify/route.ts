@@ -44,7 +44,7 @@ async function ensureOrderPaid(
   // 避免兩個近乎同時抵達的重送請求都各自寫入 order_status_log（該表無 unique 約束）。
   // 訂單若已經是 paid（例如上次執行已推進成功、但通知半路失敗），這裡安全地
   // 不做任何事——推進與寄通知是兩件互不依賴、各自冪等的事，見 ensureNotificationSent。
-  const { data: promoted } = await serviceRole
+  const { data: promoted, error } = await serviceRole
     .from("orders")
     .update({ status: "paid" })
     .eq("id", orderId)
@@ -52,6 +52,10 @@ async function ensureOrderPaid(
     .select("id")
     .maybeSingle();
 
+  // Supabase 對 statement timeout／連線池耗盡等暫時性錯誤不會 throw，只回傳
+  // { error }；若不檢查，會跟「沒符合更新條件」混淆而靜默跳過，害 webhook 回
+  // 1|OK 讓 ECPay 不再重送，訂單就永遠卡在 pending_payment（明明已經付款）。
+  if (error) throw new Error(`ensureOrderPaid failed: ${error.message}`);
   if (!promoted) return;
 
   const { error: logError } = await serviceRole
@@ -75,11 +79,13 @@ async function ensureNotificationSent(
   // 還是先前已經推進但通知沒寄成功，只要訂單現在確實是 paid 就補寄。
   // 只在 paid 才寄，避免對已取消／退款的訂單誤發「訂單確認」信
   // （目前系統尚無取消／退款通知信，故此處不需要導去別的通知）。
-  const { data: order } = await serviceRole
+  const { data: order, error } = await serviceRole
     .from("orders")
     .select("status")
     .eq("id", orderId)
     .maybeSingle();
+
+  if (error) throw new Error(`ensureNotificationSent failed: ${error.message}`);
 
   if (order?.status === "paid") {
     await notifyOrderPaid(serviceRole, orderId);

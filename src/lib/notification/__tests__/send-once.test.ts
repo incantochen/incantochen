@@ -76,6 +76,13 @@ function makeServiceRole() {
                   }
                 }
                 Object.assign(row, values);
+                // 真實 SET 用的欄位是 snake_case created_at；mock 內部用
+                // camelCase createdAt 做門檻比較，這裡同步更新，才能驗證
+                // 「reclaim 會一併推進 created_at，讓第二個並發請求重新檢查
+                // WHERE 條件時落空」這個修法是否生效。
+                if (typeof values.created_at === "string") {
+                  row.createdAt = new Date(values.created_at).getTime();
+                }
                 return Promise.resolve({ data: { id: row.id } });
               },
             }),
@@ -318,6 +325,52 @@ describe("sendOnce", () => {
     });
 
     expect(send).toHaveBeenCalledTimes(1);
+    expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
+  });
+
+  it("並發：兩個請求同時撿同一筆卡住的 pending → 只有一個重寄（ultrareview 第二輪 merged_bug_001 gap 1）", async () => {
+    const sr = makeServiceRole();
+    notifications.set(key("o1", "order_confirmation"), {
+      id: "n0",
+      status: "pending",
+      createdAt: Date.now() - 5 * 60 * 1000, // 5 分鐘前，早已超過 2 分鐘門檻
+    });
+
+    let resolveFirstSend: () => void = () => {};
+    const firstSend = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirstSend = resolve;
+        }),
+    );
+    const secondSend = vi.fn().mockResolvedValue(undefined);
+
+    const firstCall = sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      { orderId: "o1", type: "order_confirmation", send: firstSend },
+    );
+
+    // 讓第一個請求先完成 reclaim（此時已經把 created_at 推進到現在，
+    // 不再早於 stale 門檻），但尚未完成 send()。
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendOnce(sr as any, {
+      orderId: "o1",
+      type: "order_confirmation",
+      send: secondSend,
+    });
+
+    // 第二個請求的 stale-pending 條件應該因為 created_at 已被第一個請求
+    // 推進而不再符合，不會重寄。若沒有這次修法（reclaim 沒有一併更新
+    // created_at），第二個請求會用同一個舊 createdAt 再次判定為卡住而重寄。
+    expect(secondSend).not.toHaveBeenCalled();
+
+    resolveFirstSend();
+    await firstCall;
+
+    expect(firstSend).toHaveBeenCalledTimes(1);
     expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
   });
 
