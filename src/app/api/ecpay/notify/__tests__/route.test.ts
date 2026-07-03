@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { vi, describe, it, expect, beforeEach } from "vitest"
+import { vi, describe, it, expect, beforeEach } from "vitest";
 
-vi.mock("server-only", () => ({}))
+vi.mock("server-only", () => ({}));
 
 // serverEnv：測試用固定金鑰（值任意，簽章計算兩端一致即可）
 vi.mock("@/lib/env.server", () => ({
@@ -17,89 +17,183 @@ vi.mock("@/lib/env.server", () => ({
     RESEND_API_KEY: "test",
     ADMIN_EMAIL: "admin@example.com",
   },
-}))
+}));
 
-const sendOrderConfirmation = vi.fn().mockResolvedValue(undefined)
-const sendNewOrderNotification = vi.fn().mockResolvedValue(undefined)
+const sendOrderConfirmation = vi.fn().mockResolvedValue(undefined);
+const sendNewOrderNotification = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/lib/email/order-confirmation", () => ({
   sendOrderConfirmation: (...args: unknown[]) => sendOrderConfirmation(...args),
-}))
+}));
 vi.mock("@/lib/email/new-order-notification", () => ({
   sendNewOrderNotification: (...args: unknown[]) =>
     sendNewOrderNotification(...args),
-}))
+}));
 
-// service role mock：以「呼叫記錄器」記下所有 update/insert，供斷言副作用
+// sendOnce：T69 的去重/重試邏輯已在 send-once.test.ts 獨立覆蓋，
+// 這裡當依賴邊界整個 mock 掉，pass-through 呼叫 send() 即可，
+// 讓既有的 sendOrderConfirmation/sendNewOrderNotification 斷言不用改。
+const sendOnce = vi.fn(
+  async (_sr: unknown, p: { send: () => Promise<void> }) => {
+    await p.send();
+  },
+);
+vi.mock("@/lib/notification/send-once", () => ({
+  sendOnce: (...args: unknown[]) =>
+    sendOnce(...(args as [unknown, { send: () => Promise<void> }])),
+}));
+
+// service role mock：以「呼叫記錄器」記下所有 update/insert，供斷言副作用。
+// orders 表的 status 用單一事實來源 db.orderStatus 追蹤，並在模擬的條件式
+// UPDATE 命中時真的「改掉」，讓後續 ensureNotificationSent 的查詢讀得到最新狀態。
 type DbState = {
-  payment: { id: string; status: string; order_id: string } | null
-  orderStatus: string | null
-}
-const db: DbState = { payment: null, orderStatus: null }
-const recorded: { table: string; op: string; values?: unknown }[] = []
+  payment: {
+    id: string;
+    status: string;
+    order_id: string;
+    amount: number;
+  } | null;
+  paidPayment: { id: string } | null;
+  orderStatus: string | null;
+  order: { id: string; total_amount: number } | null;
+  throwOnPaymentQuery: boolean;
+  orderRaceLost: boolean;
+  ordersUpdateError: boolean;
+  ordersSelectError: boolean;
+  paymentUpdateError: boolean;
+};
+const db: DbState = {
+  payment: null,
+  paidPayment: null,
+  orderStatus: null,
+  order: null,
+  throwOnPaymentQuery: false,
+  orderRaceLost: false,
+  ordersUpdateError: false,
+  ordersSelectError: false,
+  paymentUpdateError: false,
+};
+const recorded: { table: string; op: string; values?: unknown }[] = [];
 
 function makeServiceRole() {
   return {
     from: (table: string) => makeChain(table),
-  }
+  };
 }
 
 function makeChain(table: string) {
   const chain: any = {
     _op: "select",
-    _values: undefined as unknown,
+    _lastEq: undefined as { col: string; val: unknown } | undefined,
     select: () => chain,
     update: (values: unknown) => {
-      chain._op = "update"
-      chain._values = values
-      recorded.push({ table, op: "update", values })
-      return chain
+      chain._op = "update";
+      recorded.push({ table, op: "update", values });
+      return chain;
     },
     insert: (values: unknown) => {
-      recorded.push({ table, op: "insert", values })
-      return Promise.resolve({ error: null })
+      recorded.push({ table, op: "insert", values });
+      return Promise.resolve({ error: null });
     },
-    eq: () => chain,
-    maybeSingle: () =>
-      Promise.resolve({ data: table === "payment" ? db.payment : null }),
-    single: () =>
-      Promise.resolve({
-        data: table === "orders" ? { status: db.orderStatus } : null,
-      }),
-    then: (resolve: (v: unknown) => void) => resolve({ error: null }),
-  }
-  return chain
+    eq: (col: string, val: unknown) => {
+      chain._lastEq = { col, val };
+      return chain;
+    },
+    maybeSingle: () => {
+      if (table === "payment") {
+        if (db.throwOnPaymentQuery) {
+          throw new Error("simulated DB failure");
+        }
+        // fallback 分支的 paidPayment 冪等查詢：.eq("order_id",x).eq("status","paid")，
+        // 跟外層用 merchant_trade_no 查 payment 是同一張表、不同查詢，靠最後一次
+        // eq 的欄位/值分辨。
+        if (chain._lastEq?.col === "status" && chain._lastEq?.val === "paid") {
+          return Promise.resolve({ data: db.paidPayment });
+        }
+        return Promise.resolve({ data: db.payment });
+      }
+      if (table === "orders") {
+        if (chain._op === "update") {
+          // ensureOrderPaid 的條件式 UPDATE...WHERE status='pending_payment'：
+          // ordersUpdateError 模擬 Supabase 回傳 { error }（暫時性 DB 故障，
+          // 非網路層失敗，不會 throw）——ensureOrderPaid 必須自己檢查並轉成 throw。
+          if (db.ordersUpdateError) {
+            return Promise.resolve({
+              data: null,
+              error: { message: "simulated update error" },
+            });
+          }
+          // orderRaceLost 模擬「這次 UPDATE 送出前，狀態已被別的請求搶先改掉」。
+          if (db.orderRaceLost) return Promise.resolve({ data: null, error: null });
+          if (db.orderStatus === "pending_payment") {
+            db.orderStatus = "paid"; // 模擬 UPDATE 真的把狀態改掉
+            return Promise.resolve({ data: { id: "promoted" }, error: null });
+          }
+          return Promise.resolve({ data: null, error: null });
+        }
+        // select 查詢：fallback 分支的訂單查找 / ensureNotificationSent 的狀態確認
+        // ordersSelectError 模擬同上，用於 ensureNotificationSent 的錯誤處理測試。
+        if (db.ordersSelectError) {
+          return Promise.resolve({
+            data: null,
+            error: { message: "simulated select error" },
+          });
+        }
+        if (db.orderStatus === null) return Promise.resolve({ data: null, error: null });
+        return Promise.resolve({
+          data: {
+            id: db.order?.id ?? "o1",
+            status: db.orderStatus,
+            total_amount: db.order?.total_amount ?? 0,
+          },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null });
+    },
+    then: (resolve: (v: unknown) => void) => {
+      // bug_001：正常路徑的 payment UPDATE（非 select/maybeSingle，走 then）
+      // 也要能模擬 { error }，驗證它跟 ensureOrderPaid 一樣有檢查。
+      if (table === "payment" && chain._op === "update" && db.paymentUpdateError) {
+        resolve({ error: { message: "simulated payment update error" } });
+        return;
+      }
+      resolve({ error: null });
+    },
+  };
+  return chain;
 }
 
 vi.mock("@/lib/supabase/service-role", () => ({
   createServiceRoleClient: () => makeServiceRole(),
-}))
+}));
 
-import { POST } from "../route"
-import { generateCheckMacValue } from "@/lib/ecpay/check-mac-value"
+import { POST } from "../route";
+import { generateCheckMacValue } from "@/lib/ecpay/check-mac-value";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const HASH_KEY = "test-hash-key"
-const HASH_IV = "test-hash-iv"
+const HASH_KEY = "test-hash-key";
+const HASH_IV = "test-hash-iv";
 
 function buildRequest(
   params: Record<string, string>,
   opts: { sign?: boolean } = { sign: true },
 ): Request {
-  const body = { ...params }
+  const body = { ...params };
   if (opts.sign !== false) {
-    body.CheckMacValue = generateCheckMacValue(body, HASH_KEY, HASH_IV)
+    body.CheckMacValue = generateCheckMacValue(body, HASH_KEY, HASH_IV);
   } else {
-    body.CheckMacValue = "0000000000000000000000000000000000000000000000000000000000000000"
+    body.CheckMacValue =
+      "0000000000000000000000000000000000000000000000000000000000000000";
   }
-  const form = new URLSearchParams(body)
+  const form = new URLSearchParams(body);
   return new Request("http://localhost/api/ecpay/notify", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: form.toString(),
-  })
+  });
 }
 
 const BASE_PARAMS = {
@@ -109,22 +203,30 @@ const BASE_PARAMS = {
   TradeAmt: "25000",
   RtnCode: "1",
   RtnMsg: "交易成功",
-}
+};
 
 function updatesTo(table: string) {
-  return recorded.filter((r) => r.table === table && r.op === "update")
+  return recorded.filter((r) => r.table === table && r.op === "update");
 }
 function insertsTo(table: string) {
-  return recorded.filter((r) => r.table === table && r.op === "insert")
+  return recorded.filter((r) => r.table === table && r.op === "insert");
 }
 
 beforeEach(() => {
-  recorded.length = 0
-  db.payment = null
-  db.orderStatus = null
-  sendOrderConfirmation.mockClear()
-  sendNewOrderNotification.mockClear()
-})
+  recorded.length = 0;
+  db.payment = null;
+  db.paidPayment = null;
+  db.orderStatus = null;
+  db.order = null;
+  db.throwOnPaymentQuery = false;
+  db.orderRaceLost = false;
+  db.ordersUpdateError = false;
+  db.ordersSelectError = false;
+  db.paymentUpdateError = false;
+  sendOrderConfirmation.mockClear();
+  sendNewOrderNotification.mockClear();
+  sendOnce.mockClear();
+});
 
 // ---------------------------------------------------------------------------
 // 驗章（安全關卡）
@@ -132,20 +234,20 @@ beforeEach(() => {
 
 describe("CheckMacValue 驗章", () => {
   it("簽章錯誤 → 回 0|CheckMacValue Error、不觸碰 DB、不寄信", async () => {
-    db.payment = { id: "p1", status: "pending", order_id: "o1" }
-    const res = await POST(buildRequest(BASE_PARAMS, { sign: false }))
-    expect(await res.text()).toBe("0|CheckMacValue Error")
-    expect(recorded).toHaveLength(0)
-    expect(sendOrderConfirmation).not.toHaveBeenCalled()
-  })
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    const res = await POST(buildRequest(BASE_PARAMS, { sign: false }));
+    expect(await res.text()).toBe("0|CheckMacValue Error");
+    expect(recorded).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
 
   it("缺 MerchantTradeNo → 回 0|MerchantTradeNo missing", async () => {
-    const rest = { ...BASE_PARAMS } as Partial<typeof BASE_PARAMS>
-    delete rest.MerchantTradeNo
-    const res = await POST(buildRequest(rest as Record<string, string>))
-    expect(await res.text()).toBe("0|MerchantTradeNo missing")
-  })
-})
+    const rest = { ...BASE_PARAMS } as Partial<typeof BASE_PARAMS>;
+    delete rest.MerchantTradeNo;
+    const res = await POST(buildRequest(rest as Record<string, string>));
+    expect(await res.text()).toBe("0|MerchantTradeNo missing");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // 付款成功路徑（payment row 已由 pay page 預建）
@@ -153,50 +255,94 @@ describe("CheckMacValue 驗章", () => {
 
 describe("RtnCode=1 且 payment=pending", () => {
   it("payment 更新為 paid、orders pending_payment→paid、寫 status log、寄兩封信、回 1|OK", async () => {
-    db.payment = { id: "p1", status: "pending", order_id: "o1" }
-    db.orderStatus = "pending_payment"
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
 
-    const res = await POST(buildRequest(BASE_PARAMS))
+    const res = await POST(buildRequest(BASE_PARAMS));
 
-    expect(await res.text()).toBe("1|OK")
-    const paymentUpdate = updatesTo("payment")[0]?.values as any
-    expect(paymentUpdate.status).toBe("paid")
-    expect(paymentUpdate.gateway_trade_no).toBe(BASE_PARAMS.TradeNo)
-    const orderUpdate = updatesTo("orders")[0]?.values as any
-    expect(orderUpdate.status).toBe("paid")
-    expect(insertsTo("order_status_log")).toHaveLength(1)
-    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1")
-    expect(sendNewOrderNotification).toHaveBeenCalledWith("o1")
-  })
+    expect(await res.text()).toBe("1|OK");
+    const paymentUpdate = updatesTo("payment")[0]?.values as any;
+    expect(paymentUpdate.status).toBe("paid");
+    expect(paymentUpdate.gateway_trade_no).toBe(BASE_PARAMS.TradeNo);
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+    expect(insertsTo("order_status_log")).toHaveLength(1);
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+    expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
+  });
 
-  it("訂單已非 pending_payment（狀態守衛）→ 不再推進訂單狀態、不寄信，仍回 1|OK", async () => {
-    db.payment = { id: "p1", status: "pending", order_id: "o1" }
-    db.orderStatus = "cancelled"
+  it("訂單已非 pending_payment（狀態守衛）→ 不寫 status log、不寄信，仍回 1|OK", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "cancelled";
 
-    const res = await POST(buildRequest(BASE_PARAMS))
+    const res = await POST(buildRequest(BASE_PARAMS));
 
-    expect(await res.text()).toBe("1|OK")
-    expect(updatesTo("orders")).toHaveLength(0)
-    expect(sendOrderConfirmation).not.toHaveBeenCalled()
-  })
-})
+    expect(await res.text()).toBe("1|OK");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+});
 
 // ---------------------------------------------------------------------------
-// 冪等（T53）
+// 冪等（T53）與自我修復（T68 review round 3：ensureOrderPaid / ensureNotificationSent）
 // ---------------------------------------------------------------------------
 
 describe("冪等：payment 已是 paid", () => {
-  it("重送同一通知 → 直接 1|OK、零副作用（不更新、不寄信）", async () => {
-    db.payment = { id: "p1", status: "paid", order_id: "o1" }
+  it("orders 也已經是 paid（完全做完）→ 不重複寫 log，但仍確保通知已寄出", async () => {
+    db.payment = { id: "p1", status: "paid", order_id: "o1", amount: 25000 };
+    db.orderStatus = "paid";
 
-    const res = await POST(buildRequest(BASE_PARAMS))
+    const res = await POST(buildRequest(BASE_PARAMS));
 
-    expect(await res.text()).toBe("1|OK")
-    expect(recorded).toHaveLength(0)
-    expect(sendOrderConfirmation).not.toHaveBeenCalled()
-    expect(sendNewOrderNotification).not.toHaveBeenCalled()
-  })
-})
+    expect(await res.text()).toBe("1|OK");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+    expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
+  });
+
+  it("orders 還沒有任何紀錄（極端情況）→ 不寄信", async () => {
+    db.payment = { id: "p1", status: "paid", order_id: "o1", amount: 25000 };
+    // db.orderStatus 維持 null：模擬查無此訂單的極端情況
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
+  });
+
+  it("orders 還卡在 pending_payment（上次執行半路失敗）→ 補做推進與通知，不再默默 no-op", async () => {
+    db.payment = { id: "p1", status: "paid", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+    expect(insertsTo("order_status_log")).toHaveLength(1);
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+    expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
+  });
+});
+
+describe("冪等：fallback 路徑，已有其他 paid payment", () => {
+  it("orders 還卡在 pending_payment（上次執行半路失敗）→ 補做推進與通知", async () => {
+    db.payment = null; // 這個 merchant_trade_no 對應不到既有 payment row
+    db.paidPayment = { id: "p-other" }; // 但這張訂單已經有「別的」payment row 是 paid
+    db.order = { id: "o1", total_amount: 25000 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+    expect(insertsTo("order_status_log")).toHaveLength(1);
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+    expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // 付款失敗路徑
@@ -204,18 +350,217 @@ describe("冪等：payment 已是 paid", () => {
 
 describe("RtnCode≠1（付款失敗）", () => {
   it("payment 更新為 failed、訂單狀態不動、不寄信、回 1|OK", async () => {
-    db.payment = { id: "p1", status: "pending", order_id: "o1" }
-    db.orderStatus = "pending_payment"
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
 
     const res = await POST(
       buildRequest({ ...BASE_PARAMS, RtnCode: "10100252", RtnMsg: "拒絕交易" }),
-    )
+    );
 
-    expect(await res.text()).toBe("1|OK")
-    const paymentUpdate = updatesTo("payment")[0]?.values as any
-    expect(paymentUpdate.status).toBe("failed")
-    expect(paymentUpdate.paid_at).toBeNull()
-    expect(updatesTo("orders")).toHaveLength(0)
-    expect(sendOrderConfirmation).not.toHaveBeenCalled()
-  })
-})
+    expect(await res.text()).toBe("1|OK");
+    const paymentUpdate = updatesTo("payment")[0]?.values as any;
+    expect(paymentUpdate.status).toBe("failed");
+    expect(paymentUpdate.paid_at).toBeNull();
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 外層 catch-all（T68）
+// ---------------------------------------------------------------------------
+
+describe("未預期例外", () => {
+  it("DB 查詢丟例外 → 回 0|Internal Error（觸發 ECPay 重送），不再默默回 1|OK", async () => {
+    db.throwOnPaymentQuery = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 金額核對（T68）
+// ---------------------------------------------------------------------------
+
+describe("金額核對", () => {
+  it("正常路徑：TradeAmt 與 payment.amount 不符 → 回 ERR、不更新、不寄信", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 30000 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(updatesTo("payment")).toHaveLength(0);
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
+  });
+
+  it("fallback 路徑：TradeAmt 與 order.total_amount 不符 → 回 ERR、不建立 payment、不寄信", async () => {
+    db.payment = null;
+    db.order = { id: "o1", total_amount: 99999 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(insertsTo("payment")).toHaveLength(0);
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("fallback 路徑：金額相符 → 正常補建 payment、標記 paid、寄兩封信", async () => {
+    db.payment = null;
+    db.order = { id: "o1", total_amount: 25000 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const paymentInsert = insertsTo("payment")[0]?.values as any;
+    expect(paymentInsert.status).toBe("paid");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+    expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// numeric 欄位以字串型別回傳時仍需正確比對（PostgREST numeric-as-string 防線）
+// ---------------------------------------------------------------------------
+
+describe("金額核對：numeric 欄位為字串型別", () => {
+  it('正常路徑：payment.amount 為字串 "25000" 且與 TradeAmt 相符 → 仍標記 paid、寄信', async () => {
+    db.payment = {
+      id: "p1",
+      status: "pending",
+      order_id: "o1",
+      amount: "25000" as unknown as number,
+    };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const paymentUpdate = updatesTo("payment")[0]?.values as any;
+    expect(paymentUpdate.status).toBe("paid");
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+
+  it('fallback 路徑：order.total_amount 為字串 "25000" 且與 TradeAmt 相符 → 仍標記 paid、寄信', async () => {
+    db.payment = null;
+    db.order = {
+      id: "o1",
+      total_amount: "25000" as unknown as number,
+    };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TradeAmt 格式異常（NaN 防呆）
+// ---------------------------------------------------------------------------
+
+describe("金額核對：TradeAmt 格式異常", () => {
+  it("TradeAmt 為空字串 → parseInt 得到 NaN，明確擋下、不誤判為金額相符", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(updatesTo("payment")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 並發保護：ensureOrderPaid 的條件式 UPDATE（T68 review round 2/3）
+// ---------------------------------------------------------------------------
+
+describe("並發：ensureOrderPaid 沒搶到推進（已被其他並發請求搶先完成）", () => {
+  it("正常路徑：沒搶到推進 → 不重複寫 log，但仍確保通知已寄出", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "paid"; // 模擬已經被另一個並發請求搶先推進成 paid
+    db.orderRaceLost = true; // 這次的條件式 UPDATE 因此搶不到
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+    expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
+  });
+
+  it("fallback 路徑：同上情境", async () => {
+    db.payment = null;
+    db.order = { id: "o1", total_amount: 25000 };
+    db.orderStatus = "paid";
+    db.orderRaceLost = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ensureOrderPaid / ensureNotificationSent 需檢查 Supabase 的 { error }
+// （ultrareview 第二輪 bug_002：暫時性 DB 錯誤不會 throw，只回傳 { error }，
+// 若不檢查會被誤判為「沒符合更新條件」而靜默跳過，讓 webhook 錯誤回 1|OK）
+// ---------------------------------------------------------------------------
+
+describe("ensureOrderPaid / ensureNotificationSent 的 Supabase 錯誤處理", () => {
+  it("ensureOrderPaid 的條件式 UPDATE 回傳 { error }（非 throw）→ 回 0|Internal Error，不靜默跳過", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.ordersUpdateError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("ensureNotificationSent 的狀態查詢回傳 { error }（非 throw）→ 回 0|Internal Error，不靜默跳過", async () => {
+    // payment 已是 paid（走冪等短路，ensureOrderPaid 因訂單已非 pending_payment
+    // 而安全跳過、不觸發 ordersUpdateError），接著呼叫 ensureNotificationSent
+    // 查詢 orders.status 時遇到 { error }。
+    db.payment = { id: "p1", status: "paid", order_id: "o1", amount: 25000 };
+    db.orderStatus = "paid";
+    db.ordersSelectError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
+  });
+
+  it("正常路徑的 payment UPDATE 回傳 { error }（非 throw）→ 回 0|Internal Error，不繼續推進訂單／寄信（ultrareview 第三輪 bug_001）", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.paymentUpdateError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
+  });
+});
