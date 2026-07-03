@@ -59,6 +59,7 @@ type DbState = {
   orderRaceLost: boolean;
   ordersUpdateError: boolean;
   ordersSelectError: boolean;
+  paymentUpdateError: boolean;
 };
 const db: DbState = {
   payment: null,
@@ -69,6 +70,7 @@ const db: DbState = {
   orderRaceLost: false,
   ordersUpdateError: false,
   ordersSelectError: false,
+  paymentUpdateError: false,
 };
 const recorded: { table: string; op: string; values?: unknown }[] = [];
 
@@ -148,7 +150,15 @@ function makeChain(table: string) {
       }
       return Promise.resolve({ data: null });
     },
-    then: (resolve: (v: unknown) => void) => resolve({ error: null }),
+    then: (resolve: (v: unknown) => void) => {
+      // bug_001：正常路徑的 payment UPDATE（非 select/maybeSingle，走 then）
+      // 也要能模擬 { error }，驗證它跟 ensureOrderPaid 一樣有檢查。
+      if (table === "payment" && chain._op === "update" && db.paymentUpdateError) {
+        resolve({ error: { message: "simulated payment update error" } });
+        return;
+      }
+      resolve({ error: null });
+    },
   };
   return chain;
 }
@@ -212,6 +222,7 @@ beforeEach(() => {
   db.orderRaceLost = false;
   db.ordersUpdateError = false;
   db.ordersSelectError = false;
+  db.paymentUpdateError = false;
   sendOrderConfirmation.mockClear();
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
@@ -535,6 +546,20 @@ describe("ensureOrderPaid / ensureNotificationSent 的 Supabase 錯誤處理", (
     const res = await POST(buildRequest(BASE_PARAMS));
 
     expect(await res.text()).toBe("0|Internal Error");
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
+  });
+
+  it("正常路徑的 payment UPDATE 回傳 { error }（非 throw）→ 回 0|Internal Error，不繼續推進訂單／寄信（ultrareview 第三輪 bug_001）", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.paymentUpdateError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(insertsTo("order_status_log")).toHaveLength(0);
     expect(sendOrderConfirmation).not.toHaveBeenCalled();
     expect(sendNewOrderNotification).not.toHaveBeenCalled();
   });

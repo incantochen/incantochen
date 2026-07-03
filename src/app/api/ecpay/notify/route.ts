@@ -216,7 +216,11 @@ export async function POST(request: Request) {
     }
 
     // UPDATE 既有 payment 記錄（非 INSERT，無 unique constraint 衝突風險）
-    await serviceRole
+    // 檢查 error 原因同 ensureOrderPaid：暫時性 DB 錯誤不會 throw，只回傳
+    // { error }；若不檢查，orders 可能已推進成 paid、信也寄了，但 payment
+    // 卻永遠卡在 pending（gateway_trade_no/paid_at/raw_callback 全是
+    // null），日後退款、對帳都查無 ECPay 交易號，且無法再被自動修正。
+    const { error: paymentUpdateError } = await serviceRole
       .from("payment")
       .update({
         status: isPaid ? "paid" : "failed",
@@ -226,6 +230,10 @@ export async function POST(request: Request) {
       })
       .eq("id", payment.id)
       .eq("status", "pending"); // 只從 pending 往前推，防競態覆寫
+
+    if (paymentUpdateError) {
+      throw new Error(`payment update failed: ${paymentUpdateError.message}`);
+    }
 
     // 訂單推進與通知寄送各自冪等，ensureOrderPaid 內部會重新確認目前狀態
     // 才決定是否真的要推進，不需要在這裡先查一次 orders.status。
