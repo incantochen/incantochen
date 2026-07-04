@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { logPiiAccess } from "@/lib/pii/audit";
+import { sendOrderShippedNotification } from "@/lib/email/order-shipped-notification";
 import {
   transitionOrder,
   adminOverrideStatus,
@@ -37,6 +38,14 @@ export async function shipOrder(orderId: string, trackingNo: string) {
     actorId: user.id,
     note: `出貨：${trackingNo}`,
   });
+
+  // 出貨這件事本身已經成功寫入 DB，寄信只是 best-effort 通知：
+  // 刻意 await（serverless 禁 fire-and-forget）＋吞錯，失敗不擋出貨操作。
+  try {
+    await sendOrderShippedNotification(orderId);
+  } catch {
+    // no-op
+  }
 
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
