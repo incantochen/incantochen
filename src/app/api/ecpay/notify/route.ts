@@ -220,6 +220,10 @@ export async function POST(request: Request) {
     const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
     if (isPaid && !Number.isFinite(tradeAmt)) {
       console.error("[ecpay/notify] TradeAmt 格式異常", params.TradeAmt);
+      Sentry.captureMessage("[ecpay/notify] TradeAmt 格式異常", {
+        level: "error",
+        extra: { tradeAmt: params.TradeAmt },
+      });
       return ERR("Amount mismatch");
     }
     if (isPaid && tradeAmt !== Number(payment.amount)) {
