@@ -94,13 +94,20 @@ export async function sendOrderShippedNotification(
   const resend = new Resend(serverEnv.RESEND_API_KEY)
   const serviceRole = createServiceRoleClient()
 
-  const { data: order } = await serviceRole
+  const { data: order, error: queryError } = await serviceRole
     .from("orders")
     .select("order_no, recipient_name, tracking_no, member:member_id(email)")
     .eq("id", orderId)
     .single()
 
-  if (!order) return
+  // PGRST116＝查無此列（理論上不會發生，orderId 來自已建立的訂單）：視為
+  // 沒東西可寄，安靜跳過。其餘錯誤（timeout／連線池耗盡等）代表「查詢失敗」，
+  // 若不分辨會被誤判成「訂單不存在」而靜默略過，必須 throw 讓 sendOnce 標記
+  // failed 以利之後重試（見 CLAUDE.md §6 防禦性寫法通則）。
+  if (queryError) {
+    if (queryError.code === "PGRST116") return
+    throw new Error(`sendOrderShippedNotification query failed: ${queryError.message}`)
+  }
   if (!order.tracking_no) return
 
   const memberData = order.member
