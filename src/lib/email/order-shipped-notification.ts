@@ -7,6 +7,10 @@ import { escapeHtml } from "@/lib/email/escape-html"
 // TODO(T35): switch to verified custom domain (e.g. orders@incantochen.com) before go-live
 const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
 
+// order-actions.tsx 的 handleShip 約定：面交時 tracking_no 存 `面交${pickupNote ? " "+pickupNote : ""}`，
+// 沒有獨立的出貨方式欄位可查，只能從這個既定字串格式判斷——與該處寫法必須保持一致。
+const PICKUP_PREFIX = "面交"
+
 function buildEmailHtml(params: {
   orderNo: string
   recipientName: string
@@ -15,7 +19,29 @@ function buildEmailHtml(params: {
 }): string {
   const { orderNo, recipientName, trackingNo, loginUrl } = params
   const safeRecipientName = escapeHtml(recipientName)
+
+  const isPickup = trackingNo.trim().startsWith(PICKUP_PREFIX)
+  const pickupNote = trackingNo.trim().slice(PICKUP_PREFIX.length).trim()
   const safeTrackingNo = escapeHtml(trackingNo)
+  const safePickupNote = escapeHtml(pickupNote)
+
+  const bodyText = isPickup
+    ? "您訂購的商品已準備完成，我們將盡快與您聯繫安排面交時間與地點。"
+    : "您訂購的商品已交由物流出貨，請留意簽收。"
+
+  const trackingSection = isPickup
+    ? pickupNote
+      ? `
+              <div style="background:#f9f7f4;border-radius:4px;padding:16px 20px;margin-bottom:32px;">
+                <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">面交備註</div>
+                <div style="font-size:15px;color:#374151;">${safePickupNote}</div>
+              </div>`
+      : ""
+    : `
+              <div style="background:#f9f7f4;border-radius:4px;padding:16px 20px;margin-bottom:32px;">
+                <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">物流單號</div>
+                <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${safeTrackingNo}</div>
+              </div>`
 
   return `<!DOCTYPE html>
 <html lang="zh-TW">
@@ -41,10 +67,10 @@ function buildEmailHtml(params: {
           <tr>
             <td style="padding:40px 40px 32px;">
 
-              <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#c9a84c;">已出貨</p>
-              <h1 style="margin:0 0 20px;font-size:22px;font-weight:400;color:#111;line-height:1.3;">您的訂單已寄出，${safeRecipientName}</h1>
+              <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#c9a84c;">${isPickup ? "可安排面交" : "已出貨"}</p>
+              <h1 style="margin:0 0 20px;font-size:22px;font-weight:400;color:#111;line-height:1.3;">${isPickup ? `您的訂單已可安排面交，${safeRecipientName}` : `您的訂單已寄出，${safeRecipientName}`}</h1>
               <p style="margin:0 0 32px;font-size:15px;color:#6b7280;line-height:1.6;">
-                您訂購的商品已交由物流出貨，請留意簽收。
+                ${bodyText}
               </p>
 
               <!-- Order number -->
@@ -52,13 +78,7 @@ function buildEmailHtml(params: {
                 <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">訂單號碼</div>
                 <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${orderNo}</div>
               </div>
-
-              <!-- Tracking number -->
-              <div style="background:#f9f7f4;border-radius:4px;padding:16px 20px;margin-bottom:32px;">
-                <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">物流單號</div>
-                <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${safeTrackingNo}</div>
-              </div>
-
+${trackingSection}
               <!-- CTA -->
               <div style="text-align:center;margin-bottom:8px;">
                 <a href="${loginUrl}"
@@ -118,10 +138,15 @@ export async function sendOrderShippedNotification(
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`
 
+  const isPickup = order.tracking_no.trim().startsWith(PICKUP_PREFIX)
+  const subject = isPickup
+    ? `您的訂單已可安排面交 — 訂單 ${order.order_no}`
+    : `您的訂單已出貨 — 訂單 ${order.order_no}`
+
   const { error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: email,
-    subject: `您的訂單已出貨 — 訂單 ${order.order_no}`,
+    subject,
     html: buildEmailHtml({
       orderNo: order.order_no,
       recipientName: order.recipient_name,
