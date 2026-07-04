@@ -1,4 +1,5 @@
 import "server-only";
+import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
 import type { createServiceRoleClient } from "@/lib/supabase/service-role";
 
@@ -26,6 +27,7 @@ export async function sendOnce(
     await sendOnceInner(serviceRole, params);
   } catch (e) {
     console.error("[notification] sendOnce 發生未預期例外", params.type, e);
+    Sentry.captureException(e, { extra: { orderId: params.orderId, type: params.type } });
   }
 }
 
@@ -127,6 +129,7 @@ async function attemptSend(
     await send();
   } catch (e) {
     console.error("[notification] send failed", e);
+    Sentry.captureException(e, { extra: { notificationId } });
     await serviceRole
       .from("notification")
       .update({ status: "failed" })

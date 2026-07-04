@@ -1,4 +1,5 @@
 import "server-only";
+import * as Sentry from "@sentry/nextjs";
 import { verifyCheckMacValue } from "@/lib/ecpay/check-mac-value";
 import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
@@ -68,7 +69,13 @@ async function ensureOrderPaid(
       actor_id: null,
       is_override: false,
     });
-  if (logError) console.error("[order_status_log] insert failed", logError);
+  if (logError) {
+    console.error("[order_status_log] insert failed", logError);
+    Sentry.captureMessage("[order_status_log] insert failed", {
+      level: "error",
+      extra: { orderId, logError },
+    });
+  }
 }
 
 async function ensureNotificationSent(
@@ -159,6 +166,10 @@ export async function POST(request: Request) {
       const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
       if (isPaid && !Number.isFinite(tradeAmt)) {
         console.error("[ecpay/notify] TradeAmt 格式異常", params.TradeAmt);
+        Sentry.captureMessage("[ecpay/notify] TradeAmt 格式異常", {
+          level: "error",
+          extra: { tradeAmt: params.TradeAmt },
+        });
         return ERR("Amount mismatch");
       }
       if (isPaid && tradeAmt !== Number(order.total_amount)) {
@@ -209,6 +220,10 @@ export async function POST(request: Request) {
     const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
     if (isPaid && !Number.isFinite(tradeAmt)) {
       console.error("[ecpay/notify] TradeAmt 格式異常", params.TradeAmt);
+      Sentry.captureMessage("[ecpay/notify] TradeAmt 格式異常", {
+        level: "error",
+        extra: { tradeAmt: params.TradeAmt },
+      });
       return ERR("Amount mismatch");
     }
     if (isPaid && tradeAmt !== Number(payment.amount)) {
@@ -245,6 +260,7 @@ export async function POST(request: Request) {
     return OK();
   } catch (e) {
     console.error("[ecpay/notify] unhandled error", e);
+    Sentry.captureException(e);
     return ERR("Internal Error");
   }
 }
