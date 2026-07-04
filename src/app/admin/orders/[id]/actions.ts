@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { logPiiAccess } from "@/lib/pii/audit";
+import { sendOrderShippedNotification } from "@/lib/email/order-shipped-notification";
+import { sendOnce } from "@/lib/notification/send-once";
 import {
   transitionOrder,
   adminOverrideStatus,
@@ -36,6 +38,15 @@ export async function shipOrder(orderId: string, trackingNo: string) {
   await transitionOrder(orderId, "shipped", {
     actorId: user.id,
     note: `出貨：${trackingNo}`,
+  });
+
+  // 出貨這件事本身已經成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證
+  // 絕不往外拋例外（不擋出貨操作），且用 notification(order_id, type) 的
+  // unique 約束去重——雙擊出貨按鈕或未來 T92 修復前的併發轉換都不會重複寄信。
+  await sendOnce(supabase, {
+    orderId,
+    type: "order_shipped",
+    send: () => sendOrderShippedNotification(orderId),
   });
 
   revalidatePath(`/admin/orders/${orderId}`);
