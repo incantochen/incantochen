@@ -8,10 +8,20 @@ import { serverEnv } from "@/lib/env.server";
 // ECPay 官方 ECPay-API-Skill 文件（docs/prompt-examples.md）確認：QueryTradeInfo/V5
 // 與 AioCheckOut/V5 同網域，故由既有 ECPAY_PAYMENT_URL 推導，不新增 env var。
 function buildQueryTradeInfoUrl(): string {
-  return serverEnv.ECPAY_PAYMENT_URL.replace(
+  const url = serverEnv.ECPAY_PAYMENT_URL.replace(
     "/Cashier/AioCheckOut/V5",
     "/Cashier/QueryTradeInfo/V5",
   );
+  // String.replace 在找不到子字串時會原樣傳回輸入——若 ECPAY_PAYMENT_URL 格式
+  // 跟預期不符（如缺這段路徑），絕不能讓它悄悄把 QueryTradeInfo 參數送去
+  // AioCheckOut 端點，那樣的失敗只會被誤判成「CheckMacValue 驗證失敗」，
+  // 掩蓋真正的設定錯誤。
+  if (url === serverEnv.ECPAY_PAYMENT_URL) {
+    throw new Error(
+      "無法從 ECPAY_PAYMENT_URL 推導 QueryTradeInfo 端點：找不到 /Cashier/AioCheckOut/V5 子字串",
+    );
+  }
+  return url;
 }
 
 export class RateLimitError extends Error {

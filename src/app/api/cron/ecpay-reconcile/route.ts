@@ -17,6 +17,26 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function markReconciled(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  paymentId: string,
+) {
+  const { error } = await serviceRole
+    .from("payment")
+    .update({ last_reconciled_at: new Date().toISOString() })
+    .eq("id", paymentId);
+
+  // 跟其他 Supabase 呼叫一樣必須檢查 { error }：漏檢查的話，這筆的
+  // 24 小時對帳冷卻紀錄悄悄沒寫入，隔天同一筆又會被撈出來重新告警。
+  if (error) {
+    console.error("[ecpay-reconcile] last_reconciled_at update failed", error);
+    Sentry.captureMessage("reconcile: last_reconciled_at update failed", {
+      level: "error",
+      extra: { paymentId, error: error.message },
+    });
+  }
+}
+
 type Summary = {
   checked: number;
   promoted: number;
@@ -71,7 +91,10 @@ export async function GET(request: Request) {
           summary.rateLimited = true;
           Sentry.captureMessage("reconcile: rate limited, aborting batch", {
             level: "warning",
-            extra: { merchantTradeNo: payment.merchant_trade_no },
+            extra: {
+              merchantTradeNo: payment.merchant_trade_no,
+              error: e.message,
+            },
           });
           break;
         }
@@ -81,18 +104,15 @@ export async function GET(request: Request) {
         Sentry.captureException(e, {
           extra: { merchantTradeNo: payment.merchant_trade_no },
         });
-        await serviceRole
-          .from("payment")
-          .update({ last_reconciled_at: new Date().toISOString() })
-          .eq("id", payment.id);
+        await markReconciled(serviceRole, payment.id);
+        // 節流不能因為這筆失敗就跳過——連續幾筆壞資料若零間隔連續打
+        // ECPay，正是節流機制原本要防止的情況。
+        await sleep(THROTTLE_MS);
         continue;
       }
 
       // 不論後續分支結果如何，先記錄查過的時間，避免同一筆 24 小時內被重複告警。
-      await serviceRole
-        .from("payment")
-        .update({ last_reconciled_at: new Date().toISOString() })
-        .eq("id", payment.id);
+      await markReconciled(serviceRole, payment.id);
 
       if (result.tradeStatus === "1") {
         // Number.isFinite 防呆：TradeAmt 格式異常時絕不可誤判為金額相符
@@ -107,7 +127,12 @@ export async function GET(request: Request) {
             },
           });
         } else if (Number(result.tradeAmt) === Number(payment.amount)) {
-          const { error: updateError } = await serviceRole
+          // .select().maybeSingle() 取得是否真的搶到這次 CAS：webhook 可能在
+          // candidate 查詢之後、這個 UPDATE 之前就先推進成功，此時 0 rows
+          // affected 但 Supabase 不會回傳 error——若不檢查就會把「webhook 其實
+          // 正常運作」誤報成「對帳搶救了卡住的訂單」，污染 T88 要追蹤的
+          // webhook 可靠度訊號。
+          const { data: promotedRow, error: updateError } = await serviceRole
             .from("payment")
             .update({
               status: "paid",
@@ -116,7 +141,9 @@ export async function GET(request: Request) {
               raw_callback: result.raw,
             })
             .eq("id", payment.id)
-            .eq("status", "pending"); // CAS guard：防與 webhook 競態
+            .eq("status", "pending") // CAS guard：防與 webhook 競態
+            .select("id")
+            .maybeSingle();
 
           if (updateError) {
             summary.unexpected += 1;
@@ -124,19 +151,23 @@ export async function GET(request: Request) {
               extra: { merchantTradeNo: payment.merchant_trade_no },
             });
           } else {
+            // ensureOrderPaid/ensureNotificationSent 各自冪等，即使這次沒搶到
+            // CAS（webhook 已經處理過）呼叫也安全，用來補做可能半路失敗的通知。
             await ensureOrderPaid(serviceRole, payment.order_id, "reconcile");
             await ensureNotificationSent(serviceRole, payment.order_id);
 
-            summary.promoted += 1;
-            // 對帳路徑修正了訂單＝webhook 那條路徑當初失敗過；即使結果正確，
-            // 也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
-            Sentry.captureMessage("reconcile: promoted stuck payment", {
-              level: "warning",
-              extra: {
-                orderId: payment.order_id,
-                merchantTradeNo: payment.merchant_trade_no,
-              },
-            });
+            if (promotedRow) {
+              summary.promoted += 1;
+              // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
+              // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
+              Sentry.captureMessage("reconcile: promoted stuck payment", {
+                level: "warning",
+                extra: {
+                  orderId: payment.order_id,
+                  merchantTradeNo: payment.merchant_trade_no,
+                },
+              });
+            }
           }
         } else {
           // 金額不符：只告警，絕不自動改狀態——對帳的自動修正權限收斂到

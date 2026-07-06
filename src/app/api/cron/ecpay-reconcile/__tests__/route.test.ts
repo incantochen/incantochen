@@ -52,6 +52,12 @@ type PaymentRow = {
 
 let candidates: PaymentRow[] = [];
 let recorded: { filters: Record<string, unknown>; values: unknown }[] = [];
+// 模擬「webhook 先搶到 CAS」：promote 的 UPDATE...WHERE status='pending' 命中
+// 0 rows，但 Supabase 不會回傳 error，只有 .select().maybeSingle() 的 data
+// 會是 null。
+let casLossIds = new Set<string>();
+// 模擬 last_reconciled_at 那支 UPDATE 回傳 { error }（暫時性 DB 故障）。
+let lastReconciledError: string | null = null;
 
 function makeServiceRole() {
   return {
@@ -83,9 +89,28 @@ function makeChain() {
       chain._values = values;
       return chain;
     },
+    // 只有 promote 分支的 UPDATE 會接 .select().maybeSingle()，用來判斷這次
+    // CAS 是否真的搶到（見 route.ts 的 promotedRow 檢查）。
+    maybeSingle: () => {
+      recorded.push({ filters: { ...chain._filters }, values: chain._values });
+      const id = chain._filters.id as string | undefined;
+      if (id && casLossIds.has(id)) {
+        return Promise.resolve({ data: null, error: null });
+      }
+      return Promise.resolve({ data: id ? { id } : null, error: null });
+    },
     then: (resolve: (v: unknown) => void) => {
       if (chain._op === "select") {
         resolve({ data: candidates, error: null });
+        return;
+      }
+      const values = chain._values as Record<string, unknown> | undefined;
+      if (values && "last_reconciled_at" in values && lastReconciledError) {
+        recorded.push({
+          filters: { ...chain._filters },
+          values: chain._values,
+        });
+        resolve({ error: { message: lastReconciledError } });
         return;
       }
       recorded.push({ filters: { ...chain._filters }, values: chain._values });
@@ -112,6 +137,8 @@ function buildRequest(auth?: string): Request {
 beforeEach(() => {
   candidates = [];
   recorded = [];
+  casLossIds = new Set();
+  lastReconciledError = null;
   queryTradeInfo.mockReset();
   ensureOrderPaid.mockClear();
   ensureNotificationSent.mockClear();
@@ -180,6 +207,54 @@ describe("單筆候選：TradeStatus=1", () => {
       (r) => (r.values as any)?.last_reconciled_at,
     );
     expect(reconciledWrites.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("並發：webhook 搶先推進（CAS 未命中）→ 不計入 promoted、不發『搶救成功』告警，但仍補做 ensureOrderPaid/ensureNotificationSent", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    casLossIds.add("p1"); // 模擬 webhook 在這次 UPDATE 前就已經把 payment 推進成 paid
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.promoted).toBe(0);
+    // ensureOrderPaid 自己有冪等 CAS，補呼叫是安全的（webhook 已推進時會安全 no-op）。
+    expect(ensureOrderPaid).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+      "reconcile",
+    );
+    expect(ensureNotificationSent).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+    );
+  });
+
+  it("last_reconciled_at 寫入失敗（{error} 非 throw）→ 不吞掉錯誤，仍繼續處理該筆的業務分支", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    lastReconciledError = "simulated DB failure";
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    // last_reconciled_at 寫入失敗不應該讓整支 route 掛掉或跳過該筆的業務邏輯。
+    expect(res.status).toBe(200);
+    expect(body.promoted).toBe(1);
   });
 
   it("金額不符 → mismatches 計數、不呼叫 ensureOrderPaid、不寫 status=paid", async () => {
