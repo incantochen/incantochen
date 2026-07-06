@@ -1,24 +1,25 @@
-import "server-only"
+import "server-only";
 
 type ServerEnv = {
-  SUPABASE_SERVICE_ROLE_KEY: string
-  ECPAY_MERCHANT_ID: string
-  ECPAY_HASH_KEY: string
-  ECPAY_HASH_IV: string
-  ECPAY_PAYMENT_URL: string
-  NEXT_PUBLIC_SITE_URL: string
-  UPSTASH_REDIS_REST_URL: string
-  UPSTASH_REDIS_REST_TOKEN: string
-  RESEND_API_KEY: string
-  ADMIN_EMAIL: string
-}
+  SUPABASE_SERVICE_ROLE_KEY: string;
+  ECPAY_MERCHANT_ID: string;
+  ECPAY_HASH_KEY: string;
+  ECPAY_HASH_IV: string;
+  ECPAY_PAYMENT_URL: string;
+  NEXT_PUBLIC_SITE_URL: string;
+  UPSTASH_REDIS_REST_URL: string;
+  UPSTASH_REDIS_REST_TOKEN: string;
+  RESEND_API_KEY: string;
+  ADMIN_EMAIL: string;
+  CRON_SECRET: string;
+};
 
 function required(key: keyof ServerEnv): string {
-  const value = process.env[key]
+  const value = process.env[key];
   if (!value) {
-    throw new Error(`Missing environment variable: ${key}`)
+    throw new Error(`Missing environment variable: ${key}`);
   }
-  return value
+  return value;
 }
 
 export const serverEnv: ServerEnv = {
@@ -32,4 +33,5 @@ export const serverEnv: ServerEnv = {
   UPSTASH_REDIS_REST_TOKEN: required("UPSTASH_REDIS_REST_TOKEN"),
   RESEND_API_KEY: required("RESEND_API_KEY"),
   ADMIN_EMAIL: required("ADMIN_EMAIL"),
-}
+  CRON_SECRET: required("CRON_SECRET"),
+};
