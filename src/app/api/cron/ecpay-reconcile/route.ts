@@ -69,12 +69,18 @@ export async function GET(request: Request) {
     const maxCreatedAt = new Date(now - MIN_AGE_MS).toISOString();
     const reconcileCutoff = new Date(now - RECONCILE_COOLDOWN_MS).toISOString();
 
+    // PostgREST 的 .or() 語法用句點分隔「欄位.運算子.值」，值裡若含句點／逗號
+    // 等保留字元（ISO timestamp 的毫秒部分就有句點）必須用雙引號包住，否則
+    // 解析會跑掉，導致撈到的候選跟預期不符（曾在 sandbox 端到端驗證中實測到
+    // 這個問題：候選數量對不上、且漏掉了明確符合條件的資料）。
     const { data: candidates, error } = await serviceRole
       .from("payment")
       .select("id, order_id, merchant_trade_no, amount")
       .eq("status", "pending")
       .lt("created_at", maxCreatedAt)
-      .or(`last_reconciled_at.is.null,last_reconciled_at.lt.${reconcileCutoff}`)
+      .or(
+        `last_reconciled_at.is.null,last_reconciled_at.lt."${reconcileCutoff}"`,
+      )
       .order("created_at", { ascending: true })
       .limit(CANDIDATE_LIMIT);
 

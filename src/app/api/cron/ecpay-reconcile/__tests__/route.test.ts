@@ -58,6 +58,10 @@ let recorded: { filters: Record<string, unknown>; values: unknown }[] = [];
 let casLossIds = new Set<string>();
 // 模擬 last_reconciled_at 那支 UPDATE 回傳 { error }（暫時性 DB 故障）。
 let lastReconciledError: string | null = null;
+// 捕捉候選查詢傳給 .or() 的實際字串，供斷言格式正確（PostgREST 要求值裡的
+// 句點／逗號等保留字元須用雙引號包住，否則解析會跑掉——sandbox 端到端驗證
+// 實測到這個 bug，這裡的 mock 之前完全忽略引數、測不出這種格式錯誤）。
+let lastOrFilter: string | undefined;
 
 function makeServiceRole() {
   return {
@@ -81,7 +85,10 @@ function makeChain() {
       chain._filters[`${col}__lt`] = val;
       return chain;
     },
-    or: () => chain,
+    or: (filter: string) => {
+      lastOrFilter = filter;
+      return chain;
+    },
     order: () => chain,
     limit: () => chain,
     update: (values: unknown) => {
@@ -139,9 +146,22 @@ beforeEach(() => {
   recorded = [];
   casLossIds = new Set();
   lastReconciledError = null;
+  lastOrFilter = undefined;
   queryTradeInfo.mockReset();
   ensureOrderPaid.mockClear();
   ensureNotificationSent.mockClear();
+});
+
+describe("候選查詢的 .or() 過濾字串格式", () => {
+  it("last_reconciled_at 的 ISO timestamp 值必須用雙引號包住（PostgREST 保留句點/逗號）", async () => {
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(lastOrFilter).toBeDefined();
+    // 錯誤示範（曾造成 sandbox 驗證撈到錯的候選）：
+    //   last_reconciled_at.lt.2026-07-06T14:39:32.580Z   ← 值裡的句點沒包住
+    // 正確：值兩端要有雙引號。
+    expect(lastOrFilter).toMatch(/last_reconciled_at\.lt\."[^"]+"/);
+  });
 });
 
 describe("認證", () => {
