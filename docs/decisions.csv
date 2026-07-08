@@ -11,5 +11,5 @@
 10,PII 欄位加密,會員個資保護,不做欄位加密；不蒐集身分證/銀行帳號(綠界包掉發票與退款)；未來若必收高敏欄位再針對該欄位加密,T46/T10,已定調
 11,營運前置作業（非開發）,金流/發票/法規前置,商業/營業登記、綠界特店申請與審核需時間、開發票需營業登記——提早辦,T42,提醒
 12,DB migration 工具,Supabase schema 變更管理方式未定,已定：Supabase CLI（.sql 於 supabase/migrations/，勿用 ORM）；規範見 docs/migration-guide.md。0001/0002 已產出並在本機驗證。,T03/T46,已定調
-13,PII 稽核 log 留存方式,logPiiAccess 僅寫 stdout→Vercel function logs 留存極短（Hobby 約 1 小時），稽核實質不可回溯（architecture.md G-06）,待拍板三選一：A 落表 pii_access_log（第 15 張表破例，僅 service role insert、無 select policy、禁刪，與 DB 同備份T34）／B Vercel log drain 接外部服務（多一個帳號要管）／C 維持現狀並於 T64 決策文件註明不可回溯。Claude 建議 A；定案即為 T80 實作內容,T80/T64,待決策
-14,訪客購物車生命週期,cart 無 TTL、guest_token cookie 無 maxAge 策略、DB 無清理排程（architecture.md G-08）,待確認數字：cookie 30 天 rolling（每次加車重設）＋DB updated_at 逾 90 天清理（僅 member_id IS NULL，CASCADE 帶走 cart_item）＋token 不輪替（UUID 熵足夠、httpOnly、車內無 PII，刻意不做並寫明）；定案後寫入 data-model.md、實作併 T78；會員 cart 生命週期屬 T81 另定,T78/T81,待決策
+13,PII 稽核 log 留存方式,logPiiAccess 僅寫 stdout→Vercel function logs 留存極短（Hobby 約 1 小時），稽核實質不可回溯（architecture.md G-06）,已定（2026-07-08）：方案 A——新增 pii_access_log 表（第 15 張表破例；僅 service role insert、無 select policy、禁刪、隨 T34 與 DB 同備份）；為 T80 實作內容。曾評估 B log drain（多一個外部帳號要管）／C 維持現狀（稽核不可回溯）而捨棄,T80/T64,已定調
+14,訪客購物車生命週期,cart 無 TTL、guest_token cookie 無 maxAge 策略、DB 無清理排程（architecture.md G-08）,已定（2026-07-08）：cookie 30 天 rolling（每次加車重設）＋DB updated_at 逾 90 天清理（僅 member_id IS NULL，CASCADE 帶走 cart_item）＋token 不輪替（UUID 熵足夠、httpOnly、車內無 PII，刻意不做並寫明）；已寫入 data-model.md §9，實作併 T78；會員 cart 生命週期屬 T81 另定,T78/T81,已定調

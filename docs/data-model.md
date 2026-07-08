@@ -235,3 +235,20 @@
 - `status` 無 check constraint，完整 RMA 狀態機（申請中／審核中／已核准／已退款／已駁回／維修中／已完成）待 T47 定案。
 - 過渡期退款走綠界廠商後台手動退刷＋既有 Admin Override 改 `orders.status = 'refunded'`（T31），退刷 API 自動化留 T47。
 - 不支援佐證照片上傳；不做重複申請時效限制（§3.1 G19 已拍板不硬擋）。
+
+---
+
+## 9. 2026-07-08 定案 addendum：cart 生命週期＋pii_access_log（決策 #13/#14）
+
+### 9.1 訪客購物車生命週期（決策 #14 已定，實作併 T78）
+
+- **cookie**：`guest_token` maxAge **30 天 rolling**——每次加入購物車重設效期；逾期 cookie 消失＝訪客車自然遺失（可接受，訪客車本為暫態）。
+- **DB 清理**：`cart.updated_at` 逾 **90 天**且 `member_id IS NULL` 者由排程清除（DELETE cart，CASCADE 帶走 cart_item；僅訪客車，會員車不清）。
+- **token 不輪替**（刻意不做）：UUID 熵足夠、httpOnly、車內無 PII，輪替只增加複雜度。
+- 會員 cart 生命週期（登入合併後）屬 T81 另定。
+
+### 9.2 pii_access_log（決策 #13 已定，實作＝T80；第 **15** 張表破例）
+
+- 用途：取代 stdout 稽核 log（Vercel logs 留存過短、稽核不可回溯）。落地 DB 隨 T34 備份同保存。
+- RLS 原則：僅 service role insert；**無 select policy**（後台檢視走 service role）；禁 update/delete（稽核不可變，比照 `order_status_log`）。
+- 欄位級規格（actor/order/fields/時間戳等，對齊現有 `logPiiAccess` 結構）於 T80 實作時定稿並補回本節；migration 依慣例先 plan mode。

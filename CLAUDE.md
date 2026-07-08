@@ -126,7 +126,7 @@
 
 ---
 
-## 5. 資料模型（14 張表，勿隨意增刪表；T33 售後為唯一破例，已收斂為一次性）
+## 5. 資料模型（14 張表，勿隨意增刪表；破例僅限已核決策：T33 `support_request`、T80 `pii_access_log`〔決策 #13，待實作〕）
 
 - **商品與選項**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue
 - **會員與購物車**：Member、Cart、CartItem
