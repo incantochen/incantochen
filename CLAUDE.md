@@ -181,7 +181,7 @@
 
 - **逐任務進行**：一次專注一個任務，開始前先說明計畫。
 - **涉及 auth／金流／session／migration 的任務一律先進 plan mode**，等確認再動手。
-- **完成檢核**：實作 → 自行驗收（見下方各任務驗收指令）→ 跑 lint → dev 確認無錯誤 → 才算完成。
+- **完成檢核**：實作 → 自行驗收 → 跑 lint → dev 確認無錯誤 → 才算完成。**T106 落地後**：code review 修完 findings 即跑 `pnpm verify:all`（lint→tsc→vitest→build→E2E→自動產出測試紀錄，計畫見 `docs/test-plan.md`），全綠才開 PR。
 - **完成後停下回報**：列出改了什麼、產出什麼、驗收結果，**等確認後再進下一個任務**。
 - **commit 規範**：Conventional Commits（`feat:`、`fix:`、`chore:`）。一個任務一支 commit。
 - **開 PR 前先本機審查（2026-07-04 起）**：涉及金流／webhook／auth／訂單／email 的改動，開 PR 前 Claude 先自行跑 `/code-review high`（本機、免費）並修完 findings 再開 PR——把 SDK 錯誤處理這類已知模式（§6 防禦性寫法通則）在本機先攔掉，ultra 額度留給深層問題（PR #30 三輪 ultrareview 的教訓：多數 findings 屬本機審查即可抓到的等級）。

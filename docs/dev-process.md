@@ -144,7 +144,7 @@ flowchart TD
 | P-01 | **lint／test 不在 merge 關卡上**（無 CI；Vercel build 只擋 type error；vitest 只在本機＋hook 跑） | 金流冪等測試（T85 特地補的回歸網）可以被完全繞過 merge；`--no-verify` 或跳過 hook 即無防線 | 加最小 GitHub Actions：PR 上跑 `pnpm lint && pnpm test`，設為 required check（＝architecture.md G-03，半天工作量） | **P1** |
 | P-02 | **結案回寫非強制**：T89 已 merge（PR #33）但 tasks.csv 仍「未開始」；work-log 斷檔 5 天（07-03～07-07 未記，本次已回填） | 跨 session 接手看到錯誤狀態；「文件與流程不一致」的直接實例 | /dev-next 結案段已含回寫清單——問題在**跳過 dev-next 直接做任務時**沒有等效關卡；建議：merge 後的結案回寫納入 completion-check 提醒，或養成「merge 即回寫」與 PR 合併同一動作 | **P1** |
 | P-03 | **依賴漏洞無自動通報**（CLAUDE.md 說「安全漏洞才升級」但沒有機制會通知有漏洞；F-003 postcss 即靠審查偶然發現） | 已知 CVE 無人知曉 | 開 GitHub Dependabot alerts（T91 已列管，僅設定檔工作） | P1（已列管） |
-| P-04 | **E2E 驗證無沉澱**：每次任務手寫 Playwright 腳本、用完即棄；踩坑（`form.requestSubmit()` 等）靠 work-log 文字傳承 | 重複勞動；驗證品質依 session 而異 | 常用流程（加車→結帳→sandbox 付款→webhook）腳本收進 repo `tests/e2e/`（不進 CI 亦可，先可重用） | P2 |
+| P-04 | **E2E 驗證無沉澱**：每次任務手寫 Playwright 腳本、用完即棄；踩坑（`form.requestSubmit()` 等）靠 work-log 文字傳承 | 重複勞動；驗證品質依 session 而異 | ✅ 已升級為 **T106 自動化測試階段**（2026-07-08）：測試計畫＝`docs/test-plan.md`（S1–S7 案例矩陣＋`verify:all`＋自動測試紀錄），取代原「掛任務順手做」方案 | P1（T106） |
 | P-05 | **migration「先 push 再 merge」順序靠人記**：hook 只擋修改，不驗證順序 | 順序顛倒→部署窗口期 schema 不一致 | 低成本：PR 模板/檢核清單加一條；已有 coding-system §4.5 條目，維持紀律即可 | P2 |
 | P-06 | **部署後無自動驗證**（無 smoke test、securityheaders 掃描為人工、上線檢查集中在 T38 一次性） | production 壞掉靠 Sentry 事後知 | MVP 可接受；T38 落地時把「部署後檢查」寫成可重複 checklist 收進 ops-runbook | P3 |
 
