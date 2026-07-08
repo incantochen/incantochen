@@ -123,7 +123,7 @@
 
 ## F-014 [P1] ECPay 主動對帳（T89）先翻 payment.status 再推進 order／通知：候選鍵失效造成「已付款訂單永久卡 pending_payment」的安全網盲點
 
-- 狀態：待確認
+- 狀態：已轉任務(T107)（使用者 2026-07-08 確認）
 - 位置：`src/app/api/cron/ecpay-reconcile/route.ts:141-177`（CAS 先把 `payment.status` 翻成 `paid`，再呼叫 `ensureOrderPaid`／`ensureNotificationSent`）＋候選查詢 `:76-85`（`.eq("status","pending")`）
 - 失敗情境：reconcile 的候選集**只以 `payment.status='pending'` 為鍵**（`0001` schema `payment_status` enum＝pending/paid/failed/refunded）。對一筆綠界實際已收款的卡住付款，流程是：①CAS `UPDATE payment SET status='paid' WHERE id=X AND status='pending'` 搶到（`payment` 此刻已是 paid）→ ②`ensureOrderPaid(order_id,"reconcile")` 推進 `orders.status`。若步驟②的 `orders` UPDATE 遇暫時性 DB 錯誤（statement timeout／連線池耗盡），`ensure-paid.ts:50` 會 `throw`；此 throw **在迴圈體內無 try/catch 包裹**（`:141-177` 僅 `queryTradeInfo` 有 try/catch，promotion 段沒有），直接冒泡到外層 catch（`:221`）→ 回 500、整批中止。結果：`payment.status='paid'` 但 `orders.status` 仍停在 `pending_payment`。**隔日 cron 再跑時，候選查詢 `.eq("status","pending")` 不會再選到這筆（payment 已 paid），系統中也無任何機制回頭比對 orders.status vs payment.status**——這張「客人已付款」的訂單永久卡在 `pending_payment`，且 `ensureNotificationSent` 從未執行（確認信也沒寄），無 webhook 可再觸發（綠界早已收到回應或不再重送）。這正是 T89 設計本意要消滅的 Invariant 破壞（「付款成功的訂單最終必為 paid」），卻發生在 T89 自身內部。同型的次要變體：若②成功但 `ensureNotificationSent`（`:72-91`）在讀 orders 時 throw，訂單雖已 paid、但確認信不會被 reconcile 重試（payment 已非候選）。根本原因：reconcile 以「payment 是否 pending」為重試鉤子，卻**先消滅這個鉤子（翻 paid）才做後續步驟**，任何後續失敗都落在重試覆蓋範圍之外——對照 webhook 同樣先翻 payment，但 webhook 有綠界重送＋`paidPayment` 冪等分支（`notify/route.ts:65-76`）兜底，reconcile 沒有等價的重試來源。屬 code-checklist **F2（部分失敗殘留）＋B2 邊界／G1（安全網機制自身留盲點）**；機率低（需暫時性 DB 錯誤落在 payment CAS 之後的窄窗），但後果為永久金流不一致、無自動復原、無針對該單的告警（外層只 `captureException` 泛型例外），故列 P1（金流正確性）。
 - 修法（擇一，優先 A）：**A. 調整順序讓 payment 翻 paid 成為最後一步**——先 `ensureOrderPaid`＋`ensureNotificationSent`（皆冪等），全部成功後才 CAS `UPDATE payment SET status='paid'`；如此任一中途失敗都讓 `payment` 留在 `pending`，隔日 cron 會重新選到、自動重試（與 webhook 靠綠界重送同理）。**B.**（若不願改順序）把每筆 promotion 段包進 try/catch，失敗時**不**冒泡中止整批，並讓 reconcile 候選集**改以 orders 不變式為準**：加撈「`orders.status='pending_payment'` 但已存在 `payment.status='paid'`」的漂移單一併修正，使安全網真正守在 `orders.status`（它要保證的不變式）而非 `payment.status`。無論 A/B，promotion 段的例外都應 per-item 隔離，避免一筆失敗拖垮整批。
@@ -131,7 +131,7 @@
 
 ## F-015 [P2] 面交前綴 "面交" 格式在寫入端與解析端各自手刻字面量，違反 §6「識別碼格式互轉單一出處」
 
-- 狀態：待確認
+- 狀態：已轉任務(T108)（使用者 2026-07-08 確認）
 - 位置：寫入端 `src/app/admin/orders/[id]/order-actions.tsx:68-71`（`` `面交${pickupNote ? ` ${pickupNote}` : ""}` `` 組出 `tracking_no`）；解析端 `src/lib/email/order-shipped-notification.ts:12`（`const PICKUP_PREFIX = "面交"`）＋`:23-26`（`startsWith(PICKUP_PREFIX)`／`slice(PICKUP_PREFIX.length)` 反解出面交備註）
 - 失敗情境：出貨資料沒有獨立的「配送方式」欄位，面交與宅配**共用 `orders.tracking_no` 一個字串**，靠「是否以『面交』開頭」在寄信時反推是面交還是宅配。這個格式約定的「面交」字面量在兩支不同檔案各寫一份（client 寫入端、email 解析端），中間僅靠註解「與該處寫法必須保持一致」維繫，無共用常數／函式強制同步——正是 CLAUDE.md §6 明列的「識別碼格式互轉單一出處」紅線（T67 `slice(11)` bug 即散落複本失同步所致）與 code-checklist **C1**。具體失敗：日後任何人調整 client 端面交寫法（例如改成「面交：<日期>」加冒號、或改用詞「自取」），只要沒同步改 email 端的 `PICKUP_PREFIX`，解析立刻失準——最壞情況面交訂單被判成宅配，客人收到「您訂購的商品已交由物流出貨，請留意簽收」（明明是面交），且面交備註被當成「物流單號」以等寬字體顯示；反之改詞後面交單會走進宅配文案。屬靜默錯誤（無例外、無告警），只有客人收到矛盾通知才會發現。
 - 修法：把面交前綴與「組裝／解析 tracking_no」的邏輯收斂到單一模組（如 `src/lib/order/shipping-tracking.ts`），匯出 `PICKUP_PREFIX` 常數＋`buildPickupTracking(note)`／`parseTracking(trackingNo)` 供 client 寫入端與 email 解析端共同 import，禁止任一端再手刻 "面交" 字面量。中長期更穩健的作法是為 `orders` 增列獨立的配送方式欄位（脫離字串前綴魔法），惟屬 schema 變更需 plan mode，可留待物流策略 T48 一併定案。
@@ -178,7 +178,7 @@
 
 ## 老化提醒
 
-- **待確認超過 14 天的發現**：無（門檻 14 天）。仍待確認者：**F-014（P1，2026-07-08 合併自平行 session）**、F-015（P2，同）。已處理：F-002→T93、F-003→T94、F-008～F-013→T95～T100（使用者 2026-07-08 確認轉任務）、F-016 併入 T95。F-007 已轉 T92、F-005 已轉 T86、F-006 已併入 T73、F-004 已修（T85）——均不再計入待確認。
+- **待確認超過 14 天的發現**：無（門檻 14 天）。仍待確認者：無。已處理：F-014→T107、F-015→T108（使用者 2026-07-08 確認轉任務）、F-002→T93、F-003→T94、F-008～F-013→T95～T100（使用者 2026-07-08 確認轉任務）、F-016 併入 T95。F-007 已轉 T92、F-005 已轉 T86、F-006 已併入 T73、F-004 已修（T85）——均不再計入待確認。
 - **從未審查過的檔案（覆蓋表中審查次數＝0）**：本輪大幅補審 20+ 檔（checkout 鏈前端、cart 讀取、auth confirm、account actions、supabase client、next.config、pii/mask、admin order-actions 等）後，剩餘未審者主要為：`checkout/page.tsx`、`cart/page.tsx`、`products/[slug]/page.tsx`、`product-configurator.tsx`、`support-request-form.tsx`、`cart-item-row.tsx`、`profile-form.tsx`、`account-nav.tsx`、`site-header.tsx`／`site-footer.tsx`、`layout.tsx`／`page.tsx`／`ui/page.tsx`、account 頁面四支、admin `customer-info.tsx`／`support-requests.tsx`、`supabase/client.ts`、`utils.ts`、`button.tsx`、`login/page.tsx` 外的 auth 頁、`0001`／`0002`／`0003` migration、`seed.sql`、`instrumentation*.ts`／`global-error.tsx`（本輪僅掃過未逐行）。多為展示層與純 UI，風險較低；建議下一輪補 `product-configurator.tsx`（計價顯示邏輯）與 `0001_initial_schema.sql`（schema 範圍時）。
 
 ---
