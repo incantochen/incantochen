@@ -1,6 +1,6 @@
 # docs-index.md — incantochen 文件目錄
 
-> 更新日期：2026-06-27  
+> 更新日期：2026-07-08  
 > 用途：讓 Claude Chat 與 Claude Code 對齊文件位置與用途，避免讀錯檔案。
 
 ---
@@ -10,7 +10,7 @@
 | 檔案 | 用途 |
 |------|------|
 | `CLAUDE.md` | **Claude Code 主入口**。專案施工圖：技術棧、開發規則、目前狀態。每次對話自動載入。 |
-| `memory.md` | **開發決策與狀態記錄**。里程碑進度、已完成事項、待決策、跨對話記憶。 |
+| `memory.md` | **開發決策記錄（durable decisions）**。品牌/客群/技術選型/已定決策/MVP 範圍。2026-07-08 起**不再記進度**——進度以 `docs/tasks.csv` 為準。 |
 | `incantochen-docs.skill` | Claude Skill 定義檔，規範文件寫作規則（doc-header、狀態 emoji、雙語慣例等）。 |
 
 ---
@@ -31,7 +31,8 @@
 
 | 檔案 | 用途 |
 |------|------|
-| `data-model.md` | 資料模型說明。13 張表定義、欄位說明、關聯邏輯。 |
+| `architecture.md` | **系統架構盤點**。模組職責、相依關係、Runtime Flow、第三方服務互動、部署架構、Gap Analysis（2026-07-07 產出）。 |
+| `data-model.md` | 資料模型說明。14 張表定義（含 T33 `support_request`）、欄位說明、關聯邏輯、快照契約。 |
 | `jewelry_mvp_ER.mermaid` | ER Diagram 原始碼（Mermaid 格式），隨時可讀。 |
 | `jewelry_mvp_ER.pdf` | ER Diagram 視覺版（171KB）。**非必要載入**，需要視覺參考時再開。 |
 | `migration-runbook.md` | Migration 操作手冊。schema 異動流程、Supabase CLI 指令、注意事項。 |
@@ -41,9 +42,9 @@
 
 | 檔案 | 用途 |
 |------|------|
-| `tasks.csv` | **開發任務清單**（原 xlsx `任務清單` 分頁）。P01–P05 已完成，含預估人天、累積人天、優先級、狀態。 |
+| `tasks.csv` | **開發任務清單＝唯一權威任務來源**。全任務（P01–P05、T01–T92+）含依賴、預估人天、優先級、狀態；審查衍生任務也登記於此。 |
 | `decisions.csv` | **待決策事項**（原 xlsx `待決策事項` 分頁）。決策項目、現況、結論、關聯任務、狀態。 |
-| `sprint_overview.csv` | Sprint 總覽（原 xlsx `Sprint總覽` 分頁）。里程碑時程備忘。 |
+| `sprint_overview.csv` | Sprint 總覽——**2026-06-24 原始估算基準（歷史參考）**；其後新增的審查任務未計入，現況以 `tasks.csv` 為準。 |
 
 ### 開發日誌與驗收
 
@@ -58,6 +59,15 @@
 |------|------|
 | `coding-system.md` | **寫程式的思考系統**。逆向推理四問、系統性思考（狀態機／並發／重試迴路）、PR 前檢核清單、真實 bug 案例庫。**寫任何程式碼前必讀**；review 發現新 bug 類型時回寫補充。 |
 | `review-findings.md` | 審查發現與回歸狀態。dev-review 產出，含檔案覆蓋表。 |
+| `dev-process.md` | **開發流程全貌**（2026-07-08 產出）。需求→規劃→開發→審查→測試→PR→部署→維運全流程圖（Mermaid）、流程×文件×工具對照、自動化清單、流程 Gap Analysis。 |
+
+### 營運
+
+| 檔案 | 用途 |
+|------|------|
+| `ops-runbook.md` | **人工救援 Runbook**（T90，2026-07-08 初版）。已知異常情境的判斷方法、修復 SQL／操作步驟、修復順序與風險、何時聯絡綠界。 |
+| `ecpay-blueprint/` | **ECPay 金流架構藍圖**（2026-07-07 產出，與專案無關的可重用規劃，19 份文件）。服務全景／API 能力矩陣／架構／流程／測試藍圖；閱讀路徑見其 `README.md`。 |
+| `ecpg-migration-plan.md` | **站內付 2.0 取代 AIO 信用卡規劃**（2026-07-08 產出，📋 未定案）。執行方案（五階段）、影響範圍、測試規劃、Pass Criteria；建議 MVP 上線後才動工。 |
 
 ### 其他
 
@@ -87,6 +97,7 @@
 開發任務時，建議依序參考：
 
 1. `CLAUDE.md` — 技術規則與目前狀態
-2. `memory.md` — 決策脈絡與里程碑進度
-3. `docs/tasks.csv` — 當前任務與依賴
-4. 對應功能的規劃文件（PRD / IA / user-flow / data-model）
+2. `docs/tasks.csv` — 當前任務與依賴（進度唯一權威來源）
+3. `docs/work-log.md` — 最近一次作業細節（跨對話接手）
+4. 對應功能的規劃文件（PRD / IA / user-flow / data-model / architecture）
+5. `memory.md` — 決策脈絡（需要「為什麼這樣定」時再讀）

@@ -25,7 +25,7 @@
 
 | 項目 | 內容 |
 |---|---|
-| CLI | Supabase CLI（已列 `CLAUDE.md` 尚未安裝清單——T03 前先裝） |
+| CLI | Supabase CLI（✅ 已安裝，devDependency，指令一律 `pnpm supabase ...`） |
 | migration 位置 | `supabase/migrations/*.sql`（進 git） |
 | 種子資料 | `supabase/seed.sql`（dev 用，進 git） |
 | 型別生成 | 每次改完 schema 跑 `pnpm supabase gen types typescript`，更新 13 張表型別 |
@@ -117,10 +117,9 @@ Supabase CLI 的 migration 是**前進式**（無自動 down）。規則：
 
 ---
 
-## 8. 待辦／下一步
+## 8. 落地狀態（2026-07-08 更新）
 
-- 🆕 T03 前先 `pnpm add -D supabase`（或對應安裝方式）裝 CLI、`supabase init`。
-- 🔁 本規範定案後，於 `CLAUDE.md` 加一行指向本檔＋硬規則（已套用不可改、正式前
-  確認備份、migration 先 plan mode）；`memory.md` 已定決策補「migration 工具＝
-  Supabase CLI」。
-- ⏭️ **下一步**：T03 依 ER 分 4 組建 13 張表 → T46 RLS → dev seed。
+- ✅ CLI 已安裝（devDependency `supabase@^2.107.0`）、`supabase init` 完成。
+- ✅ 本規範已落地：`0001`（建表）→ `0002`（RLS）→ `0003`–`0007`（逐支新增，已套用不可改原則遵守中）；`CLAUDE.md` §5／§6 已引用本檔硬規則。
+- 📌 實際命名採 `0001_`–`0007_` 序號前綴（非 §2 的 timestamp 形式），已成既定慣例，後續 migration 沿用序號遞增即可。
+- 📌 實際套用流程參考 `docs/migration-runbook.md`（首次套用紀錄＋三道人工閘）；T65 起新增鐵律：**migration 先 `db push` 再 merge/部署**（先擴充後收縮，見 `docs/coding-system.md` §4.5）。

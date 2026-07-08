@@ -1,6 +1,6 @@
 # data-model — incantochen 14 張表 ER 定稿規格（v1 + T33 addendum）
 
-> 文件更新日期：2026-07-02（T33 新增 `support_request` 表，13→14 張，見 §8）
+> 文件更新日期：2026-07-08（文件整理：§1 轉歷史紀錄、§7 待決策標記已拍板；上一版 2026-07-02 T33 新增 `support_request` 表，13→14 張，見 §8）
 
 > 任務：T03 前置（M1/M0 建表規格）。依賴 `jewelry_mvp_ER.mermaid`／`jewelry_mvp_ER.pdf`、`memory.md` §5、`CLAUDE.md` §5、`docs/migration-guide.md`。
 > 範圍：13 張表的欄位級定稿規格、約束、索引、RLS 分類、快照 JSON 契約；含本次 review 發現的缺口與待決策。
@@ -19,16 +19,13 @@
 
 ---
 
-## 1. 本次 review 結論（對齊最新終端機狀態）
+## 1. 定稿歷程（歷史紀錄，2026-06-24 review 產出）
 
-| 項目                     | 現況                                                                                         |
-| ------------------------ | -------------------------------------------------------------------------------------------- |
-| repo 階段                | M0 骨架完成；Supabase／Zod／ECPay／測試框架**尚未安裝**；**13 張表尚未建立**（T03 未開始）   |
-| migration 工具           | ✅ **Supabase CLI**（`docs/migration-guide.md` v1 已定）— 手寫 SQL 於 `supabase/migrations/` |
-| ER 結構（13 張表＋關聯） | 大方向正確、可進 T03；本次補 **7 項欄位級缺口**（見 §3），不動表數                           |
-| 三個核心設計             | 白名單三層、快照欄位、Order 內嵌收件 —— 結構皆在，本次把「契約」釘死（見 §5）                |
+> 本節為 T03 建表前的 review 結論，所有缺口均已於 `0001`／`0002` 落地，僅留作決策脈絡追溯。
 
-> ⚠️ 同步落差：`memory.md` §6 第 12 項與 §10 仍把 migration 工具列為「待決策」，但 `CLAUDE.md` §2 與 `docs/migration-guide.md` 已定案 Supabase CLI。**請回填 memory.md**（見 §8 🔁）。
+- migration 工具：✅ **Supabase CLI**（`docs/migration-guide.md` 已定）— 手寫 SQL 於 `supabase/migrations/`。
+- ER 結構 review 補了 **7 項欄位級缺口**（見 §3），全部以「補欄位／約束」處理、未動表數。
+- 三個核心設計（白名單三層、快照欄位、Order 內嵌收件）契約見 §4；約束與索引見 §5。
 
 ---
 
@@ -196,18 +193,11 @@
 
 ---
 
-## 7. 待辦／提醒
+## 7. 決策結果與殘留待辦
 
-- 🆕 **待決策（寫 T03 前必拍板）**：
-  1. `Member` 綁 auth 的方式 —— 建議**共用 PK**（§3.1）。
-  2. 訪客車識別子 —— 建議 `Cart.guest_token`（§3.2）。
-  3. `quantity` 擇一 —— 建議**從 `OptionType` 移除**，走行數量（§3.5）。
-- 🆕／⚖️ **發票欄位（§3.4）**：T42（M5）可延後，但**先佔欄位**避免改 schema；折讓／作廢流程**須會計確認**（Flow 3 售後 C 類）。
-- ✅ 可直接納入 T03：`Payment` 補 `refunded`／`gateway_trade_no`／`raw_callback`＋每單一筆 paid（§3.3）、`updated_at`／enum 化（§3.6）、`Notification` 去重（§3.7）、索引與約束（§5）、RLS 分類（§6）。
-- 🔁 **同步**：本檔定案後回填
-  - `memory.md`：§6/§10 把「migration 工具」由待決策改為**已定（Supabase CLI）**；§5 補本檔三個契約與 7 項修正摘要；§產出清單加 `docs/data-model.md`；§待辦更新。
-  - `CLAUDE.md`：§5 資料模型補「`Member` 綁 auth.uid()／訪客 `guest_token`／`Payment` 退款＋gateway 欄位＋每單一筆 paid／`quantity` 走行數量」幾條具體規則。
-- ⏭️ **下一步**：你拍板 §7 三項待決策 → 我把確認後的決策**回寫 `jewelry_mvp_ER.mermaid`（並可重出 PDF）**，同步回填 memory.md／CLAUDE.md → 即可進 **T03 建表 SQL（Supabase CLI）→ T46 RLS → T43 種子**。
+- ✅ **三項待決策均已拍板並落地 `0001`**：① `Member.id` ＝ `auth.uid()` 共用 PK（§3.1）② 訪客車走 `Cart.guest_token` httpOnly cookie（§3.2）③ `quantity` 從 `OptionType` 移除、走行數量（§3.5）。
+- ✅ 已納入 `0001`：`Payment` 補 `refunded`／`gateway_trade_no`／`raw_callback`＋每單一筆 paid（§3.3）、`updated_at`／enum 化（§3.6）、`Notification` 去重（§3.7）、索引與約束（§5）、RLS 分類（§6）。另 T89（2026-07）補 `payment.last_reconciled_at`（migration `0007`）。
+- ⚖️ **仍待定**：發票欄位（§3.4）留 T42（M5）拍板前**先佔欄位**原則不變；折讓／作廢流程須會計確認（Flow 3 售後 C 類）。
 
 ---
 

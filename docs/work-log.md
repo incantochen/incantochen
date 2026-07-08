@@ -575,6 +575,38 @@
 
 ---
 
+## 📅 2026-07-03 ～ 2026-07-07（回填彙整，2026-07-08 文件整理時補記）
+
+> ⚠️ 本節為事後回填：這幾日的 session 未依慣例更新 work-log，細節以 `docs/tasks.csv` 各任務說明、PR 描述與 `docs/review-findings.md` 為準。
+
+| 日期 | 任務／產出 | 狀態 |
+| ---- | ---------- | ---- |
+| 07-03 | **T85** webhook／createOrder 自動化測試（PR #29，84/84 通過）；排程審查產出 F-005（→T86）／F-006（併入 T73） | ✅ |
+| 07-04 | **T67／T68／T69**（PR #30，三輪 ultrareview）：order-result slice 修正、webhook 錯誤處理＋金額核對、email 改 await＋`send-once.ts` 去重；殘留缺口登記 **T88** | ✅ |
+| 07-04 | **`docs/coding-system.md` 建立**（寫程式思考系統：六步流程、外部呼叫失敗矩陣、bug 修復協定、案例庫）；CLAUDE.md §6／§7 接上 | ✅ |
+| 07-04 | 排程審查 F-007 → **T92**；營運面檢討登記 **T89／T90／T91**、T37 升 P0、T34/T38 DoD 擴充 | ✅ |
+| 07-04 | **T37** Sentry 錯誤監控（PR #31）；**T30b** 出貨通知信（PR #32，含共用 `escape-html.ts`；Override 缺口併入 T87） | ✅ |
+| 07-07 | **T89** ECPay 主動對帳（PR #33＋migration `0007` `payment.last_reconciled_at`，Vercel Cron 每日 18:00 UTC）——**tasks.csv 尚未結案回寫** | ✅（待結案） |
+| 07-07 | `docs/ecpay-blueprint/`（19 份可重用金流架構藍圖，untracked 待 commit）；`docs/architecture.md`（系統架構盤點＋Gap G-01～G-09）；全面風險審查 F-008～F-013 | ✅ |
+
+---
+
+## 📅 2026-07-08
+
+### 本次作業
+
+#### #文件整理 / 專案規劃完整性檢查
+
+**說明**：全面掃描開發文件，補齊缺漏規劃、整併過時與重複內容。原檔備份於 `incantochen/backup/_backup_docs_20260707/`。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 完成 |
+| 產出     | 新增：`docs/ops-runbook.md`（T90 初版）、`docs/dev-process.md`（開發流程全貌＋Mermaid）。更新：`memory.md`（改為 durable decisions 定位、進度歸 tasks.csv）、`docs/docs-index.md`（收錄新文件、修正讀取順序）、`docs/data-model.md`（§1 轉歷史、§7 標記已拍板）、`docs/migration-guide.md`（§8 落地狀態）、`docs/user-flow.md`（OTP 碼長、T66 政策修訂）、`docs/tasks.csv`（T89 結案回寫）、本檔（回填 07-03～07-07）。**CLAUDE.md 瘦身**（使用者核可）：218→203 行，頂部 23 段任務史濃縮為 §0「環境事實＋Durable 架構規則」，§3/§4/§7 過時內容清除；原版備份於 backup。 |
+| 待辦     | ①Gap Analysis 建議（最小 CI、/custom 預約表單無任務編號、E2E 腳本沉澱）待使用者裁決後登記任務 ②T90 ops-runbook 內容經使用者確認後可結案 |
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```

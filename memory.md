@@ -1,9 +1,9 @@
 # 專案記憶 memory.md
 
-> 文件更新日期：2026-06-24
-> 高端客製化寶石飾品電商平台 — 開發決策與狀態記錄
-> 最後更新：M0 資料層完成——T03 建表＋T46 RLS 已套用至雲端 production（13 表＋11 policy）、型別已生、commit c124482；T43 dev seed 已完成並本機驗收通過（2026-06-25）；下一步 T15 戒指商品詳情頁
-> 用途：快速掌握專案脈絡與已定決策，避免重複討論。
+> 文件更新日期：2026-07-07
+> 高端客製化寶石飾品電商平台 — 開發決策記錄（durable decisions）
+> 用途：快速掌握專案脈絡與**已定決策**，避免重複討論。
+> ⚠️ **分工定位（2026-07-07 文件整理定案）**：本檔只保留「不隨開發進度變動」的決策與脈絡（品牌/客群/技術選型/已定決策/MVP 範圍）。**進度與任務狀態一律以 `docs/tasks.csv` 為準、逐次作業細節見 `docs/work-log.md`、開發規則見 `CLAUDE.md`**——本檔不再重複記錄任務進度。
 
 ---
 
@@ -18,30 +18,12 @@
 
 ---
 
-## 2. 當前狀態
+## 2. 當前狀態（摘要，詳情見 docs/tasks.csv）
 
-- ✅ 系統架構圖、半客製流程圖、ER 圖（13 張表）、開發起步文件、開發任務清單（70 任務）皆已完成。
-- ✅ 待決策事項全部收斂（9 已定調、1 暫緩、1 提醒）。
-- ✅ **M-1 產品規劃全數完成**：競品分析／PRD／User Flow／Brand Guide／**IA／Wireframe** 皆已產出（見 §9、§12）。另有 homepage demo 作設計定稿參考。
-- ✅ **M0 環境與骨架前置完成**（見 §11）：開發環境裝好、Next.js 16 專案骨架建立、`CLAUDE.md` 與 6 個 hooks 落地、首次 git commit 完成。
-- ✅ **DB migration 工具定案：Supabase CLI**（規範見 `docs/migration-guide.md`）——T03 前置已解。
-- ✅ **M0 資料層完成並套用雲端**：T03 建表＋T46 RLS 已 `db push` 至雲端 production（project-ref `wdmigbqdhernmrfpzzxk`，13 表＋11 policy，雲端驗收通過）；型別已生於 `src/types/database.types.ts`；commit `c124482`。欄位級規格見 `docs/data-model.md`。
-- ✅ **T43 dev seed 已完成，本機＋雲端 production 皆已套用**（2026-06-25）：`supabase/seed.sql`（1 款戒指＋3 OptionType＋8 OptionValue＋白名單），`supabase db reset --local` 套用＋驗收查詢全數通過；另用 `supabase db query --linked --file` 套用到雲端 production（因為 `.env.local` 接的是雲端，`pnpm dev` 看不到本機 seed）。過程中修正一處 bug：`option_type` 無 `sort_order` 欄位，seed.sql／docs/verify-seed.sql 已移除該欄位引用。⚠️ **環境提醒**：本機與雲端是兩份獨立資料，之後改 seed 兩邊都要各跑一次。
-- ✅ **T04 部署到 Vercel＋CI 已完成**（2026-06-25）：repo push 至 GitHub（`github.com/incantochen/incantochen`），透過 Vercel GitHub App 連接專案 `jewelry-shop`，env vars 已設定，首次部署成功且驗證 push 自動觸發部署（CI）生效。production：`https://jewelry-shop-delta.vercel.app`。
-- ✅ **T52 Staging 環境已完成**（2026-06-25）：`staging` 分支 push 後自動產生 Vercel Preview 部署，穩定別名 `https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`，留給日後 ECPay sandbox 測試用。
-- ✅ **T05 Auth（Email OTP＋magic link）本機設定已完成**（2026-06-25，先進 plan mode 核准後執行）：`supabase/config.toml`＋新增 `supabase/templates/magic_link.html`，本機端到端測試（觸發信→Mailpit 收信驗證內容→OTP 驗證換 token）全通過。**production 端尚待使用者手動到 Supabase Dashboard 設定**（Site URL／Redirect URLs／Magic Link 範本，見 `docs/work-log.md`）；`/auth/confirm` 頁面留給 T06／T07。
-- ✅ **M0 全數完成；M1 開工，T15 戒指商品詳情頁骨架完成**（2026-06-25，先進 plan mode 核准後執行）：`src/app/products/[slug]/page.tsx`（Server Component，撈商品＋三層白名單靜態呈現）＋共用 `SiteHeader`／`SiteFooter`。wireframe 原訂位置 `docs/wireframe/` 實際不存在，改用備份資料夾的 HTML demo（`backup/_backup_docs_20260624_235506/proj-docs/Demo/Demo_0623/product.html`）當版面參考。刻意不做：配置器互動（T16-T20 範圍）、「關於這件作品」與「猜你喜歡」（schema 無描述欄位、seed 僅 1 款商品，缺真實內容不杜撰）。Playwright 截圖驗證通過（正常與 404 兩種情境）。
-- ✅ **T16 配置器互動化完成**（2026-06-25）：新增 client component `src/components/product-configurator.tsx`（chip 點擊切換選取＋數量 stepper，狀態管理 `useState`）。價格刻意不隨選取連動，留給 T18。Playwright 點擊驗證通過。
-- 📌 **流程變更（M1 起）**：改用 feature branch＋PR，不再直接 push master；PR 連結給使用者看過、回覆「沒問題」後才 merge（細節見記憶 `git-workflow-incantochen-pr-review`）。
-- ✅ **T18 報價引擎完成**（2026-06-25）：`product-configurator.tsx` 擴充即時計價（`unit_price = base_price + Σ price_delta`、`小計 = unit_price × quantity`），補回「加價明細」展開面板。Playwright 驗證價格即時正確更新。
-- 📌 **T17（即時換圖）暫緩**：依賴 T55/T56（3D 素材製作），使用者決定圖片處理維持 Blender/3D 路線（評估過 AI 圖片生成模型如 DALL-E/Imagen，判定不適合——無法做到同一戒指模型精準替換材質），先擱置，圖片用佔位圖頂著繼續開發其他骨架。
-- ✅ **T19/T20 加入購物車（寫快照）完成**（2026-06-25，先進 plan mode 核准後執行）：新增 service role client＋`addToCart` server action。後端重新驗證白名單並重算價格，不採信前端數字；`cart`/`cart_item` 走 service role 寫入（RLS 故意對前端全拒）；訪客用 `guest_token` httpOnly cookie。新增環境變數 `SUPABASE_SERVICE_ROLE_KEY`（使用者本人填入本機＋Vercel）。Playwright＋雲端 DB 查詢驗證通過。
-- ✅ **T21 購物車頁完成**（2026-06-25，先進 plan mode 核准後執行）：`read-cart.ts`（讀取也走 service role，因為 RLS 連 SELECT 也對前台全拒）＋`cart/actions.ts`（改數量／刪除，新增「擁有權檢查」防止亂猜 id 動到別人購物車）＋`cart/page.tsx`／`cart-item-row.tsx`。結帳按鈕 disabled（留給 T22）。Playwright＋雲端 DB 雙重驗證通過。
-- ✅ **T06/T07 登入入口＋路由保護完成**（2026-06-25，先進 plan mode 核准後執行）：`/login`（OTP 主）、`/auth/confirm`（magic link，按鈕才消耗 token）、`src/proxy.ts`（Next 16 用 `proxy` 具名匯出取代 `middleware.ts`）、`requireUser()` 共用保護機制＋最小驗證頁 `/account`。**重要發現**：`member` 表沒有 INSERT policy，建會員一樣要走 service role；**雲端 production 實際 OTP 是 8 位數**（不是本機設定的 6 位），原本寫死 6 位數驗證的 bug 已修正。用 `admin.generateLink` 產生測試用驗證碼/連結（不寄真信）做 Playwright 端到端驗證，測試帳號驗證後已清除。
-- ✅ **T22 結帳頁完成**（2026-06-25，先進 plan mode 核准後執行）：`/checkout`（讀 T21 `getCart()`）＋`checkout-form.tsx`（Zod 驗證，新增 `zod` 套件）。**重要釐清**：結帳本身不需要 OTP/magic link，Email 只是輸入框，「結帳即會員」要到 T23 建單時才在背景處理。依使用者要求查證 ECPay 文件（[ECPay-API-Skill](https://github.com/ECPay/ECPay-API-Skill)）：付款 API 不需收件人資料；黑貓宅配物流 API 需要獨立的郵遞區號欄位，已補進表單（`orders` 表暫無對應欄位，留 T48 決定）。送出按鈕 disabled（T23/T48/T57 未完成）。Playwright 驗證通過。
-- ⏭️ **下一步：T48 黑貓宅配串接 或 T57 客製例外同意（皆為 T23 建單前置）。** 品牌／客群／價位帶／成功指標／動線等已定（見 §12）。
-
----
+- ✅ **M-1／M0／M1 全數完成**：規劃五件套→環境骨架→「會走路的骨架」（登入、PDP＋配置器＋報價、購物車、結帳、建單、ECPay 金流＋冪等＋驗價、付款結果頁、Email 通知、應用層安全）。
+- ⏳ **M2 訂單營運閉環進行中**：T28/T29/T08/T31/T64/T32/T65/T33/T30b/T37/T85/T67/T68/T69/T89 已完成；審查發現待修（T70/T72＋T84/T86/T88/T92 等）與 T66 待排。
+- ⏸️ **暫緩**：T17/T55/T56（3D 素材路線）、T48（物流策略未定，`shipping_fee=0` 佔位）。
+- 📌 開發流程全貌（含審查／結案迴路）見 `docs/dev-process.md`；人工救援程序見 `docs/ops-runbook.md`。
 
 ## 3. 技術選型（已鎖定）
 
@@ -63,12 +45,12 @@
 
 ---
 
-## 5. 資料模型（13 張表）
+## 5. 資料模型（14 張表）
 
 > 欄位級規格、三個核心設計、外鍵策略見 `CLAUDE.md §5` 與 `docs/data-model.md`，不在此重複。
 > ER 圖視覺參考：`docs/jewelry_mvp_ER.mermaid`（文字，隨時可讀）；`docs/jewelry_mvp_ER.pdf`（視覺版，需要時再開）。
 
-**13 張表**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue、Member、Cart、CartItem、orders、OrderItem、Payment、OrderStatusLog、Notification。
+**14 張表**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue、Member、Cart、CartItem、orders、OrderItem、Payment、OrderStatusLog、Notification、support_request（T33 破例新增，2026-07-02）。
 
 **三個核心設計（摘要）**：① 資料驅動配置器（三層白名單）② 快照欄位釘住下單當下價格與規格 ③ Order 內嵌收件與物流（tracking_no 手動填）。
 
@@ -106,9 +88,9 @@
 | 階段 | 目標 | 累積人天 | 狀態 |
 |---|---|---|---|
 | M-1 | 產品規劃（PRD／User Flow／IA／Wireframe／競品） | 5 | ✅ 完成 |
-| M0 | 環境與骨架前置（含 RLS、magic link、3D 素材） | 16 | ✅ 環境與骨架部分完成（RLS/magic link/3D 屬後續任務） |
-| M1 | 會走路的骨架：戒指可配置並付款 | 54 | ⬜ |
-| M2 | 訂單營運閉環 | 63 | ⬜ |
+| M0 | 環境與骨架前置（含 RLS、magic link、3D 素材） | 16 | ✅ 完成（T56 3D 素材除外，暫緩） |
+| M1 | 會走路的骨架：戒指可配置並付款 | 54 | ✅ 完成（2026-06-27；T17/T48 暫緩） |
+| M2 | 訂單營運閉環 | 63 | ⏳ 進行中 |
 | M3 | 後台商品管理（回頭補 CRUD） | 73 | ⬜ |
 | M4 | 品類框架／體驗／SEO／分析 | 81.5 | ⬜ |
 | M5 | 上線準備（含法規） | 93 | ⬜ |
@@ -118,7 +100,7 @@
 
 > **M-1 與既有設計的關係**：產品規劃排在最前，但因資料模型與任務已先排定，這層多為「驗證並微調」而非推翻。最可能回饋的是 Wireframe（P05）配置器頁，可能微調 T16 配置器版面或 ER 細節——趁未寫程式時調整成本最低。
 
-詳見 `MVP開發任務清單.xlsx`（任務清單＋待決策＋累積人天）。
+詳見 `docs/tasks.csv`（任務清單唯一權威來源；原 xlsx 已轉為 tasks.csv／decisions.csv／sprint_overview.csv）。人天為 2026-06-24 原始估算基準，其後審查衍生任務（T64–T92）陸續加入，累積人天僅供相對參考。
 
 ---
 
@@ -144,8 +126,6 @@
 
 ## 10. 待辦／提醒
 
-- ✅ **已定：DB migration 工具＝Supabase CLI**（規範見 `docs/migration-guide.md`，含命名／一支一件事／回滾／正式套用流程／seed）。
-- ✅ **dev seed（T43）已完成**（2026-06-25，本機驗收通過）。⏭️ 下一步：**T15 戒指商品詳情頁 → M1 戒指可配置並付款**。
 - 🔭 **模組實作時待辦**：① 過期購物車清理作業（分批、可 dry-run；T20/T21）② 個資刪除走匿名化（T63）③ 商品後台只封存不硬刪＋刪前查引用＋狀態篩選器（T10，已記入任務清單）。
 - 📌 平行去辦：商業/營業登記、綠界特店申請（有審核前置時間）
 - ⚖️ 上線前：條款與七天例外用詞請律師審
@@ -189,7 +169,6 @@
 - ✅ **Supabase 雲端專案已開通**，`NEXT_PUBLIC_SUPABASE_URL`／`NEXT_PUBLIC_SUPABASE_ANON_KEY` 已由使用者本人寫入專案根目錄 `.env.local`（**Supabase 環境變數已安全配置完畢**）。
 - `.env.local` 已確認列在 `.gitignore`（`.env*` 規則涵蓋），不會被 Git 追蹤或推上雲端。
 - 依紅線規範，`.env*` 一律對 Claude Code 唯讀（`protect-env` hook 硬擋讀寫），本檔僅記錄狀態，不記錄金鑰實際值。
-- ⏭️ 下一步可開始接 Supabase client（`src/lib/supabase`）、`supabase gen types typescript`，銜接 T03 建表進度。
 
 ---
 
