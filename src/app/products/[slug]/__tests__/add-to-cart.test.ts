@@ -1,0 +1,210 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { vi, describe, it, expect, beforeEach } from "vitest";
+
+vi.mock("server-only", () => ({}));
+
+// next/headers mock：cookieJar 讀取，set() 記錄呼叫供斷言
+let cookieJar: Record<string, string> = {};
+const cookieSetCalls: { name: string; value: string }[] = [];
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) =>
+      cookieJar[name] !== undefined ? { value: cookieJar[name] } : undefined,
+    set: (name: string, value: string) => {
+      cookieSetCalls.push({ name, value });
+      cookieJar[name] = value;
+    },
+  }),
+}));
+
+// 一般 client：商品／選項讀取，固定回傳一個非必填單選項的商品
+const state = {
+  product: { id: "prod-1", base_price: 25000, status: "active" } as any,
+  productOptions: [
+    {
+      id: "opt-1",
+      required: false,
+      option_type: { code: "size", name: "尺寸" },
+      product_option_value: [
+        {
+          id: "val-1",
+          price_delta: 0,
+          option_value: { code: "s", label: "S" },
+        },
+      ],
+    },
+  ] as any[],
+  // cart insert 每次呼叫的回傳（依序消耗）
+  cartInsertResults: [] as { data: any; error: any }[],
+  // 23505 後 reselect 的回傳
+  cartReselectResult: { data: { id: "cart-1" }, error: null } as {
+    data: any;
+    error: any;
+  },
+  maybeSingleCalls: 0,
+  cartItemInsertError: null as any,
+};
+
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    from: (table: string) => {
+      if (table === "product") {
+        const chain: any = {
+          select: () => chain,
+          eq: () => chain,
+          single: () => Promise.resolve({ data: state.product }),
+        };
+        return chain;
+      }
+      if (table === "product_option") {
+        const chain: any = {
+          select: () => chain,
+          eq: () => Promise.resolve({ data: state.productOptions }),
+        };
+        return chain;
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  }),
+}));
+
+type Insert = { table: string; values: any };
+const recorded: Insert[] = [];
+
+function cartChain() {
+  const chain: any = {
+    insert: (values: any) => {
+      recorded.push({ table: "cart", values });
+      return chain;
+    },
+    select: () => chain,
+    eq: () => chain,
+    single: () =>
+      Promise.resolve(
+        state.cartInsertResults.shift() ?? {
+          data: { id: "cart-1" },
+          error: null,
+        },
+      ),
+    maybeSingle: () => {
+      state.maybeSingleCalls += 1;
+      return Promise.resolve(state.cartReselectResult);
+    },
+  };
+  return chain;
+}
+
+function makeServiceRole() {
+  return {
+    from: (table: string) => {
+      if (table === "cart") return cartChain();
+      if (table === "cart_item") {
+        const chain: any = {
+          insert: (values: any) => {
+            recorded.push({ table: "cart_item", values });
+            return Promise.resolve({ error: state.cartItemInsertError });
+          },
+        };
+        return chain;
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  };
+}
+vi.mock("@/lib/supabase/service-role", () => ({
+  createServiceRoleClient: () => makeServiceRole(),
+}));
+
+import { addToCart } from "../actions";
+
+const INPUT = {
+  productId: "prod-1",
+  productOptionValueIds: [] as string[],
+  quantity: 1,
+};
+
+beforeEach(() => {
+  recorded.length = 0;
+  cookieSetCalls.length = 0;
+  cookieJar = {};
+  state.cartInsertResults = [];
+  state.cartReselectResult = { data: { id: "cart-1" }, error: null };
+  state.maybeSingleCalls = 0;
+  state.cartItemInsertError = null;
+});
+
+describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
+  it("全新 guest_token → cart insert 一次成功 → cart_item 用回傳的 id → ok:true、cookie 有 set", async () => {
+    state.cartInsertResults = [{ data: { id: "cart-new" }, error: null }];
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: true });
+    const cartItemInsert = recorded.find((r) => r.table === "cart_item");
+    expect(cartItemInsert?.values.cart_id).toBe("cart-new");
+    expect(cookieSetCalls).toHaveLength(1);
+    expect(cookieSetCalls[0]?.name).toBe("guest_token");
+    expect(state.maybeSingleCalls).toBe(0);
+  });
+
+  it("併發 guest_token（23505）→ reselect 取回既有 cart → cart_item 正確寫入 → ok:true", async () => {
+    cookieJar = { guest_token: "guest-abc" };
+    state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
+    state.cartReselectResult = { data: { id: "cart-existing" }, error: null };
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: true });
+    const cartItemInsert = recorded.find((r) => r.table === "cart_item");
+    expect(cartItemInsert?.values.cart_id).toBe("cart-existing");
+    expect(state.maybeSingleCalls).toBe(1);
+  });
+
+  it("23505 後 reselect 查無資料 → ok:false, error:建立購物車失敗", async () => {
+    state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
+    state.cartReselectResult = { data: null, error: null };
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: false, error: "建立購物車失敗" });
+  });
+
+  it("23505 後 reselect 本身出錯 → ok:false, error:建立購物車失敗", async () => {
+    state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
+    state.cartReselectResult = { data: null, error: { message: "boom" } };
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: false, error: "建立購物車失敗" });
+  });
+
+  it("非 23505 的 insert 錯誤 → ok:false, error:建立購物車失敗，且不觸發 reselect", async () => {
+    state.cartInsertResults = [{ data: null, error: { code: "23503" } }];
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: false, error: "建立購物車失敗" });
+    expect(state.maybeSingleCalls).toBe(0);
+  });
+
+  it("cart_item insert 失敗（新 cart）→ ok:false、不 set cookie", async () => {
+    state.cartInsertResults = [{ data: { id: "cart-new" }, error: null }];
+    state.cartItemInsertError = { message: "boom" };
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: false, error: "加入購物車失敗，請再試一次" });
+    expect(cookieSetCalls).toHaveLength(0);
+  });
+
+  it("cart_item insert 失敗（23505 reselect 後的 cart）→ ok:false、不 set cookie", async () => {
+    state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
+    state.cartReselectResult = { data: { id: "cart-existing" }, error: null };
+    state.cartItemInsertError = { message: "boom" };
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: false, error: "加入購物車失敗，請再試一次" });
+    expect(cookieSetCalls).toHaveLength(0);
+  });
+});
