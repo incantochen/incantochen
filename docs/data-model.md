@@ -251,4 +251,20 @@
 
 - 用途：取代 stdout 稽核 log（Vercel logs 留存過短、稽核不可回溯）。落地 DB 隨 T34 備份同保存。
 - RLS 原則：僅 service role insert；**無 select policy**（後台檢視走 service role）；禁 update/delete（稽核不可變，比照 `order_status_log`）。
-- 欄位級規格（actor/order/fields/時間戳等，對齊現有 `logPiiAccess` 結構）於 T80 實作時定稿並補回本節；migration 依慣例先 plan mode。
+- 欄位級規格（`supabase/migrations/0009_add_pii_access_log.sql`）：
+
+  | 欄位          | 型別                                                 | 備註                                                                                                                                                                   |
+  | ------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `id`          | `uuid` PK                                            | `gen_random_uuid()`                                                                                                                                                    |
+  | `actor_id`    | `uuid` FK → `auth.users(id)` `on delete restrict`    | **直接 FK `auth.users`，不比照 `order_status_log` FK `member(id)`**——後台 admin 身份純靠 `ADMIN_EMAIL` 判定，不一定有 `member` 列；restrict 避免刪帳號連帶遺失稽核佐證 |
+  | `actor_email` | `text` not null                                      | 操作者 email 快照                                                                                                                                                      |
+  | `order_id`    | `uuid` FK → `public.orders(id)` `on delete restrict` | 帳務鏈慣例                                                                                                                                                             |
+  | `fields`      | `text[]` not null                                    | 本次揭露的個資欄位清單，對齊 `logPiiAccess` 呼叫端傳入                                                                                                                 |
+  | `created_at`  | `timestamptz` not null default `now()`               | 不可變紀錄，無 `updated_at`／trigger                                                                                                                                   |
+  - Index：`order_id`、`actor_id`。
+  - `revoke update, delete on public.pii_access_log from anon, authenticated`（雙保險，比照 0002 慣例）。
+  - `src/lib/pii/audit.ts` 的 `logPiiAccess` 改為 `async`，寫入失敗一律 `throw`（不吞錯）；唯一呼叫點 `revealOrderPii`（`src/app/admin/orders/[id]/actions.ts`）改為 `await`，寫入失敗即整支拋錯、不回傳 PII（fail closed）。
+
+#### 已知限制／待決策
+
+- **`actor_id → auth.users(id) on delete restrict` 且本表禁 update/delete**：任何曾呼叫過「顯示完整個資」的管理員帳號，日後若要刪除其 Supabase Auth 帳號（如 T09 正式角色系統上線後汰換 MVP 的 `ADMIN_EMAIL` 帳號、或人員離職），會被本表的 FK restrict 擋下、且無法用 `member` 的匿名化模式（T63）繞過——本表刻意不可變，無現成逃生口。留給 T09／未來管理員帳號汰換時再定案（可能選項：改 `on delete set null` 犧牲可追溯性、或明文接受「離職管理員的 auth 帳號需保留、僅停用登入」）。
