@@ -3,7 +3,8 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-// next/headers mock：cookieJar 讀取，set() 記錄呼叫供斷言
+// next/headers mock：cookieJar 讀取，set() 記錄呼叫供斷言；headers() 固定回傳無 IP
+// （IP 限流有獨立的 login/actions 測試涵蓋，這裡只需要 guest_token 限流路徑）
 let cookieJar: Record<string, string> = {};
 const cookieSetCalls: { name: string; value: string }[] = [];
 vi.mock("next/headers", () => ({
@@ -15,6 +16,14 @@ vi.mock("next/headers", () => ({
       cookieJar[name] = value;
     },
   }),
+  headers: async () => ({
+    get: () => null,
+  }),
+}));
+
+// T78 限流 mock：預設一律放行，個別測試可覆寫 success 值
+vi.mock("@/lib/rate-limit", () => ({
+  checkCartWriteRateLimit: async () => state.tokenRateLimitSuccess,
 }));
 
 // 一般 client：商品／選項讀取，固定回傳一個非必填單選項的商品
@@ -43,6 +52,9 @@ const state = {
   },
   maybeSingleCalls: 0,
   cartItemInsertError: null as any,
+  // T78：guest_token 限流 mock 開關；cart.update（touch）回傳的 error
+  tokenRateLimitSuccess: true,
+  cartTouchError: null as any,
 };
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -77,6 +89,14 @@ function cartChain() {
       recorded.push({ table: "cart", values });
       return chain;
     },
+    // touchCartUpdatedAt 呼叫的 .update({...}).eq("id", cartId)：獨立回傳
+    // thenable，不共用 chain 的 eq（那支是給 insert/select 用的）
+    update: (values: any) => ({
+      eq: (_col: string, id: string) => {
+        recorded.push({ table: "cart_touch", values: { id, ...values } });
+        return Promise.resolve({ error: state.cartTouchError });
+      },
+    }),
     select: () => chain,
     eq: () => chain,
     single: () =>
@@ -131,6 +151,8 @@ beforeEach(() => {
   state.cartReselectResult = { data: { id: "cart-1" }, error: null };
   state.maybeSingleCalls = 0;
   state.cartItemInsertError = null;
+  state.tokenRateLimitSuccess = true;
+  state.cartTouchError = null;
 });
 
 describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
@@ -206,5 +228,37 @@ describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
 
     expect(result).toEqual({ ok: false, error: "加入購物車失敗，請再試一次" });
     expect(cookieSetCalls).toHaveLength(0);
+  });
+
+  it("全新 guest_token → 成功加車後 touch 該 cart 的 updated_at", async () => {
+    state.cartInsertResults = [{ data: { id: "cart-new" }, error: null }];
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: true });
+    const touch = recorded.find((r) => r.table === "cart_touch");
+    expect(touch?.values.id).toBe("cart-new");
+  });
+});
+
+describe("addToCart — T78 限流與 cart.updated_at touch", () => {
+  it("guest_token 限流超限 → ok:false、不寫入 cart_item", async () => {
+    cookieJar = { guest_token: "guest-abc" };
+    state.tokenRateLimitSuccess = false;
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: false, error: "操作過於頻繁，請稍後再試" });
+    expect(recorded.find((r) => r.table === "cart_item")).toBeUndefined();
+  });
+
+  it("touch（cart.update）失敗不影響已成功的加車操作", async () => {
+    state.cartInsertResults = [{ data: { id: "cart-new" }, error: null }];
+    state.cartTouchError = { message: "boom" };
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: true });
+    expect(cookieSetCalls).toHaveLength(1);
   });
 });

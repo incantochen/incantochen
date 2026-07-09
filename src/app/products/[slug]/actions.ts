@@ -1,11 +1,14 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { getClientIp } from "@/lib/get-client-ip";
+import { checkCartWriteRateLimit } from "@/lib/rate-limit";
+import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
 
 const GUEST_TOKEN_COOKIE = "guest_token";
-const GUEST_TOKEN_MAX_AGE = 60 * 60 * 24 * 90; // 90 days
+const GUEST_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days, rolling
 
 type AddToCartInput = {
   productId: string;
@@ -22,6 +25,16 @@ export async function addToCart(
 
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
     return { ok: false, error: "數量不正確" };
+  }
+
+  const cookieStore = await cookies();
+  let guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
+
+  const headersList = await headers();
+  const ip = getClientIp(headersList);
+
+  if (!(await checkCartWriteRateLimit(ip, guestToken))) {
+    return { ok: false, error: "操作過於頻繁，請稍後再試" };
   }
 
   const supabase = await createClient();
@@ -89,9 +102,6 @@ export async function addToCart(
     line_unit_price: lineUnitPrice,
   };
 
-  const cookieStore = await cookies();
-  let guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
-
   const serviceRole = createServiceRoleClient();
 
   if (!guestToken) {
@@ -134,6 +144,8 @@ export async function addToCart(
   if (insertError) {
     return { ok: false, error: "加入購物車失敗，請再試一次" };
   }
+
+  await touchCartUpdatedAt(serviceRole, cartId);
 
   cookieStore.set(GUEST_TOKEN_COOKIE, guestToken, {
     httpOnly: true,
