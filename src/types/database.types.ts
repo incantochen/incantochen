@@ -469,6 +469,41 @@ export type Database = {
           },
         ]
       }
+      pii_access_log: {
+        Row: {
+          actor_email: string
+          actor_id: string
+          created_at: string
+          fields: string[]
+          id: string
+          order_id: string
+        }
+        Insert: {
+          actor_email: string
+          actor_id: string
+          created_at?: string
+          fields: string[]
+          id?: string
+          order_id: string
+        }
+        Update: {
+          actor_email?: string
+          actor_id?: string
+          created_at?: string
+          fields?: string[]
+          id?: string
+          order_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pii_access_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product: {
         Row: {
           base_price: number
