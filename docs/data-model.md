@@ -264,3 +264,7 @@
   - Index：`order_id`、`actor_id`。
   - `revoke update, delete on public.pii_access_log from anon, authenticated`（雙保險，比照 0002 慣例）。
   - `src/lib/pii/audit.ts` 的 `logPiiAccess` 改為 `async`，寫入失敗一律 `throw`（不吞錯）；唯一呼叫點 `revealOrderPii`（`src/app/admin/orders/[id]/actions.ts`）改為 `await`，寫入失敗即整支拋錯、不回傳 PII（fail closed）。
+
+#### 已知限制／待決策
+
+- **`actor_id → auth.users(id) on delete restrict` 且本表禁 update/delete**：任何曾呼叫過「顯示完整個資」的管理員帳號，日後若要刪除其 Supabase Auth 帳號（如 T09 正式角色系統上線後汰換 MVP 的 `ADMIN_EMAIL` 帳號、或人員離職），會被本表的 FK restrict 擋下、且無法用 `member` 的匿名化模式（T63）繞過——本表刻意不可變，無現成逃生口。留給 T09／未來管理員帳號汰換時再定案（可能選項：改 `on delete set null` 犧牲可追溯性、或明文接受「離職管理員的 auth 帳號需保留、僅停用登入」）。
