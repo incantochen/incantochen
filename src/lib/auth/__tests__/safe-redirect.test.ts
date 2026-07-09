@@ -25,4 +25,11 @@ describe("safeRedirect", () => {
   it("反斜線變形（/\\evil.com）→ 首頁", () => {
     expect(safeRedirect("/\\evil.com")).toBe("/");
   });
+
+  it("插入 tab／CR／LF 企圖繞過 // 或 /\\ 檢查 → 首頁", () => {
+    expect(safeRedirect("/\t/evil.com")).toBe("/");
+    expect(safeRedirect("/\r/evil.com")).toBe("/");
+    expect(safeRedirect("/\n/evil.com")).toBe("/");
+    expect(safeRedirect("/\t\\evil.com")).toBe("/");
+  });
 });
