@@ -34,4 +34,17 @@ describe("safeRedirect", () => {
   it("rejects backslash-prefixed paths", () => {
     expect(safeRedirect("/\\evil.com")).toBe("/");
   });
+
+  it("rejects a tab-hidden protocol-relative URL", () => {
+    expect(safeRedirect("/\t/evil.com")).toBe("/");
+  });
+
+  it("rejects a newline-hidden protocol-relative URL", () => {
+    expect(safeRedirect("/\n/evil.com")).toBe("/");
+    expect(safeRedirect("/\r/evil.com")).toBe("/");
+  });
+
+  it("strips harmless embedded control characters from an otherwise safe path", () => {
+    expect(safeRedirect("/acc\tount")).toBe("/account");
+  });
 });
