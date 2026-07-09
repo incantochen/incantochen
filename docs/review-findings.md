@@ -156,6 +156,24 @@
 - 修法：把 T95 的 `{error}` 檢查修法**一併套用到本清單各頁**——頁面層對 `error` 非 null 時 render「系統忙碌中，請重新整理」而**非** `notFound()`／空狀態（避免把暫時性故障呈現成「訂單／商品不存在」）；`Promise.all` 的三支子查詢同理逐一檢查。建議在 **T95 的任務範圍與 issue #36 直接補註「範圍含 account 讀取頁（orders 列表／訂單詳情／support／account 首頁 count／profile）與 PDP，共 6 檔」**，與現有 7 處同批一次收斂，避免二次施工。與 T79（findOrCreateMember 吞錯）同根因。
 - 記錄：2026-07-08 首次發現（覆蓋輪替首次逐行審 account 頁面四支＋support/page＋products/[slug]/page；對照 T95 的「7 處」列舉發現這批會員自助讀取路徑未被涵蓋）。
 
+> **追加（2026-07-09）**：T70／PR #45 本機 `/code-review high` review 發現 `src/app/products/[slug]/actions.ts:29-34`（`product` 查詢）與 `:40-49`（`product_option` 查詢）同樣只解構 `data`、未檢查 `error`，與本項同一根因（CLAUDE.md §6）。同函式內的 `cart` insert 已於 T70 補上 `error` 檢查，這兩處未動、屬 pre-existing。建議併入 T95／issue #36 範圍一併處理，避免第三輪審查再次撞見。
+
+## F-018 [P2-low] T70 PR review：`23505` 錯誤碼字面量在 4 個檔案重複、`CREATE UNIQUE INDEX` 未用 `CONCURRENTLY`
+
+- 狀態：待確認
+- 位置：`src/app/products/[slug]/actions.ts:110`（新增的第 4 個字面量，另 3 處為 `src/lib/notification/send-once.ts:114`、`src/app/checkout/actions.ts:177`、`src/app/api/ecpay/notify/route.ts:112`）；`supabase/migrations/0008_cart_guest_token_unique.sql:6`
+- 失敗情境：Postgres unique_violation 錯誤碼 `"23505"` 目前在四個獨立檔案各自手刻字面量比對，與 F-009／F-015「識別碼格式互轉單一出處」同型——若比對邏輯需調整（如需一併攔 exclusion violation、加 log），須四處同步修改，任一遺漏會讓該呼叫點的衝突處理悄悄失效。另外，`0008` 是本專案第一支對「已有資料的正式表」新增 index 的 migration（`0001` 的 index 皆建於初始空表），未加 `CONCURRENTLY`、建置期間對 `cart` 持 ACCESS EXCLUSIVE 鎖；目前資料量小風險可忽略，但尚未建立「何時該用 CONCURRENTLY」的慣例，日後若在更大的表重演相同寫法，可能造成部署窗口延遲尖峰。
+- 修法：（1）抽一個共用常數（如 `PG_UNIQUE_VIOLATION = "23505"`）供四處 import；（2）之後對已有資料的正式表加 index，優先評估 `CREATE INDEX CONCURRENTLY`（需注意 Supabase migration 交易包裹限制，可能需拆成不在單一 transaction 內執行）。兩項皆非阻塞性，可併入下次同類任務或獨立小型清理任務處理。
+- 記錄：2026-07-09（T70／PR #45 本機 `/code-review high` 8 角度審查發現，PR merge 前已與使用者確認暫不在該 PR 處理）。
+
+## F-019 [P2-low] T70 的 unique 約束修法未涵蓋「首次訪客」雙擊情境：guest_token cookie 尚不存在時，併發請求各自產生不同 token
+
+- 狀態：待確認
+- 位置：`src/app/products/[slug]/actions.ts:92-99`（`guestToken` 於 cookie 不存在時以 `crypto.randomUUID()` 產生，此邏輯為 T70 修改前後皆相同、未變動）
+- 失敗情境：T70 的 partial unique index 只保護「併發請求已共用同一 guest_token」的情境（如同一分頁雙擊、已有 cookie 的雙分頁）。對於**完全沒有 cookie 的首次訪客**近乎同時雙擊「加入購物車」或開兩個分頁操作，兩個 server action 各自讀到空 cookie、各自呼叫 `crypto.randomUUID()` 產生**不同**的 token，兩筆 insert 因 token 不同都不會撞到 unique 約束，於是仍會產生兩筆 cart（各自掛一個 cart_item），最終只有一個 `Set-Cookie` 存活在瀏覽器，另一筆 cart／商品對客人來說「憑空消失」——這正是 T70 標題所指「雙擊、雙分頁」情境的其中一個子情境，未被本次修法涵蓋。此為 T70 修改前既已存在的行為（非本次引入的退化），本次 review 才首次明確點出。
+- 修法：尚待設計；可能方向包含在頁面首次載入時（如 `src/proxy.ts`）就預先簽發 guest_token cookie，讓「加入購物車」永遠不是第一個設定 cookie 的動作，消除競爭窗口。屬於架構層調整，不建議倉促帶入既有 PR，需要獨立評估。
+- 記錄：2026-07-09（T70／PR #45 本機 `/code-review high` 8 角度審查發現，PR merge 前已與使用者確認暫不在該 PR 處理，列為獨立後續項目）。
+
 ---
 
 ## 既有列管任務回歸狀態（2026-07-02 確認仍在列管、未修）
