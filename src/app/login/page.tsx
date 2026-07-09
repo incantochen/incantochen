@@ -1,52 +1,57 @@
-"use client"
+"use client";
 
-import { useState, useTransition, Suspense } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
-import { requestOtp, verifyOtpCode } from "./actions"
+import { useState, useTransition, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { requestOtp, verifyOtpCode } from "./actions";
+import { safeRedirect } from "@/lib/auth/safe-redirect";
 
 function LoginForm() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-  const redirectTo = searchParams.get("redirect") ?? "/"
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTo = safeRedirect(searchParams.get("redirect"));
 
-  const [step, setStep] = useState<"email" | "otp">("email")
-  const [email, setEmail] = useState("")
-  const [code, setCode] = useState("")
-  const [error, setError] = useState<string | null>(null)
-  const [isPending, startTransition] = useTransition()
+  const [step, setStep] = useState<"email" | "otp">("email");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
 
   function handleSendCode() {
-    setError(null)
+    setError(null);
     startTransition(async () => {
-      const result = await requestOtp(email)
+      const result = await requestOtp(email);
       if (result.ok) {
-        setStep("otp")
+        setStep("otp");
       } else {
-        setError(result.error)
+        setError(result.error);
       }
-    })
+    });
   }
 
   function handleVerify() {
-    setError(null)
+    setError(null);
     startTransition(async () => {
-      const result = await verifyOtpCode(email, code)
+      const result = await verifyOtpCode(email, code);
       if (result.ok) {
-        router.push(redirectTo)
+        router.push(redirectTo);
       } else {
-        setError(result.error)
+        setError(result.error);
       }
-    })
+    });
   }
 
   return (
     <div className="mx-auto max-w-md px-6 py-16">
-      <div className="text-[11px] tracking-[0.34em] text-secondary-400 uppercase">LOGIN</div>
+      <div className="text-[11px] tracking-[0.34em] text-secondary-400 uppercase">
+        LOGIN
+      </div>
       <h1 className="mt-2 font-heading text-[34px] text-ink">登入</h1>
 
       {step === "email" ? (
         <div className="mt-8">
-          <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">Email</label>
+          <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+            Email
+          </label>
           <input
             type="email"
             value={email}
@@ -65,7 +70,9 @@ function LoginForm() {
         </div>
       ) : (
         <div className="mt-8">
-          <p className="text-sm text-ash">驗證碼已寄到 {email}，請輸入信中的驗證碼。</p>
+          <p className="text-sm text-ash">
+            驗證碼已寄到 {email}，請輸入信中的驗證碼。
+          </p>
           <label className="mt-4 block text-[11px] tracking-[0.16em] text-ash uppercase">
             驗證碼
           </label>
@@ -99,7 +106,7 @@ function LoginForm() {
 
       {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
     </div>
-  )
+  );
 }
 
 export default function LoginPage() {
@@ -107,5 +114,5 @@ export default function LoginPage() {
     <Suspense>
       <LoginForm />
     </Suspense>
-  )
+  );
 }
