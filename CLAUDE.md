@@ -25,7 +25,7 @@
 ### 0.2 Durable 架構規則（動到對應模組必守）
 
 - **寫入權限**：`cart`／`cart_item`／`member`／訂單鏈／`support_request` 的前台 RLS 讀寫全拒（或僅 select own）——寫入一律走 `src/lib/supabase/service-role.ts`（`import "server-only"` 防呆）；`member` 無 INSERT policy，建會員走 `find-or-create-member.ts`。
-- **訪客身份**：`guest_token` httpOnly cookie（90 天）；任何 cart_item 改動前先驗 `cart.guest_token` 與 cookie 一致（擁有權檢查，防亂猜 id 動到別人購物車）。
+- **訪客身份**：`guest_token` httpOnly cookie（30 天 rolling，僅 `addToCart` 成功時重設效期；T78／決策 #14）；任何 cart_item 改動前先驗 `cart.guest_token` 與 cookie 一致（擁有權檢查，防亂猜 id 動到別人購物車）；DB 側訪客車＝`cart.updated_at` 逾 90 天且 `member_id IS NULL` 由每日 Cron 清除。
 - **金額**：`verify-prices.ts` 依 DB 白名單重算，絕不信任前端／快照價格；價格變動→更新 cart_item 快照＋回傳 `priceUpdated` **不建單**（R/S/Q loop，對齊 user-flow.md）。
 - **訂單成立即契約**：快照（`unit_price_snapshot`／`config_snapshot`／`product_name_snapshot`）優先顯示、join 現值僅 null 窗口 fallback；商品改名/調價/下架不回寫已成立訂單；付款重試不重驗價（逾期取消＝T66）。
 - **Auth**：`src/proxy.ts` 必須 named export `proxy`（Next 16 取代 middleware.ts）；magic link 落地頁**按鈕才消耗 token**（不在 useEffect 自動驗證）；OTP **不假設固定長度**（雲端 production 實際 8 碼、本機 config.toml 6 碼）；結帳頁不需 OTP——「結帳即會員」在 `createOrder` 背景處理。
