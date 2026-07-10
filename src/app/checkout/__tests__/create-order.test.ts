@@ -40,8 +40,8 @@ vi.mock("@/lib/quote/verify-prices", () => ({
 }));
 
 // service role：table 路由＋操作記錄器
-type Insert = { table: string; values: any };
-const recorded: Insert[] = [];
+type Recorded = { table: string; values: any };
+const recorded: Recorded[] = [];
 const deletes: string[] = [];
 const state = {
   cart: { id: "cart-1" } as { id: string } | null,
@@ -55,44 +55,33 @@ const state = {
     },
   ] as any[] | null,
   member: null as { id: string } | null,
-  // orders insert 每次呼叫的回傳（依序消耗）
-  orderInsertResults: [] as { data: any; error: any }[],
-  orderItemInsertError: null as any,
+  // create_order_with_items RPC 每次呼叫的回傳（依序消耗）——T76 改用單一
+  // RPC 交易化後，order_no 23505 碰撞重試是「重新呼叫 RPC」而非分段 insert。
+  rpcResults: [] as { data: any; error: any }[],
   createdUser: { id: "member-new" },
 };
 
-function ordersChain() {
-  const chain: any = {
-    insert: (values: any) => {
-      recorded.push({ table: "orders", values });
-      return chain;
-    },
-    select: () => chain,
-    single: () =>
-      Promise.resolve(
-        state.orderInsertResults.shift() ?? {
-          data: { id: "order-1" },
-          error: null,
-        },
-      ),
-  };
-  return chain;
+function rpcCalls() {
+  return recorded.filter((r) => r.table === "rpc:create_order_with_items");
 }
 
 function makeServiceRole() {
   return {
     auth: {
       admin: {
-        createUser: vi
-          .fn()
-          .mockResolvedValue({
-            data: { user: state.createdUser },
-            error: null,
-          }),
+        createUser: vi.fn().mockResolvedValue({
+          data: { user: state.createdUser },
+          error: null,
+        }),
       },
     },
+    rpc: (name: string, params: any) => {
+      recorded.push({ table: `rpc:${name}`, values: params });
+      return Promise.resolve(
+        state.rpcResults.shift() ?? { data: { id: "order-1" }, error: null },
+      );
+    },
     from: (table: string) => {
-      if (table === "orders") return ordersChain();
       const chain: any = {
         select: () => chain,
         eq: () => chain,
@@ -106,9 +95,7 @@ function makeServiceRole() {
         },
         insert: (values: any) => {
           recorded.push({ table, values });
-          return Promise.resolve({
-            error: table === "order_item" ? state.orderItemInsertError : null,
-          });
+          return Promise.resolve({ error: null });
         },
         delete: () => {
           deletes.push(table);
@@ -161,8 +148,7 @@ beforeEach(() => {
   cookieJar = { guest_token: "guest-abc" };
   state.cart = { id: "cart-1" };
   state.member = null;
-  state.orderInsertResults = [];
-  state.orderItemInsertError = null;
+  state.rpcResults = [];
   getUser.mockResolvedValue({ data: { user: null } });
   verifyCartPrices.mockResolvedValue(VERIFIED_OK);
   redirect.mockClear();
@@ -177,7 +163,7 @@ describe("前置檢查", () => {
     cookieJar = {};
     const result = await createOrder(FORM);
     expect(result).toMatchObject({ ok: false });
-    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
+    expect(rpcCalls()).toHaveLength(0);
   });
 
   it("表單驗證失敗（缺同意勾選）→ 回錯誤", async () => {
@@ -204,14 +190,14 @@ describe("伺服器端驗價（T41 紅線）", () => {
     );
     expect(cartTouch).toBeTruthy();
     expect(revalidatePath).toHaveBeenCalledWith("/cart");
-    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
+    expect(rpcCalls()).toHaveLength(0);
   });
 
   it("驗價拋錯（商品下架）→ 回錯誤、不建單", async () => {
     verifyCartPrices.mockRejectedValue(new Error("商品已下架"));
     const result = await createOrder(FORM);
     expect(result).toMatchObject({ ok: false, error: "商品已下架" });
-    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
+    expect(rpcCalls()).toHaveLength(0);
   });
 
   it("訂單金額採驗證後價格，非 cart 快照價", async () => {
@@ -222,33 +208,32 @@ describe("伺服器端驗價（T41 紅線）", () => {
       if (e !== REDIRECT) throw e;
     });
 
-    const orderInsert = recorded.find((r) => r.table === "orders");
-    expect(orderInsert?.values.subtotal).toBe(25000);
-    expect(orderInsert?.values.total_amount).toBe(25000);
-    const itemInsert = recorded.find((r) => r.table === "order_item");
-    expect(itemInsert?.values[0].unit_price_snapshot).toBe(25000);
+    const call = rpcCalls()[0]!;
+    expect(call.values.p_subtotal).toBe(25000);
+    expect(call.values.p_total_amount).toBe(25000);
+    expect(call.values.p_items[0].unit_price_snapshot).toBe(25000);
   });
 });
 
 describe("order_no 碰撞重試", () => {
   it("首次 23505 → 換號重試一次成功 → redirect 至付款頁", async () => {
-    state.orderInsertResults = [
+    state.rpcResults = [
       { data: null, error: { code: "23505" } },
       { data: { id: "order-2" }, error: null },
     ];
 
     await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
 
-    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(2);
-    const [first, second] = recorded.filter((r) => r.table === "orders");
-    expect(first.values.order_no).not.toBe(second.values.order_no);
+    expect(rpcCalls()).toHaveLength(2);
+    const [first, second] = rpcCalls();
+    expect(first!.values.p_order_no).not.toBe(second!.values.p_order_no);
     expect(redirect).toHaveBeenCalledWith(
       expect.stringMatching(/^\/checkout\/pay\?order=INC-/),
     );
   });
 
   it("重試仍失敗 → 回建單失敗錯誤", async () => {
-    state.orderInsertResults = [
+    state.rpcResults = [
       { data: null, error: { code: "23505" } },
       { data: null, error: { code: "23505" } },
     ];
@@ -257,22 +242,25 @@ describe("order_no 碰撞重試", () => {
   });
 });
 
-describe("明細寫入與清車", () => {
-  it("order_item 失敗 → 回錯誤且訊息含訂單號、不清購物車", async () => {
-    state.orderItemInsertError = { message: "boom" };
-    const result = (await createOrder(FORM)) as { ok: false; error: string };
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/INC-/);
-    expect(deletes).not.toContain("cart");
+describe("交易化與清車（T76／T75）", () => {
+  it("RPC 整體失敗（非 23505，例如 order_item FK 違反已整段 rollback）→ 回建單失敗錯誤、不 redirect", async () => {
+    state.rpcResults = [{ data: null, error: { message: "boom" } }];
+    const result = await createOrder(FORM);
+    expect(result).toMatchObject({ ok: false });
+    expect(redirect).not.toHaveBeenCalled();
   });
 
-  it("成功路徑 → order＋order_item 寫入、清購物車、redirect", async () => {
+  it("成功路徑 → 呼叫 create_order_with_items 並帶正確 cart_id 與品項快照、redirect；不主動清購物車（T75：付款成功才清）", async () => {
     await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
 
-    expect(recorded.find((r) => r.table === "orders")).toBeTruthy();
-    const itemInsert = recorded.find((r) => r.table === "order_item");
-    expect(itemInsert?.values[0].product_name_snapshot).toBe("祖母綠戒指");
-    expect(deletes).toContain("cart");
+    const call = rpcCalls()[0]!;
+    expect(call).toBeTruthy();
+    expect(call.values.p_cart_id).toBe("cart-1");
+    expect(call.values.p_items[0]).toMatchObject({
+      product_name_snapshot: "祖母綠戒指",
+      unit_price_snapshot: 25000,
+    });
+    expect(deletes).not.toContain("cart");
   });
 });
 
@@ -284,8 +272,8 @@ describe("結帳即會員", () => {
       if (e !== REDIRECT) throw e;
     });
 
-    const orderInsert = recorded.find((r) => r.table === "orders");
-    expect(orderInsert?.values.member_id).toBe("member-existing");
+    const call = rpcCalls()[0]!;
+    expect(call.values.p_member_id).toBe("member-existing");
   });
 
   it("新 email → admin createUser＋findOrCreateMember → 訂單掛新會員", async () => {
@@ -294,7 +282,7 @@ describe("結帳即會員", () => {
     });
 
     expect(findOrCreateMember).toHaveBeenCalledWith("member-new", FORM.email);
-    const orderInsert = recorded.find((r) => r.table === "orders");
-    expect(orderInsert?.values.member_id).toBe("member-new");
+    const call = rpcCalls()[0]!;
+    expect(call.values.p_member_id).toBe("member-new");
   });
 });

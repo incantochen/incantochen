@@ -11,7 +11,7 @@ import {
   checkoutFormSchema,
   type CheckoutFormValues,
 } from "@/lib/checkout/schema";
-import { verifyCartPrices } from "@/lib/quote/verify-prices";
+import { verifyCartPrices, type VerifiedItem } from "@/lib/quote/verify-prices";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
 
 type CreateOrderResult = { ok: false; error: string; priceUpdated?: true };
@@ -56,11 +56,12 @@ export async function createOrder(
   if (!cart) {
     return { ok: false, error: "購物車已空，請重新加入商品" };
   }
+  const cartId = cart.id;
 
   const { data: cartItems } = await serviceRole
     .from("cart_item")
     .select("id, product_id, quantity, unit_price_snapshot, config_snapshot")
-    .eq("cart_id", cart.id);
+    .eq("cart_id", cartId);
 
   if (!cartItems || cartItems.length === 0) {
     return { ok: false, error: "購物車已空，請重新加入商品" };
@@ -106,7 +107,7 @@ export async function createOrder(
   }
 
   // ④ Server-side price re-verification (T41 安全紅線：絕不信任 cart 快照價)
-  let verifiedItems;
+  let verifiedItems: VerifiedItem[];
   try {
     verifiedItems = await verifyCartPrices(serviceRole, cartItems);
   } catch (e) {
@@ -130,7 +131,7 @@ export async function createOrder(
           .eq("id", item.cartItemId),
       ),
     );
-    await touchCartUpdatedAt(serviceRole, cart.id);
+    await touchCartUpdatedAt(serviceRole, cartId);
     revalidatePath("/cart");
     revalidatePath("/checkout");
     return {
@@ -148,30 +149,35 @@ export async function createOrder(
   const shippingFee = 0; // T48 暫緩
   const totalAmount = subtotal + shippingFee;
 
-  // ⑤⑥ Insert order (retry once on order_no collision)
-  async function insertOrder(no: string) {
-    return serviceRole
-      .from("orders")
-      .insert({
-        member_id: memberId,
-        order_no: no,
-        status: "pending_payment",
-        recipient_name: recipientName,
-        recipient_phone: recipientPhone,
-        zip_code: zipCode,
-        shipping_address: shippingAddress,
-        subtotal,
-        shipping_fee: shippingFee,
-        total_amount: totalAmount,
-        custom_consent: true,
-        consent_at: new Date().toISOString(),
-      })
-      .select("id")
-      .single();
+  // ⑤⑥⑦ Insert order + order_items in one transaction (retry once on
+  // order_no collision). T76：改用 RPC，order_item insert 失敗會讓整個
+  // function 連 orders 一起 rollback，不再留孤兒訂單。
+  async function callCreateOrderRpc(no: string) {
+    return serviceRole.rpc("create_order_with_items", {
+      p_member_id: memberId,
+      p_order_no: no,
+      p_cart_id: cartId,
+      p_recipient_name: recipientName,
+      p_recipient_phone: recipientPhone,
+      p_zip_code: zipCode,
+      p_shipping_address: shippingAddress,
+      p_subtotal: subtotal,
+      p_shipping_fee: shippingFee,
+      p_total_amount: totalAmount,
+      p_custom_consent: true,
+      p_consent_at: new Date().toISOString(),
+      p_items: verifiedItems.map((item) => ({
+        product_id: item.productId,
+        product_name_snapshot: item.productName,
+        quantity: item.quantity,
+        unit_price_snapshot: item.verifiedUnitPrice,
+        config_snapshot: item.configSnapshot,
+      })),
+    });
   }
 
   let orderNo = generateOrderNo();
-  const firstAttempt = await insertOrder(orderNo);
+  const firstAttempt = await callCreateOrderRpc(orderNo);
   let order = firstAttempt.data;
   const orderError = firstAttempt.error;
 
@@ -179,7 +185,7 @@ export async function createOrder(
     if (orderError?.code === "23505") {
       // order_no collision — retry with a new number
       orderNo = generateOrderNo();
-      const retry = await insertOrder(orderNo);
+      const retry = await callCreateOrderRpc(orderNo);
       if (retry.error || !retry.data) {
         return { ok: false, error: "建立訂單失敗，請稍後再試" };
       }
@@ -189,32 +195,7 @@ export async function createOrder(
     }
   }
 
-  const orderId = order.id;
-
-  // ⑦ Insert order_items (use server-verified prices, not raw cart snapshots)
-  const orderItems = verifiedItems.map((item) => ({
-    order_id: orderId,
-    product_id: item.productId,
-    product_name_snapshot: item.productName,
-    quantity: item.quantity,
-    unit_price_snapshot: item.verifiedUnitPrice,
-    config_snapshot: item.configSnapshot,
-  }));
-
-  const { error: itemsError } = await serviceRole
-    .from("order_item")
-    .insert(orderItems);
-
-  if (itemsError) {
-    // Order exists but items failed — return error; admin can clean up orphaned order
-    return {
-      ok: false,
-      error: "訂單明細寫入失敗，請聯絡客服（訂單號：" + orderNo + "）",
-    };
-  }
-
-  // ⑧ Clear cart (CASCADE deletes cart_items)
-  await serviceRole.from("cart").delete().eq("id", cart.id);
+  // ⑧ Cart 保留至付款成功才刪除（T75，見 ensureOrderPaid）——order 已存 cart_id。
 
   // ⑨ Redirect to payment page
   redirect(`/checkout/pay?order=${orderNo}`);

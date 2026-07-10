@@ -41,7 +41,7 @@ export async function ensureOrderPaid(
     .update({ status: "paid" })
     .eq("id", orderId)
     .eq("status", "pending_payment")
-    .select("id")
+    .select("id, cart_id")
     .maybeSingle();
 
   // Supabase 對 statement timeout／連線池耗盡等暫時性錯誤不會 throw，只回傳
@@ -66,6 +66,23 @@ export async function ensureOrderPaid(
       level: "error",
       extra: { orderId, logError },
     });
+  }
+
+  // T75：付款成功才清購物車（下單當下保留，避免付款失敗要重配置）。清車失敗
+  // 只記錄不拋錯，比照 touchCartUpdatedAt 的容錯層級——這是次要清理，不應擋住
+  // 付款確認流程。
+  if (promoted.cart_id) {
+    const { error: cartError } = await serviceRole
+      .from("cart")
+      .delete()
+      .eq("id", promoted.cart_id);
+    if (cartError) {
+      console.error("[ensureOrderPaid] cart delete failed", cartError);
+      Sentry.captureMessage("ensureOrderPaid: cart delete failed", {
+        level: "error",
+        extra: { orderId, cartId: promoted.cart_id, error: cartError.message },
+      });
+    }
   }
 }
 
