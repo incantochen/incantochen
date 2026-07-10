@@ -1,10 +1,7 @@
 import "server-only";
 
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import {
-  type OrderStatus,
-  VALID_TRANSITIONS,
-} from "@/lib/order/order-status";
+import { type OrderStatus, VALID_TRANSITIONS } from "@/lib/order/order-status";
 
 export type { OrderStatus };
 export { VALID_TRANSITIONS };
@@ -18,7 +15,7 @@ export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
 export async function transitionOrder(
   orderId: string,
   to: OrderStatus,
-  options?: { note?: string; actorId?: string }
+  options?: { note?: string; actorId?: string },
 ): Promise<void> {
   const supabase = createServiceRoleClient();
 
@@ -35,17 +32,23 @@ export async function transitionOrder(
   const from = order.status as OrderStatus;
 
   if (!canTransition(from, to)) {
-    throw new Error(
-      `非法狀態轉換：${from} → ${to}`
-    );
+    throw new Error(`非法狀態轉換：${from} → ${to}`);
   }
 
-  const { error: updateError } = await supabase
+  const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({ status: to })
-    .eq("id", orderId);
+    .eq("id", orderId)
+    .eq("status", from)
+    .select("id")
+    .maybeSingle();
 
   if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
+  if (!updated) {
+    throw Object.assign(new Error(`訂單狀態已被其他流程異動：${orderId}`), {
+      code: "STALE_TRANSITION",
+    });
+  }
 
   const { error: logError } = await supabase.from("order_status_log").insert({
     order_id: orderId,
@@ -64,7 +67,7 @@ export async function transitionOrder(
 export async function adminOverrideStatus(
   orderId: string,
   to: OrderStatus,
-  options: { operatorId: string; reason: string }
+  options: { operatorId: string; reason: string },
 ): Promise<void> {
   const supabase = createServiceRoleClient();
 
