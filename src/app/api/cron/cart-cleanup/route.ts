@@ -22,13 +22,32 @@ export async function GET(request: Request) {
     const serviceRole = createServiceRoleClient();
     const cutoff = new Date(Date.now() - GUEST_CART_MAX_AGE_MS).toISOString();
 
-    const { data, error } = await serviceRole
+    // Postgres 的 DELETE 語法不支援 ORDER BY，PostgREST 組出限制筆數的子查詢時
+    // 對這個版本會回傳 42703（column does not exist）——實測驗證發現：
+    // `.delete().order().limit()` 這個組合會整支失敗，拿掉 order 才會動。
+    // 改成比照 ecpay-reconcile 的候選查詢模式：先 SELECT（可以安全用
+    // order+limit）取出候選 id，再用 id 清單各別 DELETE。
+    const { data: candidates, error: selectError } = await serviceRole
       .from("cart")
-      .delete()
+      .select("id")
       .is("member_id", null)
       .lt("updated_at", cutoff)
       .order("updated_at", { ascending: true })
-      .limit(CLEANUP_BATCH_LIMIT)
+      .limit(CLEANUP_BATCH_LIMIT);
+
+    if (selectError) {
+      throw new Error(`cart cleanup 候選查詢失敗: ${selectError.message}`);
+    }
+
+    const ids = (candidates ?? []).map((c) => c.id);
+    if (ids.length === 0) {
+      return Response.json({ deleted: 0 });
+    }
+
+    const { data, error } = await serviceRole
+      .from("cart")
+      .delete()
+      .in("id", ids)
       .select("id");
 
     if (error) throw new Error(`cart cleanup 刪除失敗: ${error.message}`);
