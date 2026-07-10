@@ -81,8 +81,8 @@ export async function revealOrderPii(orderId: string): Promise<{
 
   if (error || !order) throw new Error("找不到訂單");
 
-  // 完整個資離開伺服器前必記稽核 log（T64：記錄誰存取個資）
-  logPiiAccess({
+  // 完整個資離開伺服器前必記稽核 log（T64/T80）；寫入失敗 fail closed，不回傳 PII
+  await logPiiAccess({
     actorId: user.id,
     actorEmail: user.email ?? "",
     orderId,

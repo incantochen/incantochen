@@ -126,7 +126,7 @@
 
 ---
 
-## 5. 資料模型（14 張表，勿隨意增刪表；破例僅限已核決策：T33 `support_request`、T80 `pii_access_log`〔決策 #13，待實作〕）
+## 5. 資料模型（15 張表，勿隨意增刪表；破例僅限已核決策：T33 `support_request`、T80 `pii_access_log`〔決策 #13，migration 0009 已套用〕）
 
 - **商品與選項**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue
 - **會員與購物車**：Member、Cart、CartItem
