@@ -30,6 +30,28 @@ async function createPendingPayment(
   if (error) {
     redirect("/checkout");
   }
+
+  // 併發防護：沒有 DB 層級的 unique 約束擋「同一張訂單只能有一筆 pending
+  // payment」，若兩個並發請求都判定舊 row 已過期、各自 insert 了一筆新的，
+  // 這裡把除了剛剛這筆以外、同訂單其他 pending row 都標記 failed，縮小重複
+  // pending row 留存的視窗（非完全原子，但足以清掉絕大多數併發殘留）。
+  const { data: otherPending } = await serviceRole
+    .from("payment")
+    .select("id, merchant_trade_no")
+    .eq("order_id", orderId)
+    .eq("status", "pending");
+
+  const staleIds = (otherPending ?? [])
+    .filter((p) => p.merchant_trade_no !== merchantTradeNo)
+    .map((p) => p.id);
+  if (staleIds.length > 0) {
+    await serviceRole
+      .from("payment")
+      .update({ status: "failed" })
+      .in("id", staleIds)
+      .eq("status", "pending");
+  }
+
   return merchantTradeNo;
 }
 
@@ -65,26 +87,29 @@ export default async function CheckoutPayPage({
     redirect("/");
   }
 
-  const { data: orderItems } = await serviceRole
-    .from("order_item")
-    .select("quantity, product_name_snapshot, product:product_id ( name )")
-    .eq("order_id", order.id);
+  // 冪等：復用現有 pending payment（頁面重整不重建），
+  // 付款失敗後 status 變 failed，下次進來才產生新 trade no。
+  // 但 pending 超過 STALE_PAYMENT_MS 視為放棄（T74）：舊 row 標記 failed，換發新序號。
+  // 兩個查詢互不依賴（都只靠 order.id），平行送出減少這個高延遲敏感頁面
+  // 多等一趟 round trip 的時間。
+  const [{ data: orderItems }, { data: existingPending }] = await Promise.all([
+    serviceRole
+      .from("order_item")
+      .select("quantity, product_name_snapshot, product:product_id ( name )")
+      .eq("order_id", order.id),
+    serviceRole
+      .from("payment")
+      .select("id, merchant_trade_no, created_at")
+      .eq("order_id", order.id)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
   if (!orderItems || orderItems.length === 0) {
     redirect("/checkout");
   }
-
-  // 冪等：復用現有 pending payment（頁面重整不重建），
-  // 付款失敗後 status 變 failed，下次進來才產生新 trade no。
-  // 但 pending 超過 STALE_PAYMENT_MS 視為放棄（T74）：舊 row 標記 failed，換發新序號。
-  const { data: existingPending } = await serviceRole
-    .from("payment")
-    .select("id, merchant_trade_no, created_at")
-    .eq("order_id", order.id)
-    .eq("status", "pending")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
 
   let merchantTradeNo: string;
 
@@ -92,12 +117,23 @@ export default async function CheckoutPayPage({
     merchantTradeNo = existingPending.merchant_trade_no;
   } else {
     if (existingPending) {
-      const { error } = await serviceRole
+      // 條件式 UPDATE：WHERE 帶 status="pending" 防跟 webhook 競態——如果客人
+      // 剛好在這筆「被判定放棄」的舊交易序號上完成付款，webhook 會搶先把這筆
+      // payment 轉成 paid，此時這裡不該再把它蓋回 failed（CLAUDE.md §6）。
+      const { data: markedFailed, error } = await serviceRole
         .from("payment")
         .update({ status: "failed" })
-        .eq("id", existingPending.id);
+        .eq("id", existingPending.id)
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
       if (error) {
         redirect("/checkout");
+      }
+      if (!markedFailed) {
+        // 沒搶到：這筆 payment 已經被 webhook 處理過（很可能剛好轉 paid）。
+        // 重新整頁讓最上方的邏輯用最新的 order.status 重新判斷去向。
+        redirect(`/checkout/pay?order=${orderNo}`);
       }
     }
     merchantTradeNo = await createPendingPayment(

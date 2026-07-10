@@ -9,6 +9,7 @@ import { sendOnce } from "@/lib/notification/send-once";
 import {
   transitionOrder,
   adminOverrideStatus,
+  OrderTransitionRaceError,
   type OrderStatus,
 } from "@/lib/order/state-machine";
 import {
@@ -17,9 +18,26 @@ import {
 } from "@/lib/support/schema";
 import type { SupportRequestStatus } from "@/lib/support/support-request";
 
+// transitionOrder 的 CAS 守衛（T66）代表狀態轉換現在可能因為別的流程（cron
+// 自動取消、ECPay webhook）搶先動過而失敗。這種情況不是操作失敗，是頁面顯示
+// 的狀態已經過期——重新整理路徑讓畫面拿到最新狀態，並回傳客氣一點的訊息，
+// 而不是把 transitionOrder 內部丟出的技術性字串原樣顯示給 admin。
+function friendlyTransitionError(e: unknown): never {
+  if (e instanceof OrderTransitionRaceError) {
+    throw new Error("此訂單狀態已被其他流程異動，畫面已更新為最新狀態，請重新確認後再操作");
+  }
+  throw e;
+}
+
 export async function changeStatus(orderId: string, to: OrderStatus) {
   const user = await requireAdmin();
-  await transitionOrder(orderId, to, { actorId: user.id });
+  try {
+    await transitionOrder(orderId, to, { actorId: user.id });
+  } catch (e) {
+    revalidatePath(`/admin/orders/${orderId}`);
+    revalidatePath("/admin/orders");
+    friendlyTransitionError(e);
+  }
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
 }
@@ -35,10 +53,16 @@ export async function shipOrder(orderId: string, trackingNo: string) {
 
   if (error) throw new Error(`更新物流單號失敗：${error.message}`);
 
-  await transitionOrder(orderId, "shipped", {
-    actorId: user.id,
-    note: `出貨：${trackingNo}`,
-  });
+  try {
+    await transitionOrder(orderId, "shipped", {
+      actorId: user.id,
+      note: `出貨：${trackingNo}`,
+    });
+  } catch (e) {
+    revalidatePath(`/admin/orders/${orderId}`);
+    revalidatePath("/admin/orders");
+    friendlyTransitionError(e);
+  }
 
   // 出貨這件事本身已經成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證
   // 絕不往外拋例外（不擋出貨操作），且用 notification(order_id, type) 的

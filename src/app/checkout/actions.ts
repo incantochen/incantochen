@@ -13,8 +13,26 @@ import {
 } from "@/lib/checkout/schema";
 import { verifyCartPrices, type VerifiedItem } from "@/lib/quote/verify-prices";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
+import type { Json } from "@/types/database.types";
+import { z } from "zod";
 
 type CreateOrderResult = { ok: false; error: string; priceUpdated?: true };
+
+// T76：create_order_with_items 的 p_items 參數在 RPC 那端是未型別化的 jsonb，
+// 不像先前直接 .insert() 到 order_item 時能靠生成型別做端到端檢查。這裡在送
+// 進 RPC 之前先驗一次形狀，把「欄位改名/漏欄位」這類契約走鐘及早攔下，不必
+// 等到 DB 端因型別轉換失敗或（更糟）安靜寫入錯的值才發現。
+const orderItemPayloadSchema = z
+  .array(
+    z.object({
+      product_id: z.string().uuid(),
+      product_name_snapshot: z.string().min(1),
+      quantity: z.number().int().positive(),
+      unit_price_snapshot: z.number().nonnegative(),
+      config_snapshot: z.custom<Json>(),
+    }),
+  )
+  .min(1);
 
 function generateOrderNo(): string {
   const now = new Date();
@@ -65,6 +83,23 @@ export async function createOrder(
 
   if (!cartItems || cartItems.length === 0) {
     return { ok: false, error: "購物車已空，請重新加入商品" };
+  }
+
+  // T75 讓 cart 在下單後、付款前這段期間繼續存在，代表客人可能回到 /cart
+  // 對同一張還沒結案的購物車重複按「結帳」。若已有一筆指向這張 cart 的
+  // pending_payment 訂單，直接導去它的付款頁，不要另外開一張新訂單造成
+  // 重複下單／重複收款的風險。
+  const { data: existingPendingOrder } = await serviceRole
+    .from("orders")
+    .select("order_no")
+    .eq("cart_id", cartId)
+    .eq("status", "pending_payment")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingPendingOrder) {
+    redirect(`/checkout/pay?order=${existingPendingOrder.order_no}`);
   }
 
   // ③ Member find-or-create ("結帳即會員")
@@ -152,6 +187,17 @@ export async function createOrder(
   // ⑤⑥⑦ Insert order + order_items in one transaction (retry once on
   // order_no collision). T76：改用 RPC，order_item insert 失敗會讓整個
   // function 連 orders 一起 rollback，不再留孤兒訂單。
+  const itemsPayload = orderItemPayloadSchema.parse(
+    verifiedItems.map((item) => ({
+      product_id: item.productId,
+      product_name_snapshot: item.productName,
+      quantity: item.quantity,
+      unit_price_snapshot: item.verifiedUnitPrice,
+      config_snapshot: item.configSnapshot,
+    })),
+  );
+  const consentAt = new Date().toISOString();
+
   async function callCreateOrderRpc(no: string) {
     return serviceRole.rpc("create_order_with_items", {
       p_member_id: memberId,
@@ -165,39 +211,30 @@ export async function createOrder(
       p_shipping_fee: shippingFee,
       p_total_amount: totalAmount,
       p_custom_consent: true,
-      p_consent_at: new Date().toISOString(),
-      p_items: verifiedItems.map((item) => ({
-        product_id: item.productId,
-        product_name_snapshot: item.productName,
-        quantity: item.quantity,
-        unit_price_snapshot: item.verifiedUnitPrice,
-        config_snapshot: item.configSnapshot,
-      })),
+      p_consent_at: consentAt,
+      p_items: itemsPayload,
     });
   }
 
+  // 兩次嘗試（首發＋order_no 撞號重試）共用同一套錯誤分類，避免像先前那樣
+  // 重試那次的分支把「購物車已過期」（23503）跟其他失敗混在一起，讓客人看到
+  // 不對應實情的通用錯誤訊息。
   let orderNo = generateOrderNo();
-  const firstAttempt = await callCreateOrderRpc(orderNo);
-  let order = firstAttempt.data;
-  const orderError = firstAttempt.error;
+  let { data: order, error: orderError } = await callCreateOrderRpc(orderNo);
 
-  if (orderError || !order) {
-    if (orderError?.code === "23505") {
-      // order_no collision — retry with a new number
-      orderNo = generateOrderNo();
-      const retry = await callCreateOrderRpc(orderNo);
-      if (retry.error || !retry.data) {
-        return { ok: false, error: "建立訂單失敗，請稍後再試" };
-      }
-      order = retry.data;
-    } else if (orderError?.code === "23503") {
+  if (!order && orderError?.code === "23505") {
+    orderNo = generateOrderNo();
+    ({ data: order, error: orderError } = await callCreateOrderRpc(orderNo));
+  }
+
+  if (!order) {
+    if (orderError?.code === "23503") {
       // orders.cart_id FK 違反：cart 在讀取後、RPC 寫入前被刪除（例如剛好被
       // T78 訪客車過期清理排程掃到）。重試沒有意義（cart 已不存在），請客人
       // 重新整理購物車。
       return { ok: false, error: "購物車已過期，請重新整理購物車後再試一次" };
-    } else {
-      return { ok: false, error: "建立訂單失敗，請稍後再試" };
     }
+    return { ok: false, error: "建立訂單失敗，請稍後再試" };
   }
 
   // ⑧ Cart 保留至付款成功才刪除（T75，見 ensureOrderPaid）——order 已存 cart_id。

@@ -10,6 +10,7 @@ import {
   canTransition,
   transitionOrder,
   VALID_TRANSITIONS,
+  OrderTransitionRaceError,
   type OrderStatus,
 } from "../state-machine";
 
@@ -99,7 +100,7 @@ describe("transitionOrder：CAS 守衛", () => {
     logInsert.mockClear();
   });
 
-  it("併發：cron 判定 pending_payment 期間 webhook 搶先轉 paid → CAS 沒搶到，丟出帶 code 的錯誤、不寫 log", async () => {
+  it("併發：cron 判定 pending_payment 期間 webhook 搶先轉 paid → CAS 沒搶到，丟出 OrderTransitionRaceError、不寫 log", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "pending_payment",
@@ -107,9 +108,9 @@ describe("transitionOrder：CAS 守衛", () => {
       }) as unknown as ReturnType<typeof createServiceRoleClient>,
     );
 
-    await expect(transitionOrder("order-1", "cancelled")).rejects.toMatchObject(
-      { code: "STALE_TRANSITION" },
-    );
+    await expect(
+      transitionOrder("order-1", "cancelled"),
+    ).rejects.toBeInstanceOf(OrderTransitionRaceError);
     expect(logInsert).not.toHaveBeenCalled();
   });
 

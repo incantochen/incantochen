@@ -1,8 +1,8 @@
 import "server-only";
 import * as Sentry from "@sentry/nextjs";
-import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { transitionOrder } from "@/lib/order/state-machine";
+import { transitionOrder, OrderTransitionRaceError } from "@/lib/order/state-machine";
+import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 
 const PENDING_PAYMENT_TTL_MS = 72 * 60 * 60 * 1000;
 // 比照 ecpay-reconcile 的 CANDIDATE_LIMIT：避免首次上線 backlog 或排程中斷
@@ -22,10 +22,8 @@ type Summary = {
 // 沒有它，cron 判定「還是 pending_payment」的同時 webhook 剛把它轉成 paid，
 // 會把 paid 蓋回 cancelled。
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${serverEnv.CRON_SECRET}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+  const unauthorized = requireCronAuth(request);
+  if (unauthorized) return unauthorized;
 
   const summary: Summary = { checked: 0, cancelled: 0, skipped: 0, failed: 0 };
 
@@ -52,12 +50,11 @@ export async function GET(request: Request) {
         });
         summary.cancelled += 1;
       } catch (e) {
-        // webhook 剛好搶先把訂單轉成 paid：CAS 沒搶到是預期中的正常情況，
-        // 不算錯誤，不進 Sentry（否則每次良性競態都會誤觸告警噪音）。
-        if (
-          e instanceof Error &&
-          (e as { code?: string }).code === "STALE_TRANSITION"
-        ) {
+        // webhook 剛好搶先把訂單轉成 paid（或轉成其他任何非 pending_payment
+        // 狀態）：不論是敗在 CAS 守衛還是更早的 canTransition 檢查，都是候選
+        // 查詢之後才發生的良性競態，不算錯誤、不進 Sentry（否則每次良性競態
+        // 都會誤觸告警噪音）。
+        if (e instanceof OrderTransitionRaceError) {
           summary.skipped += 1;
           continue;
         }

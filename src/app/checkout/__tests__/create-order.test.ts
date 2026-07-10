@@ -48,13 +48,15 @@ const state = {
   cartItems: [
     {
       id: "ci-1",
-      product_id: "prod-1",
+      product_id: "11111111-1111-4111-8111-111111111111",
       quantity: 1,
       unit_price_snapshot: 25000,
       config_snapshot: {},
     },
   ] as any[] | null,
   member: null as { id: string } | null,
+  // 同一張 cart 是否已有 pending_payment 訂單（重複結帳防護，見 actions.ts）。
+  existingPendingOrder: null as { order_no: string } | null,
   // create_order_with_items RPC 每次呼叫的回傳（依序消耗）——T76 改用單一
   // RPC 交易化後，order_no 23505 碰撞重試是「重新呼叫 RPC」而非分段 insert。
   rpcResults: [] as { data: any; error: any }[],
@@ -85,10 +87,16 @@ function makeServiceRole() {
       const chain: any = {
         select: () => chain,
         eq: () => chain,
-        maybeSingle: () =>
-          Promise.resolve({
-            data: table === "cart" ? state.cart : state.member,
-          }),
+        order: () => chain,
+        limit: () => chain,
+        maybeSingle: () => {
+          if (table === "cart") return Promise.resolve({ data: state.cart });
+          if (table === "member")
+            return Promise.resolve({ data: state.member });
+          if (table === "orders")
+            return Promise.resolve({ data: state.existingPendingOrder });
+          return Promise.resolve({ data: null });
+        },
         update: (values: any) => {
           recorded.push({ table, values });
           return chain;
@@ -133,7 +141,7 @@ const FORM = {
 const VERIFIED_OK = [
   {
     cartItemId: "ci-1",
-    productId: "prod-1",
+    productId: "11111111-1111-4111-8111-111111111111",
     productName: "祖母綠戒指",
     quantity: 1,
     verifiedUnitPrice: 25000,
@@ -148,6 +156,7 @@ beforeEach(() => {
   cookieJar = { guest_token: "guest-abc" };
   state.cart = { id: "cart-1" };
   state.member = null;
+  state.existingPendingOrder = null;
   state.rpcResults = [];
   getUser.mockResolvedValue({ data: { user: null } });
   verifyCartPrices.mockResolvedValue(VERIFIED_OK);
@@ -271,6 +280,17 @@ describe("交易化與清車（T76／T75）", () => {
       unit_price_snapshot: 25000,
     });
     expect(deletes).not.toContain("cart");
+  });
+
+  it("同一張 cart 已有 pending_payment 訂單 → 直接導去該訂單付款頁，不重複建單", async () => {
+    state.existingPendingOrder = { order_no: "INC-EXISTING-1" };
+
+    await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
+
+    expect(redirect).toHaveBeenCalledWith(
+      "/checkout/pay?order=INC-EXISTING-1",
+    );
+    expect(rpcCalls()).toHaveLength(0);
   });
 });
 

@@ -12,11 +12,18 @@ vi.mock("@/lib/env.server", () => ({
 // transitionOrder 的行為（CAS 守衛、canTransition、log 寫入）已在
 // state-machine.test.ts 完整覆蓋；這裡當依賴邊界整個 mock 掉，專注在這支
 // route 自己的批次處理與計數邏輯。
-const { transitionOrder } = vi.hoisted(() => ({
-  transitionOrder: vi.fn(),
-}));
+const { transitionOrder, OrderTransitionRaceError } = vi.hoisted(() => {
+  class OrderTransitionRaceError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = "OrderTransitionRaceError";
+    }
+  }
+  return { transitionOrder: vi.fn(), OrderTransitionRaceError };
+});
 vi.mock("@/lib/order/state-machine", () => ({
   transitionOrder: (...args: unknown[]) => transitionOrder(...args),
+  OrderTransitionRaceError,
 }));
 
 type OrderRow = { id: string };
@@ -117,12 +124,10 @@ describe("逐筆處理", () => {
     );
   });
 
-  it("併發：webhook 搶先轉 paid（STALE_TRANSITION）→ skipped 計數，非錯誤", async () => {
+  it("併發：webhook 搶先轉 paid（OrderTransitionRaceError）→ skipped 計數，非錯誤", async () => {
     candidates = [{ id: "o1" }];
     transitionOrder.mockRejectedValue(
-      Object.assign(new Error("訂單狀態已被其他流程異動：o1"), {
-        code: "STALE_TRANSITION",
-      }),
+      new OrderTransitionRaceError("訂單狀態已被其他流程異動：o1"),
     );
 
     const res = await GET(buildRequest("Bearer test-cron-secret"));

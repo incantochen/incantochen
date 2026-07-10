@@ -41,14 +41,36 @@ export async function ensureOrderPaid(
     .update({ status: "paid" })
     .eq("id", orderId)
     .eq("status", "pending_payment")
-    .select("id, cart_id")
+    .select("id, cart_id, created_at")
     .maybeSingle();
 
   // Supabase 對 statement timeout／連線池耗盡等暫時性錯誤不會 throw，只回傳
   // { error }；若不檢查，會跟「沒符合更新條件」混淆而靜默跳過，害呼叫端回
   // 成功讓上游不再重試，訂單就永遠卡在 pending_payment（明明已經付款）。
   if (error) throw new Error(`ensureOrderPaid failed: ${error.message}`);
-  if (!promoted) return;
+  if (!promoted) {
+    // 沒搶到 CAS：多數情況是「已經是 paid」的正常冪等重入（見上方註解）。
+    // 但 T66 的 72h 逾期自動取消 cron 上線後，多了一種危險狀況——訂單被
+    // cron 搶先轉成 cancelled，此時 ECPay 那邊實際上已經付款成功。這種
+    // 「錢收到了、但訂單卡在 cancelled」必須告警，不能跟正常冪等重入混淆
+    // 而悄悄放過。
+    const { data: current } = await serviceRole
+      .from("orders")
+      .select("status")
+      .eq("id", orderId)
+      .maybeSingle();
+    if (current && current.status !== "paid") {
+      console.error(
+        "[ensureOrderPaid] order 未處於 pending_payment 亦非 paid，付款可能卡住",
+        { orderId, status: current.status, source },
+      );
+      Sentry.captureMessage(
+        "ensureOrderPaid: order in unexpected status, payment may be stuck",
+        { level: "error", extra: { orderId, status: current.status, source } },
+      );
+    }
+    return;
+  }
 
   const { error: logError } = await serviceRole
     .from("order_status_log")
@@ -71,18 +93,48 @@ export async function ensureOrderPaid(
   // T75：付款成功才清購物車（下單當下保留，避免付款失敗要重配置）。清車失敗
   // 只記錄不拋錯，比照 touchCartUpdatedAt 的容錯層級——這是次要清理，不應擋住
   // 付款確認流程。
+  //
+  // 只在 cart 於「下單之後沒被再動過」時才整張刪除：下單後、付款前這段期間
+  // cart 仍是活的（同一顆 guest_token 對應同一張 cart，T78 已加 unique），
+  // 客人可能開新分頁又加了別的商品進同一張 cart——這些從未結進這筆訂單的
+  // 品項不該被這次付款確認一起刪掉。cart.updated_at 只要有新增/修改
+  // cart_item 就會被 touch，拿它跟訂單建立時間比較即可判斷。
   if (promoted.cart_id) {
-    const { error: cartError } = await serviceRole
+    const { data: cartRow, error: cartFetchError } = await serviceRole
       .from("cart")
-      .delete()
-      .eq("id", promoted.cart_id);
-    if (cartError) {
-      console.error("[ensureOrderPaid] cart delete failed", cartError);
-      Sentry.captureMessage("ensureOrderPaid: cart delete failed", {
+      .select("updated_at")
+      .eq("id", promoted.cart_id)
+      .maybeSingle();
+
+    if (cartFetchError) {
+      console.error("[ensureOrderPaid] cart 查詢失敗", cartFetchError);
+      Sentry.captureMessage("ensureOrderPaid: cart fetch failed", {
         level: "error",
-        extra: { orderId, cartId: promoted.cart_id, error: cartError.message },
+        extra: {
+          orderId,
+          cartId: promoted.cart_id,
+          error: cartFetchError.message,
+        },
       });
+    } else if (cartRow && cartRow.updated_at <= promoted.created_at) {
+      const { error: cartError } = await serviceRole
+        .from("cart")
+        .delete()
+        .eq("id", promoted.cart_id);
+      if (cartError) {
+        console.error("[ensureOrderPaid] cart delete failed", cartError);
+        Sentry.captureMessage("ensureOrderPaid: cart delete failed", {
+          level: "error",
+          extra: {
+            orderId,
+            cartId: promoted.cart_id,
+            error: cartError.message,
+          },
+        });
+      }
     }
+    // cartRow.updated_at > promoted.created_at：下單後又被動過，保留給客人，
+    // 之後由既有的 90 天訪客車清理 cron（T78）收尾。
   }
 }
 

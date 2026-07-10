@@ -1,7 +1,7 @@
 import "server-only";
 import * as Sentry from "@sentry/nextjs";
-import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 
 const GUEST_CART_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 // 比照 ecpay-reconcile 的 CANDIDATE_LIMIT：避免首次上線（累積已久的訪客車
@@ -13,10 +13,8 @@ const CLEANUP_BATCH_LIMIT = 500;
 // cart.updated_at 由 addToCart/updateCartItemQuantity/removeCartItem 各自 touch
 // 維持新鮮，故這裡只需比對時間戳，不需另外判斷 cart_item 是否還在變動。
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${serverEnv.CRON_SECRET}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+  const unauthorized = requireCronAuth(request);
+  if (unauthorized) return unauthorized;
 
   try {
     const serviceRole = createServiceRoleClient();

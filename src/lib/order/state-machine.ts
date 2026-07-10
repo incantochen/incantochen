@@ -6,6 +6,16 @@ import { type OrderStatus, VALID_TRANSITIONS } from "@/lib/order/order-status";
 export type { OrderStatus };
 export { VALID_TRANSITIONS };
 
+// 呼叫端（如 pending-payment-expire cron）需要區分「這筆訂單已經被其他流程
+// 動過，跳過即可」跟「真的失敗」——比照 query-trade-info.ts 的 RateLimitError
+// 慣例，用具名 Error 子類別＋instanceof 判斷，取代字串 code 手刻型別斷言。
+export class OrderTransitionRaceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OrderTransitionRaceError";
+  }
+}
+
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return VALID_TRANSITIONS[from].includes(to);
 }
@@ -32,7 +42,9 @@ export async function transitionOrder(
   const from = order.status as OrderStatus;
 
   if (!canTransition(from, to)) {
-    throw new Error(`非法狀態轉換：${from} → ${to}`);
+    // 呼叫端（尤其是 cron／webhook）挑選候選當下 status 符合預期，但真正執行
+    // 到這裡時 status 已被別的流程搶先動過——不是呼叫端邏輯錯誤，是良性競態。
+    throw new OrderTransitionRaceError(`非法狀態轉換：${from} → ${to}`);
   }
 
   const { data: updated, error: updateError } = await supabase
@@ -45,9 +57,7 @@ export async function transitionOrder(
 
   if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
   if (!updated) {
-    throw Object.assign(new Error(`訂單狀態已被其他流程異動：${orderId}`), {
-      code: "STALE_TRANSITION",
-    });
+    throw new OrderTransitionRaceError(`訂單狀態已被其他流程異動：${orderId}`);
   }
 
   const { error: logError } = await supabase.from("order_status_log").insert({
