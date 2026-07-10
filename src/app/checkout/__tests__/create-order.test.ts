@@ -59,6 +59,7 @@ const state = {
   orderInsertResults: [] as { data: any; error: any }[],
   orderItemInsertError: null as any,
   createdUser: { id: "member-new" },
+  createUserError: null as any,
 };
 
 function ordersChain() {
@@ -85,10 +86,13 @@ function makeServiceRole() {
       admin: {
         createUser: vi
           .fn()
-          .mockResolvedValue({
-            data: { user: state.createdUser },
-            error: null,
-          }),
+          .mockImplementation(() =>
+            Promise.resolve(
+              state.createUserError
+                ? { data: { user: null }, error: state.createUserError }
+                : { data: { user: state.createdUser }, error: null },
+            ),
+          ),
       },
     },
     from: (table: string) => {
@@ -163,6 +167,7 @@ beforeEach(() => {
   state.member = null;
   state.orderInsertResults = [];
   state.orderItemInsertError = null;
+  state.createUserError = null;
   getUser.mockResolvedValue({ data: { user: null } });
   verifyCartPrices.mockResolvedValue(VERIFIED_OK);
   redirect.mockClear();
@@ -277,15 +282,48 @@ describe("明細寫入與清車", () => {
 });
 
 describe("結帳即會員", () => {
-  it("email 對應既有會員 → 訂單掛該會員（現行 T71 已列管行為，回歸釘住）", async () => {
+  it("email 對應既有會員 → 要求登入、不掛單（T71 修復）", async () => {
     state.member = { id: "member-existing" };
 
-    await createOrder(FORM).catch((e) => {
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false, requiresLogin: true });
+    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
+    expect(recorded.filter((r) => r.table === "order_item")).toHaveLength(0);
+  });
+
+  it("新建帳號競態撞號 → 要求登入、不掛單，訊息與既有會員分支一致", async () => {
+    state.member = { id: "member-existing" };
+    const existingMemberResult = (await createOrder(FORM)) as {
+      ok: false;
+      error: string;
+    };
+
+    state.member = null;
+    state.createUserError = { message: "User already registered" };
+    const raceResult = (await createOrder(FORM)) as {
+      ok: false;
+      error: string;
+    };
+
+    expect(raceResult).toMatchObject({ ok: false, requiresLogin: true });
+    expect(raceResult.error).toBe(existingMemberResult.error);
+    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
+    expect(recorded.filter((r) => r.table === "order_item")).toHaveLength(0);
+  });
+
+  it("email 大小寫混雜 → 正規化為小寫後才查會員／建帳號（T71 防繞過）", async () => {
+    await createOrder({
+      ...FORM,
+      email: "Buyer@Example.COM",
+    }).catch((e) => {
       if (e !== REDIRECT) throw e;
     });
 
-    const orderInsert = recorded.find((r) => r.table === "orders");
-    expect(orderInsert?.values.member_id).toBe("member-existing");
+    expect(findOrCreateMember).toHaveBeenCalledWith(
+      "member-new",
+      "buyer@example.com",
+    );
   });
 
   it("新 email → admin createUser＋findOrCreateMember → 訂單掛新會員", async () => {

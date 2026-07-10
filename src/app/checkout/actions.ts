@@ -14,7 +14,21 @@ import {
 import { verifyCartPrices } from "@/lib/quote/verify-prices";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
 
-type CreateOrderResult = { ok: false; error: string; priceUpdated?: true };
+type CreateOrderResult = {
+  ok: false;
+  error: string;
+  priceUpdated?: true;
+  requiresLogin?: true;
+};
+
+// T71：訪客 email 命中既有會員或建號時撞號，兩處回傳同一段文字與結果物件，
+// 避免兩處文案手改後失去同步（不宣稱完全杜絕帳號枚舉——requiresLogin 本身
+// 仍會透露該 email 已註冊；殘留風險見 PR 說明）。
+const REQUIRES_LOGIN_RESULT: CreateOrderResult = {
+  ok: false,
+  error: "這個 email 需要先登入才能結帳，請登入後重新送出訂單",
+  requiresLogin: true,
+};
 
 function generateOrderNo(): string {
   const now = new Date();
@@ -35,8 +49,10 @@ export async function createOrder(
   if (!parsed.success) {
     return { ok: false, error: "表單資料有誤，請重新填寫" };
   }
-  const { email, recipientName, recipientPhone, zipCode, shippingAddress } =
+  const { recipientName, recipientPhone, zipCode, shippingAddress } =
     parsed.data;
+  // T71：比照 login/actions.ts 正規化，避免大小寫變體繞過既有會員比對。
+  const email = parsed.data.email.trim().toLowerCase();
 
   const serviceRole = createServiceRoleClient();
   const cookieStore = await cookies();
@@ -87,22 +103,23 @@ export async function createOrder(
       .maybeSingle();
 
     if (existingMember) {
-      memberId = existingMember.id;
-    } else {
-      const { data: newAuthData, error: createError } =
-        await serviceRole.auth.admin.createUser({
-          email,
-          email_confirm: true,
-        });
-      if (createError || !newAuthData.user) {
-        if (createError?.message?.toLowerCase().includes("already")) {
-          return { ok: false, error: "此 Email 已有帳號，請先登入再結帳" };
-        }
-        return { ok: false, error: "建立會員失敗，請稍後再試" };
-      }
-      await findOrCreateMember(newAuthData.user.id, email);
-      memberId = newAuthData.user.id;
+      // T71：訪客未經驗證，不能直接把訂單掛到既有會員身上——要求先登入。
+      return REQUIRES_LOGIN_RESULT;
     }
+
+    const { data: newAuthData, error: createError } =
+      await serviceRole.auth.admin.createUser({
+        email,
+        email_confirm: true,
+      });
+    if (createError || !newAuthData.user) {
+      if (createError?.message?.toLowerCase().includes("already")) {
+        return REQUIRES_LOGIN_RESULT;
+      }
+      return { ok: false, error: "建立會員失敗，請稍後再試" };
+    }
+    await findOrCreateMember(newAuthData.user.id, email);
+    memberId = newAuthData.user.id;
   }
 
   // ④ Server-side price re-verification (T41 安全紅線：絕不信任 cart 快照價)
