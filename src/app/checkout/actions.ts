@@ -190,6 +190,11 @@ export async function createOrder(
         return { ok: false, error: "建立訂單失敗，請稍後再試" };
       }
       order = retry.data;
+    } else if (orderError?.code === "23503") {
+      // orders.cart_id FK 違反：cart 在讀取後、RPC 寫入前被刪除（例如剛好被
+      // T78 訪客車過期清理排程掃到）。重試沒有意義（cart 已不存在），請客人
+      // 重新整理購物車。
+      return { ok: false, error: "購物車已過期，請重新整理購物車後再試一次" };
     } else {
       return { ok: false, error: "建立訂單失敗，請稍後再試" };
     }

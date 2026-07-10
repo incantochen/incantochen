@@ -250,6 +250,16 @@ describe("交易化與清車（T76／T75）", () => {
     expect(redirect).not.toHaveBeenCalled();
   });
 
+  it("orders.cart_id FK 違反（23503，cart 在讀取後被刪除）→ 回明確錯誤，不重試", async () => {
+    state.rpcResults = [{ data: null, error: { code: "23503" } }];
+    const result = await createOrder(FORM);
+    expect(result).toMatchObject({
+      ok: false,
+      error: "購物車已過期，請重新整理購物車後再試一次",
+    });
+    expect(rpcCalls()).toHaveLength(1);
+  });
+
   it("成功路徑 → 呼叫 create_order_with_items 並帶正確 cart_id 與品項快照、redirect；不主動清購物車（T75：付款成功才清）", async () => {
     await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
 
