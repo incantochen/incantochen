@@ -222,7 +222,7 @@
 - **T68（#10, P0）** ✅ **已修復（2026-07-04，PR #30）**：外層 catch 改回 `0|Internal Error`；正常/fallback 兩路徑皆加 `TradeAmt` 金額核對。PR merge 前的三輪 `/code-review ultra` 追加發現並修復：`ensureOrderPaid`／`ensureNotificationSent`／payment UPDATE 皆補上 Supabase `{error}` 檢查（原本只看 `data`，暫時性 DB 錯誤會被誤判成功、訂單卡在 `pending_payment` 無法自癒）。
 - **T69（#11, P0）** ✅ **已修復（2026-07-04，PR #30）**：email 寄送改 `await`；新增 `src/lib/notification/send-once.ts` 落實 `notification` 表 `unique(order_id,type)` 去重（claim/reclaim/stale-pending）。**已知殘留缺口**：`sendOnce` 的 never-throw 契約讓「寄信本身失敗」這個情境的自癒機制打不到（webhook 仍回 `1|OK`，ECPay 不會重送觸發重試）——登記為 **T88** 另外處理，屬架構決策不阻塞本次 merge。
 - **T70（#12, P0）** ✅ **已修復（2026-07-09，PR #45）**：`uq_cart_guest_token` partial unique index（migration 0008）＋`addToCart` 23505-retry。本輪新發現 hot-path 選型問題→見 F-020（P2，效率／一致性，不影響正確性）。
-- **T71（#13, P1）** `checkout/actions.ts:82-89` 訪客結帳仍憑未驗證 email 綁既有會員。**確認仍在。**
+- **T71（#13, P1）** ✅ **已修復（2026-07-11，PR #50）**：`checkout/actions.ts` 訪客分支 email 命中既有會員時改回傳 `requiresLogin`（不再靜默掛單），新建帳號競態撞號分支回傳同一結果物件避免文案洩漏帳號存在與否。`/code-review ultra` 追加修復：createOrder 加 IP＋guest_token 限流（防 requiresLogin 被當帳號枚舉 oracle）；抽出 `normalizeEmail()` 單一出處，登入態分支也套用；建帳競態分支改先判 Supabase 結構化錯誤碼；`requiresLogin` 顯示時停用送出鈕。開發期間 T76（PR #51）同步把 createOrder 改走 RPC，二次合併 master 解決重疊，187 測試全綠。
 - **T72（#14, P1）** 三支寄信程式仍無 escape（本輪並發現 F-001 為其未涵蓋的第三支）。**確認仍在，且範圍擴大→見 F-001。**
 - **T73（#15, P1）** 成功頁仍憑 order_no 揭露個資；`generateOrderNo` 仍用 `Math.random`（`checkout/actions.ts:24`）。**確認仍在。**（本輪並發現同根因未涵蓋 pay／failed 兩頁→見 F-006，修 T73 時範圍須擴至三頁。）
 - **T66（P1）** ✅ **已修復（2026-07-11，PR #51）**：`/api/cron/pending-payment-expire`（72h 未付款自動轉 cancelled）＋ `transitionOrder` 補 CAS 守衛（`OrderTransitionRaceError`）。
