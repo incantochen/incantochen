@@ -39,9 +39,14 @@ export function OrderActions({
   // 修正物流單號
   const [editTracking, setEditTracking] = useState(currentTrackingNo ?? "");
 
-  // Admin Override
+  // Admin Override：目標狀態排除目前狀態——覆寫成同一個狀態不是有意義的操作，
+  // 且 adminOverrideStatus 的 CAS 守衛在 to===from 時無法防併發重複寫入稽核
+  // 記錄（T92／F-007），列表先排除掉比讓管理者選到再被伺服器擋下更好。
+  const overridableStatuses = ALL_STATUSES.filter((s) => s !== currentStatus);
   const [overrideOpen, setOverrideOpen] = useState(false);
-  const [overrideTo, setOverrideTo] = useState<OrderStatus>("paid");
+  const [overrideTo, setOverrideTo] = useState<OrderStatus>(
+    overridableStatuses[0] ?? currentStatus,
+  );
   const [overrideReason, setOverrideReason] = useState("");
 
   const nextStatuses = VALID_TRANSITIONS[currentStatus].filter((s) => s !== "shipped");
@@ -111,7 +116,11 @@ export function OrderActions({
     }
     startTransition(async () => {
       try {
-        await overrideStatus(orderId, overrideTo, overrideReason.trim());
+        const result = await overrideStatus(orderId, overrideTo, overrideReason.trim());
+        if (!result.ok) {
+          notify(result.error, true);
+          return;
+        }
         notify(`已強制改狀態為「${STATUS_LABELS[overrideTo]}」`);
         setOverrideReason("");
         setOverrideOpen(false);
@@ -243,7 +252,7 @@ export function OrderActions({
                 onChange={(e) => setOverrideTo(e.target.value as OrderStatus)}
                 className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
               >
-                {ALL_STATUSES.map((s) => (
+                {overridableStatuses.map((s) => (
                   <option key={s} value={s}>{STATUS_LABELS[s]}</option>
                 ))}
               </select>

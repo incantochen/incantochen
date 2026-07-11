@@ -76,7 +76,7 @@ export async function shipOrder(
 
   // 出貨這件事本身已經成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證
   // 絕不往外拋例外（不擋出貨操作），且用 notification(order_id, type) 的
-  // unique 約束去重——雙擊出貨按鈕或未來 T92 修復前的併發轉換都不會重複寄信。
+  // unique 約束去重——雙擊出貨按鈕不會重複寄信。
   await sendOnce(supabase, {
     orderId,
     type: "order_shipped",
@@ -92,11 +92,19 @@ export async function overrideStatus(
   orderId: string,
   to: OrderStatus,
   reason: string,
-) {
+): Promise<AdminActionResult> {
   const user = await requireAdmin();
-  await adminOverrideStatus(orderId, to, { operatorId: user.id, reason });
+  try {
+    await adminOverrideStatus(orderId, to, { operatorId: user.id, reason });
+  } catch (e) {
+    if (e instanceof OrderTransitionRaceError) {
+      return { ok: false, error: RACE_MESSAGE };
+    }
+    return { ok: false, error: "強制改狀態失敗，請稍後再試" };
+  }
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
+  return { ok: true };
 }
 
 export async function revealOrderPii(orderId: string): Promise<{
