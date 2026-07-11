@@ -2,6 +2,7 @@ import "server-only";
 import { Resend } from "resend";
 import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { escapeHtml } from "@/lib/email/escape-html";
 import {
   REQUEST_TYPE_LABELS,
   type SupportRequestType,
@@ -41,6 +42,11 @@ export async function sendSupportRequestNotification(
 
   const requestType = request.request_type as SupportRequestType;
   const typeLabel = REQUEST_TYPE_LABELS[requestType];
+  const safeRecipientName = order?.recipient_name
+    ? escapeHtml(order.recipient_name)
+    : "—";
+  const safeCustomerEmail = customerEmail ? escapeHtml(customerEmail) : null;
+  const safeDescription = escapeHtml(request.description);
 
   const html = `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"/></head>
 <body style="margin:0;padding:0;background:#f3f4f6;font-family:sans-serif;">
@@ -60,15 +66,15 @@ export async function sendSupportRequestNotification(
       </tr>
       <tr>
         <td style="color:#6b7280;padding:4px 0;vertical-align:top;">客人姓名</td>
-        <td style="color:#111;padding:4px 0;">${order?.recipient_name ?? "—"}</td>
+        <td style="color:#111;padding:4px 0;">${safeRecipientName}</td>
       </tr>
       <tr>
         <td style="color:#6b7280;padding:4px 0;vertical-align:top;">客人 Email</td>
-        <td style="color:#111;padding:4px 0;">${customerEmail ?? "—"}</td>
+        <td style="color:#111;padding:4px 0;">${safeCustomerEmail ?? "—"}</td>
       </tr>
       <tr>
         <td style="color:#6b7280;padding:4px 0;vertical-align:top;">說明</td>
-        <td style="color:#111;padding:4px 0;white-space:pre-wrap;">${request.description}</td>
+        <td style="color:#111;padding:4px 0;white-space:pre-wrap;">${safeDescription}</td>
       </tr>
     </table>
   </td></tr>
