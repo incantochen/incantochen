@@ -21,6 +21,14 @@ vi.mock("next/headers", () => ({
     get: (name: string) =>
       cookieJar[name] !== undefined ? { value: cookieJar[name] } : undefined,
   }),
+  headers: async () => ({
+    get: () => null,
+  }),
+}));
+
+// T71 ultra review 限流 mock：預設一律放行，個別測試可覆寫 success 值
+vi.mock("@/lib/rate-limit", () => ({
+  checkCheckoutGuestRateLimit: async () => state.checkoutRateLimitSuccess,
 }));
 
 // auth：預設未登入；member 建立走 mock
@@ -60,6 +68,7 @@ const state = {
   orderItemInsertError: null as any,
   createdUser: { id: "member-new" },
   createUserError: null as any,
+  checkoutRateLimitSuccess: true,
 };
 
 function ordersChain() {
@@ -168,6 +177,7 @@ beforeEach(() => {
   state.orderInsertResults = [];
   state.orderItemInsertError = null;
   state.createUserError = null;
+  state.checkoutRateLimitSuccess = true;
   getUser.mockResolvedValue({ data: { user: null } });
   verifyCartPrices.mockResolvedValue(VERIFIED_OK);
   redirect.mockClear();
@@ -290,6 +300,18 @@ describe("結帳即會員", () => {
     expect(result).toMatchObject({ ok: false, requiresLogin: true });
     expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
     expect(recorded.filter((r) => r.table === "order_item")).toHaveLength(0);
+  });
+
+  it("訪客結帳被限流 → 回通用訊息、不查會員也不建單（T71 ultra review：防 email 存在性 oracle）", async () => {
+    state.checkoutRateLimitSuccess = false;
+    state.member = { id: "member-existing" };
+
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false, error: "請求太頻繁，請稍後再試" });
+    expect(result).not.toHaveProperty("requiresLogin");
+    expect(recorded).toHaveLength(0);
+    expect(findOrCreateMember).not.toHaveBeenCalled();
   });
 
   it("新建帳號競態撞號 → 要求登入、不掛單，訊息與既有會員分支一致", async () => {

@@ -3,7 +3,7 @@ import "server-only";
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member";
@@ -13,6 +13,8 @@ import {
 } from "@/lib/checkout/schema";
 import { verifyCartPrices } from "@/lib/quote/verify-prices";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
+import { getClientIp } from "@/lib/get-client-ip";
+import { checkCheckoutGuestRateLimit } from "@/lib/rate-limit";
 
 type CreateOrderResult = {
   ok: false;
@@ -95,6 +97,15 @@ export async function createOrder(
     await findOrCreateMember(user.id, user.email ?? email);
     memberId = user.id;
   } else {
+    // T71 ultra review：這個分支等於一個帳號存在偵測 oracle（email 是否命中
+    // 既有會員），先限流再查，避免被拿去大量掃描 email。命中限流時刻意不帶
+    // requiresLogin，回應要跟「單純太頻繁」無法區分。
+    const headersList = await headers();
+    const ip = getClientIp(headersList);
+    if (!(await checkCheckoutGuestRateLimit(ip, guestToken))) {
+      return { ok: false, error: "請求太頻繁，請稍後再試" };
+    }
+
     // Guest checkout: find or create member by email
     const { data: existingMember } = await serviceRole
       .from("member")
