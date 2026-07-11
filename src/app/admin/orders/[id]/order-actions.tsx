@@ -47,6 +47,13 @@ export function OrderActions({
   const [overrideTo, setOverrideTo] = useState<OrderStatus>(
     overridableStatuses[0] ?? currentStatus,
   );
+  // overrideTo 只在使用者選取時更新；但 currentStatus 會在成功轉換後（含正常
+  // 狀態轉換與上一次 override）隨 revalidatePath 變動，同一個元件實例不會重新
+  // mount，overrideTo 不會自動同步。若不改成即時衍生，選單顯示的選項會跟實際
+  // 送出的值悄悄不一致（value 指向已被 overridableStatuses 排除掉的舊值）。
+  const effectiveOverrideTo = overridableStatuses.includes(overrideTo)
+    ? overrideTo
+    : (overridableStatuses[0] ?? currentStatus);
   const [overrideReason, setOverrideReason] = useState("");
 
   const nextStatuses = VALID_TRANSITIONS[currentStatus].filter((s) => s !== "shipped");
@@ -116,12 +123,16 @@ export function OrderActions({
     }
     startTransition(async () => {
       try {
-        const result = await overrideStatus(orderId, overrideTo, overrideReason.trim());
+        const result = await overrideStatus(
+          orderId,
+          effectiveOverrideTo,
+          overrideReason.trim(),
+        );
         if (!result.ok) {
           notify(result.error, true);
           return;
         }
-        notify(`已強制改狀態為「${STATUS_LABELS[overrideTo]}」`);
+        notify(`已強制改狀態為「${STATUS_LABELS[effectiveOverrideTo]}」`);
         setOverrideReason("");
         setOverrideOpen(false);
       } catch (e) {
@@ -248,7 +259,7 @@ export function OrderActions({
             <div>
               <label className="block text-xs text-gray-600 mb-1">目標狀態</label>
               <select
-                value={overrideTo}
+                value={effectiveOverrideTo}
                 onChange={(e) => setOverrideTo(e.target.value as OrderStatus)}
                 className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
               >
