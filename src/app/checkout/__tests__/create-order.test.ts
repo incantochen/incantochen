@@ -21,6 +21,14 @@ vi.mock("next/headers", () => ({
     get: (name: string) =>
       cookieJar[name] !== undefined ? { value: cookieJar[name] } : undefined,
   }),
+  headers: async () => ({
+    get: () => null,
+  }),
+}));
+
+// T71 ultra review 限流 mock：預設一律放行，個別測試可覆寫 success 值
+vi.mock("@/lib/rate-limit", () => ({
+  checkCheckoutGuestRateLimit: async () => state.checkoutRateLimitSuccess,
 }));
 
 // auth：預設未登入；member 建立走 mock
@@ -84,6 +92,8 @@ const state = {
   // RPC 交易化後，order_no 23505 碰撞重試是「重新呼叫 RPC」而非分段 insert。
   rpcResults: [] as { data: any; error: any }[],
   createdUser: { id: "member-new" },
+  createUserError: null as any,
+  checkoutRateLimitSuccess: true,
 };
 
 function rpcCalls() {
@@ -94,10 +104,15 @@ function makeServiceRole() {
   return {
     auth: {
       admin: {
-        createUser: vi.fn().mockResolvedValue({
-          data: { user: state.createdUser },
-          error: null,
-        }),
+        createUser: vi
+          .fn()
+          .mockImplementation(() =>
+            Promise.resolve(
+              state.createUserError
+                ? { data: { user: null }, error: state.createUserError }
+                : { data: { user: state.createdUser }, error: null },
+            ),
+          ),
       },
     },
     rpc: (name: string, params: any) => {
@@ -179,6 +194,8 @@ beforeEach(() => {
   cookieJar = { guest_token: "guest-abc" };
   state.cart = { id: "cart-1", updated_at: "2026-07-10T00:00:00+00:00" };
   state.member = null;
+  state.createUserError = null;
+  state.checkoutRateLimitSuccess = true;
   state.existingPendingOrder = null;
   state.rpcResults = [];
   transitionOrder.mockReset();
@@ -361,15 +378,60 @@ describe("交易化與清車（T76／T75）", () => {
 });
 
 describe("結帳即會員", () => {
-  it("email 對應既有會員 → 訂單掛該會員（現行 T71 已列管行為，回歸釘住）", async () => {
+  it("email 對應既有會員 → 要求登入、不掛單（T71 修復）", async () => {
     state.member = { id: "member-existing" };
 
-    await createOrder(FORM).catch((e) => {
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false, requiresLogin: true });
+    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
+    expect(recorded.filter((r) => r.table === "order_item")).toHaveLength(0);
+  });
+
+  it("訪客結帳被限流 → 回通用訊息、不查會員也不建單（T71 ultra review：防 email 存在性 oracle）", async () => {
+    state.checkoutRateLimitSuccess = false;
+    state.member = { id: "member-existing" };
+
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false, error: "請求太頻繁，請稍後再試" });
+    expect(result).not.toHaveProperty("requiresLogin");
+    expect(recorded).toHaveLength(0);
+    expect(findOrCreateMember).not.toHaveBeenCalled();
+  });
+
+  it("新建帳號競態撞號 → 要求登入、不掛單，訊息與既有會員分支一致", async () => {
+    state.member = { id: "member-existing" };
+    const existingMemberResult = (await createOrder(FORM)) as {
+      ok: false;
+      error: string;
+    };
+
+    state.member = null;
+    state.createUserError = { message: "User already registered" };
+    const raceResult = (await createOrder(FORM)) as {
+      ok: false;
+      error: string;
+    };
+
+    expect(raceResult).toMatchObject({ ok: false, requiresLogin: true });
+    expect(raceResult.error).toBe(existingMemberResult.error);
+    expect(recorded.filter((r) => r.table === "orders")).toHaveLength(0);
+    expect(recorded.filter((r) => r.table === "order_item")).toHaveLength(0);
+  });
+
+  it("email 大小寫混雜 → 正規化為小寫後才查會員／建帳號（T71 防繞過）", async () => {
+    await createOrder({
+      ...FORM,
+      email: "Buyer@Example.COM",
+    }).catch((e) => {
       if (e !== REDIRECT) throw e;
     });
 
-    const call = rpcCalls()[0]!;
-    expect(call.values.p_member_id).toBe("member-existing");
+    expect(findOrCreateMember).toHaveBeenCalledWith(
+      "member-new",
+      "buyer@example.com",
+    );
   });
 
   it("新 email → admin createUser＋findOrCreateMember → 訂單掛新會員", async () => {
@@ -380,5 +442,28 @@ describe("結帳即會員", () => {
     expect(findOrCreateMember).toHaveBeenCalledWith("member-new", FORM.email);
     const call = rpcCalls()[0]!;
     expect(call.values.p_member_id).toBe("member-new");
+  });
+
+  it("createUser 回結構化錯誤碼 email_exists → 要求登入（T71 ultra review #4）", async () => {
+    state.createUserError = { code: "email_exists", message: "unused text" };
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false, requiresLogin: true });
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("已登入使用者 session email 大小寫混雜 → 正規化後才寫入 member（T71 ultra review #3）", async () => {
+    getUser.mockResolvedValue({
+      data: { user: { id: "member-logged-in", email: "Logged@In.COM" } },
+    });
+
+    await createOrder(FORM).catch((e) => {
+      if (e !== REDIRECT) throw e;
+    });
+
+    expect(findOrCreateMember).toHaveBeenCalledWith(
+      "member-logged-in",
+      "logged@in.com",
+    );
   });
 });

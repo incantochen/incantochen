@@ -3,6 +3,7 @@
 import type { EmailOtpType } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase/server"
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member"
+import { normalizeEmail } from "@/lib/auth/normalize-email"
 
 type ActionResult = { ok: true } | { ok: false; error: string }
 
@@ -20,7 +21,12 @@ export async function confirmMagicLink(
     return { ok: false, error: "連結已失效或過期" }
   }
 
-  await findOrCreateMember(data.user.id, data.user.email ?? "")
+  // T71 ultra review #3：跟 login/actions.ts、checkout/actions.ts 一致的正規化，
+  // 避免這條 magic-link 路徑成為 member.email 大小寫不一致的第三個破口。
+  await findOrCreateMember(
+    data.user.id,
+    data.user.email ? normalizeEmail(data.user.email) : "",
+  )
 
   return { ok: true }
 }
