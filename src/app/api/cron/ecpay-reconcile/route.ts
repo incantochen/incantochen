@@ -1,12 +1,12 @@
 import "server-only";
 import * as Sentry from "@sentry/nextjs";
-import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
   ensureOrderPaid,
   ensureNotificationSent,
 } from "@/lib/order/ensure-paid";
 import { queryTradeInfo, RateLimitError } from "@/lib/ecpay/query-trade-info";
+import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 
 const CANDIDATE_LIMIT = 30;
 const MIN_AGE_MS = 10 * 60 * 1000;
@@ -49,10 +49,8 @@ type Summary = {
 // T89：ECPay 主動對帳。webhook 是即時路徑，這支 cron 是每日一次的最終防線——
 // 只做「pending→paid 的主動修正＋告警」，範圍刻意不含逾期取消（見 T66）。
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${serverEnv.CRON_SECRET}`) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+  const unauthorized = requireCronAuth(request);
+  if (unauthorized) return unauthorized;
 
   const summary: Summary = {
     checked: 0,
