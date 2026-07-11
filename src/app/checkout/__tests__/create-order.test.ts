@@ -105,12 +105,15 @@ function rpcCalls() {
   return recorded.filter((r) => r.table === "rpc:create_order_with_items");
 }
 
-// orders 表在同一次 createOrder() 呼叫裡可能被查兩次：① T75 建單前 dedup
-// 預檢查、② uq_orders_one_pending_per_cart 碰撞後的 racedOrder 重查。兩次
-// 語意不同（① 沒撞到才會走到 RPC，② 是 RPC 撞到之後才查），靠呼叫次數分流。
-let ordersMaybeSingleCalls = 0;
-
 function makeServiceRole() {
+  // orders 表在同一次 createOrder() 呼叫裡可能被查兩次：① T75 建單前 dedup
+  // 預檢查、② uq_orders_one_pending_per_cart 碰撞後的 racedOrder 重查。兩次
+  // 語意不同（① 沒撞到才會走到 RPC，② 是 RPC 撞到之後才查），靠呼叫次數分流。
+  // 宣告在 makeServiceRole() 內（而非模組層級）：actions.ts 每次 createOrder()
+  // 呼叫都重新 createServiceRoleClient()，計數器才會跟著每次呼叫自然歸零——
+  // 若放在模組層級，測試裡連續呼叫兩次 createOrder()（例如「新建帳號競態撞號」
+  // 測試）第二次呼叫的預檢查就會誤讀到 racedOrder 分支。
+  let ordersMaybeSingleCalls = 0;
   return {
     auth: {
       admin: {
@@ -221,7 +224,6 @@ beforeEach(() => {
   state.racedOrder = null;
   state.racedOrderError = null;
   state.rpcResults = [];
-  ordersMaybeSingleCalls = 0;
   transitionOrder.mockReset();
   transitionOrder.mockResolvedValue(undefined);
   getUser.mockResolvedValue({ data: { user: null } });
