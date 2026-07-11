@@ -309,12 +309,15 @@ export async function createOrder(
 
   if (!order) {
     if (orderError?.code === "23505" && isPendingCartCollision(orderError)) {
-      const { data: racedOrder } = await serviceRole
+      const { data: racedOrder, error: racedOrderError } = await serviceRole
         .from("orders")
         .select("order_no")
         .eq("cart_id", cartId)
         .eq("status", "pending_payment")
         .maybeSingle();
+      if (racedOrderError) {
+        return { ok: false, error: "建立訂單失敗，請稍後再試" };
+      }
       if (racedOrder) {
         redirect(`/checkout/pay?order=${racedOrder.order_no}`);
       }

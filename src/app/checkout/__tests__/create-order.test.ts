@@ -88,6 +88,11 @@ const state = {
     order_no: string;
     created_at: string;
   } | null,
+  // uq_orders_one_pending_per_cart 碰撞後的重查結果（見 actions.ts racedOrder）。
+  // 與 existingPendingOrder 是同一張表的兩次不同查詢，靠 ordersMaybeSingleCalls
+  // 計數器分流（見 makeServiceRole 的 from("orders") 分支）。
+  racedOrder: null as { order_no: string } | null,
+  racedOrderError: null as { message?: string } | null,
   // create_order_with_items RPC 每次呼叫的回傳（依序消耗）——T76 改用單一
   // RPC 交易化後，order_no 23505 碰撞重試是「重新呼叫 RPC」而非分段 insert。
   rpcResults: [] as { data: any; error: any }[],
@@ -99,6 +104,11 @@ const state = {
 function rpcCalls() {
   return recorded.filter((r) => r.table === "rpc:create_order_with_items");
 }
+
+// orders 表在同一次 createOrder() 呼叫裡可能被查兩次：① T75 建單前 dedup
+// 預檢查、② uq_orders_one_pending_per_cart 碰撞後的 racedOrder 重查。兩次
+// 語意不同（① 沒撞到才會走到 RPC，② 是 RPC 撞到之後才查），靠呼叫次數分流。
+let ordersMaybeSingleCalls = 0;
 
 function makeServiceRole() {
   return {
@@ -131,8 +141,19 @@ function makeServiceRole() {
           if (table === "cart") return Promise.resolve({ data: state.cart });
           if (table === "member")
             return Promise.resolve({ data: state.member });
-          if (table === "orders")
-            return Promise.resolve({ data: state.existingPendingOrder });
+          if (table === "orders") {
+            ordersMaybeSingleCalls += 1;
+            if (ordersMaybeSingleCalls === 1) {
+              return Promise.resolve({
+                data: state.existingPendingOrder,
+                error: null,
+              });
+            }
+            return Promise.resolve({
+              data: state.racedOrder,
+              error: state.racedOrderError,
+            });
+          }
           return Promise.resolve({ data: null });
         },
         update: (values: any) => {
@@ -197,7 +218,10 @@ beforeEach(() => {
   state.createUserError = null;
   state.checkoutRateLimitSuccess = true;
   state.existingPendingOrder = null;
+  state.racedOrder = null;
+  state.racedOrderError = null;
   state.rpcResults = [];
+  ordersMaybeSingleCalls = 0;
   transitionOrder.mockReset();
   transitionOrder.mockResolvedValue(undefined);
   getUser.mockResolvedValue({ data: { user: null } });
@@ -290,6 +314,66 @@ describe("order_no 碰撞重試", () => {
     ];
     const result = await createOrder(FORM);
     expect(result).toMatchObject({ ok: false });
+  });
+});
+
+describe("併發雙送出（uq_orders_one_pending_per_cart 碰撞，T76／0011）", () => {
+  it("搶輸 → 導去贏家付款頁，不觸發 order_no 換號重試", async () => {
+    state.rpcResults = [
+      {
+        data: null,
+        error: {
+          code: "23505",
+          message:
+            'duplicate key value violates unique constraint "uq_orders_one_pending_per_cart"',
+        },
+      },
+    ];
+    state.racedOrder = { order_no: "INC-WINNER-1" };
+
+    await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
+
+    expect(redirect).toHaveBeenCalledWith("/checkout/pay?order=INC-WINNER-1");
+    expect(rpcCalls()).toHaveLength(1);
+  });
+
+  it("搶輸但重查也撲空 → 回通用建單失敗錯誤、不 redirect", async () => {
+    state.rpcResults = [
+      {
+        data: null,
+        error: {
+          code: "23505",
+          message:
+            'duplicate key value violates unique constraint "uq_orders_one_pending_per_cart"',
+        },
+      },
+    ];
+    state.racedOrder = null;
+
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false });
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("重查本身出錯 → 回通用建單失敗錯誤、不 redirect（§6 SDK 錯誤回傳必檢查）", async () => {
+    state.rpcResults = [
+      {
+        data: null,
+        error: {
+          code: "23505",
+          message:
+            'duplicate key value violates unique constraint "uq_orders_one_pending_per_cart"',
+        },
+      },
+    ];
+    state.racedOrder = { order_no: "INC-WINNER-1" };
+    state.racedOrderError = { message: "connection timeout" };
+
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false });
+    expect(redirect).not.toHaveBeenCalled();
   });
 });
 
@@ -394,7 +478,10 @@ describe("結帳即會員", () => {
 
     const result = await createOrder(FORM);
 
-    expect(result).toMatchObject({ ok: false, error: "請求太頻繁，請稍後再試" });
+    expect(result).toMatchObject({
+      ok: false,
+      error: "請求太頻繁，請稍後再試",
+    });
     expect(result).not.toHaveProperty("requiresLogin");
     expect(recorded).toHaveLength(0);
     expect(findOrCreateMember).not.toHaveBeenCalled();
