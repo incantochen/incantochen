@@ -19,7 +19,6 @@
 - `.env.local` 接**雲端 production**（非本機 `127.0.0.1:54321`）；seed／測試資料本機＋雲端各跑一次（本機 `db reset --local`＋雲端 `db query --linked --file`）。
 - Vercel env vars／Supabase secret／各家 Dashboard 一律**使用者本人**操作，不經過 Claude。
 - Production：`https://jewelry-shop-delta.vercel.app`；staging preview 別名：`https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`。
-- ⚠️ Supabase Auth **production 端 Dashboard 設定仍懸置**（T83：Site URL／Redirect URLs／Magic Link 範本）。
 - ECPay sandbox 環境變數（`.env.local`，使用者自填）：`ECPAY_MERCHANT_ID=3002607`、`ECPAY_HASH_KEY=pwFHCqoQZGmho4w6`、`ECPAY_HASH_IV=EkRm7iFT261dpevs`、`ECPAY_PAYMENT_URL=https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5`、`NEXT_PUBLIC_SITE_URL=http://localhost:3000`；正式上線（T35）換正式金鑰＋URL。
 
 ### 0.2 Durable 架構規則（動到對應模組必守）
@@ -30,7 +29,7 @@
 - **訂單成立即契約**：快照（`unit_price_snapshot`／`config_snapshot`／`product_name_snapshot`）優先顯示、join 現值僅 null 窗口 fallback；商品改名/調價/下架不回寫已成立訂單；付款重試不重驗價（逾期取消＝T66）。
 - **Auth**：`src/proxy.ts` 必須 named export `proxy`（Next 16 取代 middleware.ts）；magic link 落地頁**按鈕才消耗 token**（不在 useEffect 自動驗證）；OTP **不假設固定長度**（雲端 production 實際 8 碼、本機 config.toml 6 碼）；結帳頁不需 OTP——「結帳即會員」在 `createOrder` 背景處理。
 - **ECPay**：CheckMacValue 金流 SHA256／物流 MD5 不可混用；MerchantTradeNo＝order_no 去 hyphen 17 字＋2 隨機字元＝19 字（單一出處 `merchant-trade-no.ts`）；webhook 以 `merchant_trade_no` 查 payment、條件式 UPDATE（`.eq("status",…)`）防競態；測試打 ECPay API 用 Node `fetch()` 不 shell out（Bash 傳中文編碼失真）＋強制 IPv4（`NODE_OPTIONS=--dns-result-order=ipv4first`）。
-- **Email**：FROM 目前 `onboarding@resend.dev`（只能寄到 Resend 帳號 email；T35 網域驗證後換 `orders@incantochen.com`）；客人輸入插 HTML 前一律 `escape-html.ts`；關鍵信走 `send-once.ts` 去重（notification `unique(order_id,type)`）；serverless 一律 `await`、禁 fire-and-forget。
+- **Email**：FROM 目前 `onboarding@resend.dev`（只能寄到 Resend 帳號 email；T35 網域驗證後換 `orders@incantochen.com`；Supabase Auth 信件的 Custom SMTP 寄件人現況同步，見 T83）；客人輸入插 HTML 前一律 `escape-html.ts`；關鍵信走 `send-once.ts` 去重（notification `unique(order_id,type)`）；serverless 一律 `await`、禁 fire-and-forget。
 - **售後**：半客製＝法定客製品、無七天鑑賞退（業務拍板 2026-07-02）；客戶端僅單一入口「商品問題回報」（存 `return_defect`）；`repair_maintenance` 僅後台手動建立；退款過渡期＝綠界後台手動退刷＋Admin Override（人工程序見 `docs/ops-runbook.md`）。
 - **後台**：`requireAdmin()` 以 `ADMIN_EMAIL` env 驗證（T09 正式角色系統前的 MVP 做法）；admin UI 用 Tailwind gray 素色，與前台品牌 token 刻意分開。
 - **監控／兜底**：Sentry（T37）已接 webhook／寄信／對帳的靜默失敗點；Vercel Cron 每日 ECPay 主動對帳（T89，`/api/cron/ecpay-reconcile`）。`shipping_fee=0` 佔位（T48 暫緩）。
