@@ -101,6 +101,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         </label>
         <input
           type="text"
+          maxLength={50}
           value={recipientName}
           onChange={(e) => setRecipientName(e.target.value)}
           onBlur={validate}
@@ -155,6 +156,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
           </label>
           <input
             type="text"
+            maxLength={200}
             value={shippingAddress}
             onChange={(e) => setShippingAddress(e.target.value)}
             onBlur={validate}
