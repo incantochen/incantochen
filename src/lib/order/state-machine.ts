@@ -93,12 +93,32 @@ export async function adminOverrideStatus(
 
   const from = order.status as OrderStatus;
 
-  const { error: updateError } = await supabase
+  // to === from 時 SET 不會改動 WHERE 用到的 status 欄位，CAS 守衛在 Postgres
+  // READ COMMITTED 下會失效（EvalPlanQual 重新檢查條件仍會命中，CLAUDE.md
+  // §6）——兩個並發的「覆寫成同一個狀態」都會通過、都寫入稽核記錄。與其讓
+  // CAS 守衛在這個 edge case 悄悄失效，不如直接判定「目標與現況相同」不是
+  // 有意義的覆寫操作，提前擋下、完全不碰 UPDATE。
+  if (to === from) {
+    throw new Error(`目標狀態與目前狀態相同（${to}），無需覆寫`);
+  }
+
+  // Override 語意仍是「任意目標」（不受 VALID_TRANSITIONS 約束），但加上
+  // .eq("status", from) 條件式守衛確保雙擊或兩位管理者近乎同時對同一單送出
+  // 互斥的 override 目標時只有一筆會成功、只寫一筆 order_status_log——否則
+  // 兩者都會通過（本來就不檢查 canTransition）、都寫入稽核記錄，產生同一單
+  // 被記成兩段矛盾轉換的財務稽核缺口（T92／F-007）。
+  const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({ status: to })
-    .eq("id", orderId);
+    .eq("id", orderId)
+    .eq("status", from)
+    .select("id")
+    .maybeSingle();
 
   if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
+  if (!updated) {
+    throw new OrderTransitionRaceError(`訂單狀態已被其他流程異動：${orderId}`);
+  }
 
   const { error: logError } = await supabase.from("order_status_log").insert({
     order_id: orderId,
