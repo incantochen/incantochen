@@ -56,7 +56,11 @@ export function OrderActions({
   function handleChangeStatus(to: OrderStatus) {
     startTransition(async () => {
       try {
-        await changeStatus(orderId, to);
+        const result = await changeStatus(orderId, to);
+        if (!result.ok) {
+          notify(result.error, true);
+          return;
+        }
         notify(`狀態已更新為「${STATUS_LABELS[to]}」`);
       } catch (e) {
         notify(e instanceof Error ? e.message : "操作失敗", true);
@@ -77,7 +81,11 @@ export function OrderActions({
 
     startTransition(async () => {
       try {
-        await shipOrder(orderId, tracking);
+        const result = await shipOrder(orderId, tracking);
+        if (!result.ok) {
+          notify(result.error, true);
+          return;
+        }
         notify("已標記出貨");
       } catch (e) {
         notify(e instanceof Error ? e.message : "操作失敗", true);
