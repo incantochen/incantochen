@@ -13,6 +13,10 @@ import {
 } from "@/lib/checkout/schema";
 import { verifyCartPrices, type VerifiedItem } from "@/lib/quote/verify-prices";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
+import {
+  transitionOrder,
+  OrderTransitionRaceError,
+} from "@/lib/order/state-machine";
 import type { Json } from "@/types/database.types";
 import { z } from "zod";
 
@@ -67,7 +71,7 @@ export async function createOrder(
 
   const { data: cart } = await serviceRole
     .from("cart")
-    .select("id")
+    .select("id, updated_at")
     .eq("guest_token", guestToken)
     .maybeSingle();
 
@@ -86,20 +90,44 @@ export async function createOrder(
   }
 
   // T75 讓 cart 在下單後、付款前這段期間繼續存在，代表客人可能回到 /cart
-  // 對同一張還沒結案的購物車重複按「結帳」。若已有一筆指向這張 cart 的
-  // pending_payment 訂單，直接導去它的付款頁，不要另外開一張新訂單造成
-  // 重複下單／重複收款的風險。
-  const { data: existingPendingOrder } = await serviceRole
+  // 對同一張還沒結案的購物車重複按「結帳」。
+  // - cart 沒被再動過：這是同一份內容的重複送出，直接導去既有訂單的付款頁。
+  // - cart 有被動過（加了商品／改了數量）：既有訂單已不代表客人現在要買的
+  //   東西，不能把人導去付舊金額——把舊單取消（pending_payment→cancelled
+  //   合法轉換），往下走正常建單流程用最新內容開新單。
+  // 查詢失敗必須擋下而非放行（§6：查詢失敗 ≠ 查無資料）——dedup 防護在 DB
+  // 不穩時 fail-open 等於雙重下單風險最高的時刻防護自動消失。
+  const { data: existingPendingOrder, error: dedupError } = await serviceRole
     .from("orders")
-    .select("order_no")
+    .select("id, order_no, created_at")
     .eq("cart_id", cartId)
     .eq("status", "pending_payment")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
+  if (dedupError) {
+    return { ok: false, error: "建立訂單失敗，請稍後再試" };
+  }
+
   if (existingPendingOrder) {
-    redirect(`/checkout/pay?order=${existingPendingOrder.order_no}`);
+    if (cart.updated_at <= existingPendingOrder.created_at) {
+      redirect(`/checkout/pay?order=${existingPendingOrder.order_no}`);
+    }
+    try {
+      await transitionOrder(existingPendingOrder.id, "cancelled", {
+        note: "購物車內容已變更，舊待付款訂單自動取消（重新結帳）",
+      });
+    } catch (e) {
+      if (e instanceof OrderTransitionRaceError) {
+        // 舊單剛好被其他流程動過（多半是 webhook 轉 paid）——導去它的付款頁，
+        // 該頁會依最新狀態決定去向（已付款則進成功頁）。
+        redirect(`/checkout/pay?order=${existingPendingOrder.order_no}`);
+      }
+      // Server Action 拋錯在 production 會被 Next.js 遮罩成通用訊息，
+      // 統一走結構化回傳讓表單顯示錯誤。
+      return { ok: false, error: "建立訂單失敗，請稍後再試" };
+    }
   }
 
   // ③ Member find-or-create ("結帳即會員")
@@ -219,15 +247,39 @@ export async function createOrder(
   // 兩次嘗試（首發＋order_no 撞號重試）共用同一套錯誤分類，避免像先前那樣
   // 重試那次的分支把「購物車已過期」（23503）跟其他失敗混在一起，讓客人看到
   // 不對應實情的通用錯誤訊息。
+  // 23505 有兩個可能來源，靠 constraint 名稱區分：
+  // - orders_order_no_key：order_no 撞號 → 換號重試一次
+  // - uq_orders_one_pending_per_cart（0011）：併發雙送出搶輸 —— 另一個請求
+  //   剛建好同一張 cart 的 pending 訂單，重查後導去它的付款頁（check-then-act
+  //   dedup 的 DB 兜底，防雙重下單）
+  const isPendingCartCollision = (err: { message?: string } | null) =>
+    err?.message?.includes("uq_orders_one_pending_per_cart") ?? false;
+
   let orderNo = generateOrderNo();
   let { data: order, error: orderError } = await callCreateOrderRpc(orderNo);
 
-  if (!order && orderError?.code === "23505") {
+  if (
+    !order &&
+    orderError?.code === "23505" &&
+    !isPendingCartCollision(orderError)
+  ) {
     orderNo = generateOrderNo();
     ({ data: order, error: orderError } = await callCreateOrderRpc(orderNo));
   }
 
   if (!order) {
+    if (orderError?.code === "23505" && isPendingCartCollision(orderError)) {
+      const { data: racedOrder } = await serviceRole
+        .from("orders")
+        .select("order_no")
+        .eq("cart_id", cartId)
+        .eq("status", "pending_payment")
+        .maybeSingle();
+      if (racedOrder) {
+        redirect(`/checkout/pay?order=${racedOrder.order_no}`);
+      }
+      return { ok: false, error: "建立訂單失敗，請稍後再試" };
+    }
     if (orderError?.code === "23503") {
       // orders.cart_id FK 違反：cart 在讀取後、RPC 寫入前被刪除（例如剛好被
       // T78 訪客車過期清理排程掃到）。重試沒有意義（cart 已不存在），請客人

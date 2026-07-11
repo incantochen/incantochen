@@ -39,8 +39,11 @@ function makeServiceRole(opts: {
   cartDeleteError?: any;
   cartUpdatedAt?: string | null; // null 代表 cart 已不存在
   currentOrderStatus?: string; // 給「!promoted」分支查詢現況用
+  orderItems?: { product_id: string; config_snapshot: unknown }[];
+  cartItems?: { id: string; product_id: string; config_snapshot: unknown }[];
 }) {
   const cartDeleteCalls: string[] = [];
+  const cartItemDeleteIds: string[][] = [];
   const logInsert = vi.fn().mockResolvedValue({ error: opts.logError ?? null });
   const cartUpdatedAt = opts.cartUpdatedAt ?? CART_UNCHANGED_SINCE;
 
@@ -72,6 +75,29 @@ function makeServiceRole(opts: {
       if (table === "order_status_log") {
         return { insert: logInsert };
       }
+      if (table === "order_item") {
+        const chain: any = {
+          select: () => chain,
+          eq: () => chain,
+          then: (resolve: (v: unknown) => void) =>
+            resolve({ data: opts.orderItems ?? [], error: null }),
+        };
+        return chain;
+      }
+      if (table === "cart_item") {
+        const chain: any = {
+          select: () => chain,
+          eq: () => chain,
+          delete: () => chain,
+          in: (_col: string, ids: string[]) => {
+            cartItemDeleteIds.push(ids);
+            return chain;
+          },
+          then: (resolve: (v: unknown) => void) =>
+            resolve({ data: opts.cartItems ?? [], error: null }),
+        };
+        return chain;
+      }
       if (table === "cart") {
         return {
           select: () => ({
@@ -98,7 +124,7 @@ function makeServiceRole(opts: {
     },
   };
 
-  return { serviceRole, cartDeleteCalls, logInsert };
+  return { serviceRole, cartDeleteCalls, cartItemDeleteIds, logInsert };
 }
 
 beforeEach(() => {
@@ -122,18 +148,56 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
     expect(cartDeleteCalls).toEqual(["cart-1"]);
   });
 
-  it("cart 在下單後又被追加新品項（updated_at 晚於訂單建立時間）→ 保留 cart，不刪除", async () => {
-    const { serviceRole, cartDeleteCalls } = makeServiceRole({
-      promote: {
-        data: { id: "order-1", cart_id: "cart-1", created_at: ORDER_CREATED_AT },
-        error: null,
+  it("cart 在下單後又被追加新品項 → 不整張刪除，只移除訂單裡買過的品項（product_id+config 相符），新品項保留", async () => {
+    const boughtConfig = { metal: "gold" };
+    const { serviceRole, cartDeleteCalls, cartItemDeleteIds } = makeServiceRole(
+      {
+        promote: {
+          data: {
+            id: "order-1",
+            cart_id: "cart-1",
+            created_at: ORDER_CREATED_AT,
+          },
+          error: null,
+        },
+        cartUpdatedAt: CART_TOUCHED_AFTER,
+        orderItems: [{ product_id: "prod-a", config_snapshot: boughtConfig }],
+        cartItems: [
+          { id: "ci-bought", product_id: "prod-a", config_snapshot: boughtConfig },
+          { id: "ci-new", product_id: "prod-b", config_snapshot: {} },
+          // 同商品但不同配置：不算買過，必須保留
+          { id: "ci-variant", product_id: "prod-a", config_snapshot: { metal: "silver" } },
+        ],
       },
-      cartUpdatedAt: CART_TOUCHED_AFTER,
-    });
+    );
+
+    await ensureOrderPaid(serviceRole, "order-1", "webhook");
+
+    expect(cartDeleteCalls).toEqual([]); // 整張 cart 不刪
+    expect(cartItemDeleteIds).toEqual([["ci-bought"]]); // 只刪買過的那筆
+  });
+
+  it("cart 被動過且沒有任何品項與訂單相符 → 不刪任何東西", async () => {
+    const { serviceRole, cartDeleteCalls, cartItemDeleteIds } = makeServiceRole(
+      {
+        promote: {
+          data: {
+            id: "order-1",
+            cart_id: "cart-1",
+            created_at: ORDER_CREATED_AT,
+          },
+          error: null,
+        },
+        cartUpdatedAt: CART_TOUCHED_AFTER,
+        orderItems: [{ product_id: "prod-a", config_snapshot: {} }],
+        cartItems: [{ id: "ci-new", product_id: "prod-b", config_snapshot: {} }],
+      },
+    );
 
     await ensureOrderPaid(serviceRole, "order-1", "webhook");
 
     expect(cartDeleteCalls).toEqual([]);
+    expect(cartItemDeleteIds).toEqual([]);
   });
 
   it("promoted.cart_id 為 null（訂單非源自現存 cart）→ 不呼叫 cart delete", async () => {

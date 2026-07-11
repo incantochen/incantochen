@@ -49,6 +49,25 @@ export async function GET(request: Request) {
           note: "逾期未付款自動取消",
         });
         summary.cancelled += 1;
+
+        // 訂單取消後順手把它的 pending payment 標成 failed：否則這些死掉的
+        // pending row 會永遠留在 ecpay-reconcile 的候選清單裡（依 created_at
+        // 升序排最前面），累積約 30 筆就把每日對帳批次整批塞滿，真正卡住的
+        // 新付款反而輪不到檢查。失敗只告警，不影響取消本身。
+        const { error: paymentSweepError } = await serviceRole
+          .from("payment")
+          .update({ status: "failed" })
+          .eq("order_id", order.id)
+          .eq("status", "pending");
+        if (paymentSweepError) {
+          Sentry.captureMessage(
+            "pending-payment-expire: payment sweep failed",
+            {
+              level: "warning",
+              extra: { orderId: order.id, error: paymentSweepError.message },
+            },
+          );
+        }
       } catch (e) {
         // webhook 剛好搶先把訂單轉成 paid（或轉成其他任何非 pending_payment
         // 狀態）：不論是敗在 CAS 守衛還是更早的 canTransition 檢查，都是候選

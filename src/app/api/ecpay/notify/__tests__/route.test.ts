@@ -60,6 +60,11 @@ type DbState = {
   ordersUpdateError: boolean;
   ordersSelectError: boolean;
   paymentUpdateError: boolean;
+  // 第一段 CAS（WHERE status='pending'）是否更新到列；false 模擬 T74 競態
+  // （付款頁在 webhook 抵達前把這筆標成 failed）。
+  paymentUpdateMatches: boolean;
+  // 救援 CAS（WHERE status='failed'）是否更新到列。
+  paymentRescueMatches: boolean;
 };
 const db: DbState = {
   payment: null,
@@ -71,6 +76,8 @@ const db: DbState = {
   ordersUpdateError: false,
   ordersSelectError: false,
   paymentUpdateError: false,
+  paymentUpdateMatches: true,
+  paymentRescueMatches: false,
 };
 const recorded: { table: string; op: string; values?: unknown }[] = [];
 
@@ -102,6 +109,26 @@ function makeChain(table: string) {
       if (table === "payment") {
         if (db.throwOnPaymentQuery) {
           throw new Error("simulated DB failure");
+        }
+        if (chain._op === "update") {
+          // 條件式 UPDATE 現在鏈 .select().maybeSingle() 檢查更新到幾列；
+          // 靠 WHERE 的 status eq 值區分第一段 CAS（pending）與救援（failed）。
+          if (chain._lastEq?.col === "status" && chain._lastEq?.val === "failed") {
+            return Promise.resolve({
+              data: db.paymentRescueMatches ? { id: "p1" } : null,
+              error: null,
+            });
+          }
+          if (db.paymentUpdateError) {
+            return Promise.resolve({
+              data: null,
+              error: { message: "simulated payment update error" },
+            });
+          }
+          return Promise.resolve({
+            data: db.paymentUpdateMatches ? { id: "p1" } : null,
+            error: null,
+          });
         }
         // fallback 分支的 paidPayment 冪等查詢：.eq("order_id",x).eq("status","paid")，
         // 跟外層用 merchant_trade_no 查 payment 是同一張表、不同查詢，靠最後一次
@@ -223,6 +250,8 @@ beforeEach(() => {
   db.ordersUpdateError = false;
   db.ordersSelectError = false;
   db.paymentUpdateError = false;
+  db.paymentUpdateMatches = true;
+  db.paymentRescueMatches = false;
   sendOrderConfirmation.mockClear();
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
@@ -513,6 +542,59 @@ describe("並發：ensureOrderPaid 沒搶到推進（已被其他並發請求搶
     expect(await res.text()).toBe("1|OK");
     expect(insertsTo("order_status_log")).toHaveLength(0);
     expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T74 競態救援：付款頁把 payment 標成 failed 的同時客人完成付款
+// ---------------------------------------------------------------------------
+
+describe("T74 競態：payment 被付款頁標成 failed 後 webhook 才抵達", () => {
+  it("第一段 CAS 沒更新到列 → 從 failed 救回 paid（補齊 ECPay 交易資訊），訂單仍正常推進", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.paymentUpdateMatches = false; // 讀到時還是 pending，UPDATE 前被標成 failed
+    db.paymentRescueMatches = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const paymentUpdates = updatesTo("payment");
+    expect(paymentUpdates).toHaveLength(2); // 第一段 CAS ＋ 救援
+    const rescue = paymentUpdates[1]?.values as any;
+    expect(rescue.status).toBe("paid");
+    expect(rescue.gateway_trade_no).toBe(BASE_PARAMS.TradeNo);
+    expect(rescue.raw_callback).toBeTruthy();
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+    expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
+  });
+
+  it("救援也沒更新到列（已有其他 paid row 等）→ 不擋流程，訂單仍推進、回 1|OK", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.paymentUpdateMatches = false;
+    db.paymentRescueMatches = false;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
+  });
+
+  it("付款失敗通知（RtnCode≠1）遇 0 列更新 → 不觸發救援（救援只為 isPaid 服務）", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    db.paymentUpdateMatches = false;
+
+    const res = await POST(
+      buildRequest({ ...BASE_PARAMS, RtnCode: "10100252", RtnMsg: "拒絕交易" }),
+    );
+
+    expect(await res.text()).toBe("1|OK");
+    expect(updatesTo("payment")).toHaveLength(1); // 只有第一段，沒有救援
+    expect(updatesTo("orders")).toHaveLength(0);
   });
 });
 

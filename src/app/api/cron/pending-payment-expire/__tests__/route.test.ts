@@ -30,10 +30,27 @@ type OrderRow = { id: string };
 
 let candidates: OrderRow[] = [];
 let lastFilters: Record<string, unknown> = {};
+// 取消成功後順帶把該訂單的 pending payment 標 failed 的呼叫記錄
+const paymentSweeps: { order_id: unknown }[] = [];
 
 function makeServiceRole() {
   return {
     from: (table: string) => {
+      if (table === "payment") {
+        const filters: Record<string, unknown> = {};
+        const chain: any = {
+          update: () => chain,
+          eq: (col: string, val: unknown) => {
+            filters[col] = val;
+            return chain;
+          },
+          then: (resolve: (v: unknown) => void) => {
+            paymentSweeps.push({ order_id: filters.order_id });
+            resolve({ error: null });
+          },
+        };
+        return chain;
+      }
       if (table !== "orders") throw new Error(`unexpected table: ${table}`);
       const chain: any = {
         select: () => chain,
@@ -73,6 +90,7 @@ function buildRequest(auth?: string): Request {
 beforeEach(() => {
   candidates = [];
   lastFilters = {};
+  paymentSweeps.length = 0;
   transitionOrder.mockReset();
 });
 
@@ -122,6 +140,20 @@ describe("逐筆處理", () => {
       "cancelled",
       expect.objectContaining({ note: expect.any(String) }),
     );
+    // 取消後順帶把該訂單的 pending payment 標 failed，
+    // 避免死掉的 pending row 永久佔據 ecpay-reconcile 的每日候選批次
+    expect(paymentSweeps).toEqual([{ order_id: "o1" }]);
+  });
+
+  it("轉換被搶先（skipped）→ 不掃 payment", async () => {
+    candidates = [{ id: "o1" }];
+    transitionOrder.mockRejectedValue(
+      new OrderTransitionRaceError("訂單狀態已被其他流程異動：o1"),
+    );
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(paymentSweeps).toEqual([]);
   });
 
   it("併發：webhook 搶先轉 paid（OrderTransitionRaceError）→ skipped 計數，非錯誤", async () => {

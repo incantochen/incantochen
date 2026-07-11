@@ -5,6 +5,61 @@ import { sendOrderConfirmation } from "@/lib/email/order-confirmation";
 import { sendNewOrderNotification } from "@/lib/email/new-order-notification";
 import { sendOnce } from "@/lib/notification/send-once";
 
+// 付款期間 cart 被加入新品項時的精準清理：只刪除訂單裡出現過的 cart_item
+// （product_id + config_snapshot 完全一致），新加入的保留。cart_item 與
+// order_item 之間沒有外鍵對應，這是能做到的最準確比對。
+async function removePurchasedItemsFromCart(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+  cartId: string,
+) {
+  const [orderItemsRes, cartItemsRes] = await Promise.all([
+    serviceRole
+      .from("order_item")
+      .select("product_id, config_snapshot")
+      .eq("order_id", orderId),
+    serviceRole
+      .from("cart_item")
+      .select("id, product_id, config_snapshot")
+      .eq("cart_id", cartId),
+  ]);
+
+  if (orderItemsRes.error || cartItemsRes.error) {
+    const error = orderItemsRes.error ?? cartItemsRes.error;
+    console.error("[ensureOrderPaid] purchased-item cleanup query failed", error);
+    Sentry.captureMessage("ensureOrderPaid: purchased-item cleanup failed", {
+      level: "error",
+      extra: { orderId, cartId, error: error?.message },
+    });
+    return;
+  }
+
+  const purchasedKeys = new Set(
+    (orderItemsRes.data ?? []).map(
+      (i) => `${i.product_id}|${JSON.stringify(i.config_snapshot)}`,
+    ),
+  );
+  const idsToRemove = (cartItemsRes.data ?? [])
+    .filter((c) =>
+      purchasedKeys.has(`${c.product_id}|${JSON.stringify(c.config_snapshot)}`),
+    )
+    .map((c) => c.id);
+
+  if (idsToRemove.length === 0) return;
+
+  const { error: removeError } = await serviceRole
+    .from("cart_item")
+    .delete()
+    .in("id", idsToRemove);
+  if (removeError) {
+    console.error("[ensureOrderPaid] purchased-item delete failed", removeError);
+    Sentry.captureMessage("ensureOrderPaid: purchased-item delete failed", {
+      level: "error",
+      extra: { orderId, cartId, error: removeError.message },
+    });
+  }
+}
+
 async function notifyOrderPaid(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
@@ -54,19 +109,24 @@ export async function ensureOrderPaid(
     // cron 搶先轉成 cancelled，此時 ECPay 那邊實際上已經付款成功。這種
     // 「錢收到了、但訂單卡在 cancelled」必須告警，不能跟正常冪等重入混淆
     // 而悄悄放過。
-    const { data: current } = await serviceRole
+    // 這段的存在意義就是「不要靜默」，所以重查失敗（error）或查無此單
+    // （current 為 null）同樣要告警——只有明確確認「已是 paid」才安靜返回。
+    const { data: current, error: statusError } = await serviceRole
       .from("orders")
       .select("status")
       .eq("id", orderId)
       .maybeSingle();
-    if (current && current.status !== "paid") {
+    if (statusError || !current || current.status !== "paid") {
+      const status = statusError
+        ? `查詢失敗: ${statusError.message}`
+        : (current?.status ?? "查無此訂單");
       console.error(
-        "[ensureOrderPaid] order 未處於 pending_payment 亦非 paid，付款可能卡住",
-        { orderId, status: current.status, source },
+        "[ensureOrderPaid] order 未處於 pending_payment 亦無法確認為 paid，付款可能卡住",
+        { orderId, status, source },
       );
       Sentry.captureMessage(
         "ensureOrderPaid: order in unexpected status, payment may be stuck",
-        { level: "error", extra: { orderId, status: current.status, source } },
+        { level: "error", extra: { orderId, status, source } },
       );
     }
     return;
@@ -132,9 +192,17 @@ export async function ensureOrderPaid(
           },
         });
       }
+    } else if (cartRow) {
+      // 下單後 cart 又被動過（付款期間加了新商品）：整張保留會讓「已付款的
+      // 品項」繼續留在購物車，客人下次結帳會把買過的東西再買一次。改成只
+      // 移除這筆訂單裡出現過的品項（以 product_id + config_snapshot 比對），
+      // 下單後才加入的新品項原樣保留。best-effort：失敗只告警不擋付款確認。
+      await removePurchasedItemsFromCart(
+        serviceRole,
+        orderId,
+        promoted.cart_id,
+      );
     }
-    // cartRow.updated_at > promoted.created_at：下單後又被動過，保留給客人，
-    // 之後由既有的 90 天訪客車清理 cron（T78）收尾。
   }
 }
 

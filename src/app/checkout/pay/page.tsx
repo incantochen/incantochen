@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import * as Sentry from "@sentry/nextjs";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildAioParams } from "@/lib/ecpay/aio-payment";
 import { generateMerchantTradeNo } from "@/lib/ecpay/merchant-trade-no";
@@ -20,36 +21,57 @@ async function createPendingPayment(
   totalAmount: number,
 ) {
   const merchantTradeNo = generateMerchantTradeNo(orderNo);
-  const { error } = await serviceRole.from("payment").insert({
-    order_id: orderId,
-    merchant_trade_no: merchantTradeNo,
-    amount: totalAmount,
-    provider: "ecpay",
-    status: "pending",
-  });
-  if (error) {
+  const { data: inserted, error } = await serviceRole
+    .from("payment")
+    .insert({
+      order_id: orderId,
+      merchant_trade_no: merchantTradeNo,
+      amount: totalAmount,
+      provider: "ecpay",
+      status: "pending",
+    })
+    .select("id, created_at")
+    .single();
+  if (error || !inserted) {
     redirect("/checkout");
   }
 
   // 併發防護：沒有 DB 層級的 unique 約束擋「同一張訂單只能有一筆 pending
   // payment」，若兩個並發請求都判定舊 row 已過期、各自 insert 了一筆新的，
-  // 這裡把除了剛剛這筆以外、同訂單其他 pending row 都標記 failed，縮小重複
-  // pending row 留存的視窗（非完全原子，但足以清掉絕大多數併發殘留）。
-  const { data: otherPending } = await serviceRole
+  // 這裡把同訂單「比自己這筆更早建立」的 pending row 標記 failed。只掃更早
+  // 的（嚴格小於自己的 created_at）——若掃「自己以外全部」，兩個併發請求會
+  // 互相把對方剛發的新 row 標成 failed（mutual kill），害客人拿到的 ECPay
+  // 表單對應的 payment 已死；只掃更早的保證至少最新那筆存活。
+  const { data: otherPending, error: sweepQueryError } = await serviceRole
     .from("payment")
-    .select("id, merchant_trade_no")
+    .select("id")
     .eq("order_id", orderId)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .lt("created_at", inserted.created_at);
 
-  const staleIds = (otherPending ?? [])
-    .filter((p) => p.merchant_trade_no !== merchantTradeNo)
-    .map((p) => p.id);
+  if (sweepQueryError) {
+    console.error("[checkout/pay] stale payment sweep query failed", sweepQueryError);
+    Sentry.captureMessage("checkout/pay: stale payment sweep query failed", {
+      level: "warning",
+      extra: { orderId, error: sweepQueryError.message },
+    });
+    return merchantTradeNo; // 清理失敗不擋付款；殘留 pending row 由對帳兜底
+  }
+
+  const staleIds = (otherPending ?? []).map((p) => p.id);
   if (staleIds.length > 0) {
-    await serviceRole
+    const { error: sweepError } = await serviceRole
       .from("payment")
       .update({ status: "failed" })
       .in("id", staleIds)
       .eq("status", "pending");
+    if (sweepError) {
+      console.error("[checkout/pay] stale payment sweep failed", sweepError);
+      Sentry.captureMessage("checkout/pay: stale payment sweep failed", {
+        level: "warning",
+        extra: { orderId, error: sweepError.message },
+      });
+    }
   }
 
   return merchantTradeNo;
@@ -136,6 +158,23 @@ export default async function CheckoutPayPage({
         redirect(`/checkout/pay?order=${orderNo}`);
       }
     }
+
+    // 發新號前最後一道防呆：若這張訂單已有 paid payment（webhook 正在處理中、
+    // orders.status 還沒推進的極窄窗口），絕不能再發新交易序號讓客人二次付款
+    // ——導去成功頁（ensureOrderPaid 冪等，稍後 webhook 會把訂單狀態補齊）。
+    const { data: paidPayment, error: paidCheckError } = await serviceRole
+      .from("payment")
+      .select("id")
+      .eq("order_id", order.id)
+      .eq("status", "paid")
+      .maybeSingle();
+    if (paidCheckError) {
+      redirect("/checkout");
+    }
+    if (paidPayment) {
+      redirect(`/checkout/success?order=${orderNo}`);
+    }
+
     merchantTradeNo = await createPendingPayment(
       serviceRole,
       order.id,

@@ -20,29 +20,36 @@ import type { SupportRequestStatus } from "@/lib/support/support-request";
 
 // transitionOrder 的 CAS 守衛（T66）代表狀態轉換現在可能因為別的流程（cron
 // 自動取消、ECPay webhook）搶先動過而失敗。這種情況不是操作失敗，是頁面顯示
-// 的狀態已經過期——重新整理路徑讓畫面拿到最新狀態，並回傳客氣一點的訊息，
-// 而不是把 transitionOrder 內部丟出的技術性字串原樣顯示給 admin。
-function friendlyTransitionError(e: unknown): never {
-  if (e instanceof OrderTransitionRaceError) {
-    throw new Error("此訂單狀態已被其他流程異動，畫面已更新為最新狀態，請重新確認後再操作");
-  }
-  throw e;
-}
+// 的狀態已經過期。注意：Server Action 拋出的 Error 在 production 會被
+// Next.js 遮罩成通用 digest 訊息，client 根本看不到內容——所以走結構化回傳
+// { ok, error }，client 端 notify 才顯示得出來；成功路徑照舊 revalidate。
+export type AdminActionResult = { ok: true } | { ok: false; error: string };
 
-export async function changeStatus(orderId: string, to: OrderStatus) {
+const RACE_MESSAGE =
+  "此訂單狀態已被其他流程異動，請重新整理頁面確認最新狀態後再操作";
+
+export async function changeStatus(
+  orderId: string,
+  to: OrderStatus,
+): Promise<AdminActionResult> {
   const user = await requireAdmin();
   try {
     await transitionOrder(orderId, to, { actorId: user.id });
   } catch (e) {
-    revalidatePath(`/admin/orders/${orderId}`);
-    revalidatePath("/admin/orders");
-    friendlyTransitionError(e);
+    if (e instanceof OrderTransitionRaceError) {
+      return { ok: false, error: RACE_MESSAGE };
+    }
+    return { ok: false, error: "狀態更新失敗，請稍後再試" };
   }
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
+  return { ok: true };
 }
 
-export async function shipOrder(orderId: string, trackingNo: string) {
+export async function shipOrder(
+  orderId: string,
+  trackingNo: string,
+): Promise<AdminActionResult> {
   const user = await requireAdmin();
   const supabase = createServiceRoleClient();
 
@@ -51,7 +58,9 @@ export async function shipOrder(orderId: string, trackingNo: string) {
     .update({ tracking_no: trackingNo })
     .eq("id", orderId);
 
-  if (error) throw new Error(`更新物流單號失敗：${error.message}`);
+  if (error) {
+    return { ok: false, error: "更新物流單號失敗，請稍後再試" };
+  }
 
   try {
     await transitionOrder(orderId, "shipped", {
@@ -59,9 +68,10 @@ export async function shipOrder(orderId: string, trackingNo: string) {
       note: `出貨：${trackingNo}`,
     });
   } catch (e) {
-    revalidatePath(`/admin/orders/${orderId}`);
-    revalidatePath("/admin/orders");
-    friendlyTransitionError(e);
+    if (e instanceof OrderTransitionRaceError) {
+      return { ok: false, error: RACE_MESSAGE };
+    }
+    return { ok: false, error: "出貨標記失敗，請稍後再試" };
   }
 
   // 出貨這件事本身已經成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證
@@ -75,6 +85,7 @@ export async function shipOrder(orderId: string, trackingNo: string) {
 
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
+  return { ok: true };
 }
 
 export async function overrideStatus(

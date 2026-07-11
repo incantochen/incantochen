@@ -155,19 +155,59 @@ export async function POST(request: Request) {
     // { error }；若不檢查，orders 可能已推進成 paid、信也寄了，但 payment
     // 卻永遠卡在 pending（gateway_trade_no/paid_at/raw_callback 全是
     // null），日後退款、對帳都查無 ECPay 交易號，且無法再被自動修正。
-    const { error: paymentUpdateError } = await serviceRole
-      .from("payment")
-      .update({
-        status: isPaid ? "paid" : "failed",
-        gateway_trade_no: params.TradeNo ?? null,
-        paid_at: isPaid ? now : null,
-        raw_callback: params,
-      })
-      .eq("id", payment.id)
-      .eq("status", "pending"); // 只從 pending 往前推，防競態覆寫
+    // .select().maybeSingle() 檢查是否真的更新到列：T74 的付款頁可能在
+    // webhook 抵達前一刻把這筆 payment 標成 failed（客人付款當下另一分頁
+    // 剛好重整、判定序號過期）——0 列更新不是 error，若不檢查會靜默略過，
+    // ECPay 交易號（退款唯一依據）就永遠沒記錄。
+    const { data: paymentUpdated, error: paymentUpdateError } =
+      await serviceRole
+        .from("payment")
+        .update({
+          status: isPaid ? "paid" : "failed",
+          gateway_trade_no: params.TradeNo ?? null,
+          paid_at: isPaid ? now : null,
+          raw_callback: params,
+        })
+        .eq("id", payment.id)
+        .eq("status", "pending") // 只從 pending 往前推，防競態覆寫
+        .select("id")
+        .maybeSingle();
 
     if (paymentUpdateError) {
       throw new Error(`payment update failed: ${paymentUpdateError.message}`);
+    }
+
+    if (!paymentUpdated && isPaid) {
+      // 沒更新到列＝這筆已不是 pending。錢確定收到了（isPaid＋驗章＋金額核對
+      // 都過），若是被 T74 標成 failed 的競態，把它救回 paid 並補齊 ECPay
+      // 交易資訊（uq_payment_one_paid_per_order 保證同訂單不會出現兩筆 paid，
+      // 若已有另一筆 paid 這裡會 23505——記錄後放行，訂單推進不受影響）。
+      const { data: rescued, error: rescueError } = await serviceRole
+        .from("payment")
+        .update({
+          status: "paid",
+          gateway_trade_no: params.TradeNo ?? null,
+          paid_at: now,
+          raw_callback: params,
+        })
+        .eq("id", payment.id)
+        .eq("status", "failed")
+        .select("id")
+        .maybeSingle();
+
+      Sentry.captureMessage(
+        rescued
+          ? "ecpay/notify: rescued mark-failed payment back to paid (T74 race)"
+          : "ecpay/notify: paid webhook hit non-pending payment, not rescued",
+        {
+          level: rescued ? "warning" : "error",
+          extra: {
+            paymentId: payment.id,
+            merchantTradeNo,
+            rescueError: rescueError?.message ?? null,
+          },
+        },
+      );
     }
 
     // 訂單推進與通知寄送各自冪等，ensureOrderPaid 內部會重新確認目前狀態

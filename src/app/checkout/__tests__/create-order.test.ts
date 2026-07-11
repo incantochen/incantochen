@@ -39,12 +39,31 @@ vi.mock("@/lib/quote/verify-prices", () => ({
   verifyCartPrices: (...a: unknown[]) => verifyCartPrices(...a),
 }));
 
+// 狀態機：dedup 發現購物車已變更時會呼叫 transitionOrder 取消舊單；
+// 其行為已在 state-machine.test.ts 覆蓋，這裡 mock 掉專注在 createOrder 邏輯。
+const { transitionOrder, OrderTransitionRaceError } = vi.hoisted(() => {
+  class OrderTransitionRaceError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = "OrderTransitionRaceError";
+    }
+  }
+  return { transitionOrder: vi.fn(), OrderTransitionRaceError };
+});
+vi.mock("@/lib/order/state-machine", () => ({
+  transitionOrder: (...a: unknown[]) => transitionOrder(...a),
+  OrderTransitionRaceError,
+}));
+
 // service role：table 路由＋操作記錄器
 type Recorded = { table: string; values: any };
 const recorded: Recorded[] = [];
 const deletes: string[] = [];
 const state = {
-  cart: { id: "cart-1" } as { id: string } | null,
+  cart: { id: "cart-1", updated_at: "2026-07-10T00:00:00+00:00" } as {
+    id: string;
+    updated_at: string;
+  } | null,
   cartItems: [
     {
       id: "ci-1",
@@ -56,7 +75,11 @@ const state = {
   ] as any[] | null,
   member: null as { id: string } | null,
   // 同一張 cart 是否已有 pending_payment 訂單（重複結帳防護，見 actions.ts）。
-  existingPendingOrder: null as { order_no: string } | null,
+  existingPendingOrder: null as {
+    id: string;
+    order_no: string;
+    created_at: string;
+  } | null,
   // create_order_with_items RPC 每次呼叫的回傳（依序消耗）——T76 改用單一
   // RPC 交易化後，order_no 23505 碰撞重試是「重新呼叫 RPC」而非分段 insert。
   rpcResults: [] as { data: any; error: any }[],
@@ -154,10 +177,12 @@ beforeEach(() => {
   recorded.length = 0;
   deletes.length = 0;
   cookieJar = { guest_token: "guest-abc" };
-  state.cart = { id: "cart-1" };
+  state.cart = { id: "cart-1", updated_at: "2026-07-10T00:00:00+00:00" };
   state.member = null;
   state.existingPendingOrder = null;
   state.rpcResults = [];
+  transitionOrder.mockReset();
+  transitionOrder.mockResolvedValue(undefined);
   getUser.mockResolvedValue({ data: { user: null } });
   verifyCartPrices.mockResolvedValue(VERIFIED_OK);
   redirect.mockClear();
@@ -282,14 +307,55 @@ describe("交易化與清車（T76／T75）", () => {
     expect(deletes).not.toContain("cart");
   });
 
-  it("同一張 cart 已有 pending_payment 訂單 → 直接導去該訂單付款頁，不重複建單", async () => {
-    state.existingPendingOrder = { order_no: "INC-EXISTING-1" };
+  it("同一張 cart 已有 pending 訂單且 cart 沒被再動過 → 直接導去該訂單付款頁，不重複建單", async () => {
+    // cart.updated_at (07-10) <= 訂單 created_at (07-11)：內容沒變，重複送出
+    state.existingPendingOrder = {
+      id: "order-old",
+      order_no: "INC-EXISTING-1",
+      created_at: "2026-07-11T00:00:00+00:00",
+    };
 
     await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
 
-    expect(redirect).toHaveBeenCalledWith(
-      "/checkout/pay?order=INC-EXISTING-1",
+    expect(redirect).toHaveBeenCalledWith("/checkout/pay?order=INC-EXISTING-1");
+    expect(transitionOrder).not.toHaveBeenCalled();
+    expect(rpcCalls()).toHaveLength(0);
+  });
+
+  it("同一張 cart 已有 pending 訂單但 cart 之後被改過 → 取消舊單、建新單（不能讓客人付到舊金額）", async () => {
+    // cart.updated_at (07-10) > 訂單 created_at (07-09)：下單後又動過購物車
+    state.existingPendingOrder = {
+      id: "order-old",
+      order_no: "INC-EXISTING-1",
+      created_at: "2026-07-09T00:00:00+00:00",
+    };
+
+    await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
+
+    expect(transitionOrder).toHaveBeenCalledWith(
+      "order-old",
+      "cancelled",
+      expect.objectContaining({ note: expect.any(String) }),
     );
+    expect(rpcCalls()).toHaveLength(1); // 建了新訂單
+    expect(redirect).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/checkout\/pay\?order=INC-/),
+    );
+  });
+
+  it("取消舊單時搶輸（剛好被 webhook 轉 paid）→ 導去舊單付款頁（該頁會轉成功頁），不建新單", async () => {
+    state.existingPendingOrder = {
+      id: "order-old",
+      order_no: "INC-EXISTING-1",
+      created_at: "2026-07-09T00:00:00+00:00",
+    };
+    transitionOrder.mockRejectedValue(
+      new OrderTransitionRaceError("已被其他流程異動"),
+    );
+
+    await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
+
+    expect(redirect).toHaveBeenCalledWith("/checkout/pay?order=INC-EXISTING-1");
     expect(rpcCalls()).toHaveLength(0);
   });
 });
