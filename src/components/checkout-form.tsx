@@ -232,9 +232,11 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         </button>
       )}
 
+      {/* T71 ultra review #6：requiresLogin 時這顆按鈕註定再次被伺服器擋下，
+          disable 掉避免使用者重複點擊觸發沒有意義的請求。 */}
       <button
         type="submit"
-        disabled={isPending}
+        disabled={isPending || requiresLogin}
         className="w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase disabled:opacity-50"
       >
         {isPending ? "處理中…" : "前往付款"}

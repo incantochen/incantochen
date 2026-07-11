@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member";
+import { normalizeEmail } from "@/lib/auth/normalize-email";
 import {
   otpEmailRatelimit,
   otpIpRatelimit,
@@ -16,7 +17,7 @@ type ActionResult = { ok: true } | { ok: false; error: string };
 const emailSchema = z.string().email();
 
 export async function requestOtp(email: string): Promise<ActionResult> {
-  email = email.trim().toLowerCase();
+  email = normalizeEmail(email);
 
   if (!emailSchema.safeParse(email).success) {
     return { ok: false, error: "請輸入有效的 Email" };
@@ -47,7 +48,7 @@ export async function verifyOtpCode(
   email: string,
   token: string,
 ): Promise<ActionResult> {
-  email = email.trim().toLowerCase();
+  email = normalizeEmail(email);
 
   if (!/^\d{4,10}$/.test(token)) {
     return { ok: false, error: "請輸入驗證碼" };

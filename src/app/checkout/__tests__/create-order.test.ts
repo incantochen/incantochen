@@ -357,4 +357,27 @@ describe("結帳即會員", () => {
     const orderInsert = recorded.find((r) => r.table === "orders");
     expect(orderInsert?.values.member_id).toBe("member-new");
   });
+
+  it("createUser 回結構化錯誤碼 email_exists → 要求登入（T71 ultra review #4）", async () => {
+    state.createUserError = { code: "email_exists", message: "unused text" };
+    const result = await createOrder(FORM);
+
+    expect(result).toMatchObject({ ok: false, requiresLogin: true });
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("已登入使用者 session email 大小寫混雜 → 正規化後才寫入 member（T71 ultra review #3）", async () => {
+    getUser.mockResolvedValue({
+      data: { user: { id: "member-logged-in", email: "Logged@In.COM" } },
+    });
+
+    await createOrder(FORM).catch((e) => {
+      if (e !== REDIRECT) throw e;
+    });
+
+    expect(findOrCreateMember).toHaveBeenCalledWith(
+      "member-logged-in",
+      "logged@in.com",
+    );
+  });
 });

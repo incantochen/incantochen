@@ -7,6 +7,7 @@ import { cookies, headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member";
+import { normalizeEmail } from "@/lib/auth/normalize-email";
 import {
   checkoutFormSchema,
   type CheckoutFormValues,
@@ -53,8 +54,8 @@ export async function createOrder(
   }
   const { recipientName, recipientPhone, zipCode, shippingAddress } =
     parsed.data;
-  // T71：比照 login/actions.ts 正規化，避免大小寫變體繞過既有會員比對。
-  const email = parsed.data.email.trim().toLowerCase();
+  // T71：正規化，避免大小寫變體繞過既有會員比對。
+  const email = normalizeEmail(parsed.data.email);
 
   const serviceRole = createServiceRoleClient();
   const cookieStore = await cookies();
@@ -94,7 +95,12 @@ export async function createOrder(
 
   if (user) {
     // Already logged in — ensure member row exists
-    await findOrCreateMember(user.id, user.email ?? email);
+    // T71 ultra review #3：user.email 來自 session，跟訪客分支的正規化保持一致，
+    // 避免 member.email 累積不同大小寫版本、之後訪客查詢比對不到。
+    await findOrCreateMember(
+      user.id,
+      user.email ? normalizeEmail(user.email) : email,
+    );
     memberId = user.id;
   } else {
     // T71 ultra review：這個分支等於一個帳號存在偵測 oracle（email 是否命中
@@ -124,7 +130,13 @@ export async function createOrder(
         email_confirm: true,
       });
     if (createError || !newAuthData.user) {
-      if (createError?.message?.toLowerCase().includes("already")) {
+      // T71 ultra review #4：優先用結構化的錯誤碼判斷（穩定，不受措辭/語系影響），
+      // 字串比對留作沒有 code 時的備援，不整個換掉以免漏接舊行為涵蓋到的情況。
+      if (
+        createError?.code === "email_exists" ||
+        createError?.code === "user_already_exists" ||
+        createError?.message?.toLowerCase().includes("already")
+      ) {
         return REQUIRES_LOGIN_RESULT;
       }
       return { ok: false, error: "建立會員失敗，請稍後再試" };
