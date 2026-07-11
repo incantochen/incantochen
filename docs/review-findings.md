@@ -225,10 +225,12 @@
 - **T71（#13, P1）** `checkout/actions.ts:82-89` 訪客結帳仍憑未驗證 email 綁既有會員。**確認仍在。**
 - **T72（#14, P1）** 三支寄信程式仍無 escape（本輪並發現 F-001 為其未涵蓋的第三支）。**確認仍在，且範圍擴大→見 F-001。**
 - **T73（#15, P1）** 成功頁仍憑 order_no 揭露個資；`generateOrderNo` 仍用 `Math.random`（`checkout/actions.ts:24`）。**確認仍在。**（本輪並發現同根因未涵蓋 pay／failed 兩頁→見 F-006，修 T73 時範圍須擴至三頁。）
-- **T74（#16, P1）** `pay/page.tsx:62-63`（現行行號）仍復用 pending payment 的 trade no、無逾時換號。**確認仍在。**
-- **T75（#17, P1）** `checkout/actions.ts:215` 仍在建單當下清購物車。**確認仍在。**
+- **T66（P1）** ✅ **已修復（2026-07-11，PR #51）**：`/api/cron/pending-payment-expire`（72h 未付款自動轉 cancelled）＋ `transitionOrder` 補 CAS 守衛（`OrderTransitionRaceError`）。
+- **T74（#16, P1）** ✅ **已修復（2026-07-11，PR #51）**：`pay/page.tsx` 逾 30 分鐘未付款換發新 merchant_trade_no、舊 row 標 failed；本機三代理深度審查（比照 ultra）另修復 mark-failed 缺 CAS 守衛、併發掃除 mutual-kill、webhook 端 0 列更新的救援路徑。
+- **T75（#17, P1）** ✅ **已修復（2026-07-11，PR #51）**：`orders.cart_id`（migration 0010）＋ `ensureOrderPaid` 付款成功才清車；深度審查另修復 cart 被追加新品項時不再整張保留（改精準移除已購品項）、重複結帳 dedup 誤導客人付舊單金額的問題。
+- **T76（#18, P2）** ✅ **已修復（2026-07-11，PR #51）**：`create_order_with_items` plpgsql function（migration 0010）單一交易包裹 order＋order_item；migration 0011 收回 RPC 的 anon/authenticated 執行權（驗價紅線縱深防禦）。
 - **T78（#20, P2）** ✅ **已修復（2026-07-10，PR #46）**：cart 寫入限流（IP＋guest_token 雙軌）＋ `/api/cron/cart-cleanup` 90 天訪客車過期清理；本輪新發現 F-021（cart-cleanup CRON_SECRET 非 timing-safe）／F-022（cleanup DELETE 缺守衛），皆 P2-low、不影響主功能。
-- **T76／T77／T79／T81（#18–#23, P2）** 訂單交易化、shipOrder 順序、findOrCreateMember 吞錯、cart.member_id 未用——本輪未見修復跡象。**確認仍在。**（T78 已於 2026-07-10／PR #46 完成、T80 PII log 留存已於 2026-07-09／PR #48 完成。）
+- **T77／T79／T81（#19,#22,#23, P2）** shipOrder 順序、findOrCreateMember 吞錯、cart.member_id 未用——本輪未見修復跡象。**確認仍在。**（T66／T74／T75／T76 已於 2026-07-11／PR #51 完成、T78 已於 2026-07-10／PR #46 完成、T80 PII log 留存已於 2026-07-09／PR #48 完成。）
 - **T82（#25, P0）／T83（P0）** 環境設定（Vercel env 分離／Supabase Auth production）——本輪跳過 env 範圍（無憑證），依既有列管，不變。
 - schema 範圍：migrations 0003–0006 逐一檢視，皆遵循帳務鏈 RESTRICT／RLS deny-by-default／revoke delete／updated_at trigger／FK 索引慣例（0006 support_request 尤其齊全）；**2026-07-09 補審 migration 0008／0009**——0008（`uq_cart_guest_token` partial unique，比照 `uq_payment_one_paid_per_order` 寫法）、0009（`pii_access_log`：RLS deny-by-default 無 policy＋revoke update/delete＋actor_id/order_id FK RESTRICT＋兩支 FK 索引＋append-only 無 updated_at），皆合規且找到程式使用點（0008↔addToCart／read-cart 的 maybeSingle 假設；0009↔`logPiiAccess`），**無 S7/G1 機制虛設、無新 schema 發現。**
 
