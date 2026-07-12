@@ -81,9 +81,8 @@ export default async function AdminOrdersPage({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-6">訂單管理</h1>
+    <div>
+      <h1 className="text-2xl font-semibold text-gray-900 mb-6">訂單管理</h1>
 
         {/* 狀態篩選 */}
         <div className="flex flex-wrap gap-2 mb-4">
@@ -210,7 +209,6 @@ export default async function AdminOrdersPage({
             )}
           </div>
         )}
-      </div>
     </div>
   );
 }
