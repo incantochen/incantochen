@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { normalizeEmail } from "@/lib/auth/normalize-email";
 
 export async function findOrCreateMember(userId: string, email: string) {
   const serviceRole = createServiceRoleClient();
@@ -61,6 +62,27 @@ export async function findOrCreateMemberByEmail(
       if (!retryError && racedMember) {
         return { ok: true, memberId: racedMember.id };
       }
+
+      // 仍查無 member row：不是併發撞號，是「孤兒 auth user」——這個 email
+      // 曾經做過 OTP／magic link 登入（Supabase Auth 建了 auth.users row），
+      // 但從未完成過一次結帳（findOrCreateMember 只在 createOrder() 內被呼
+      // 叫），member row 從未補上。@supabase/auth-js@2.108.2 的 admin API
+      // 沒有依 email 查 auth user 的端點，listUsers() 只支援 page/perPage
+      // 分頁——掃第一頁（單頁 1000 人）找出這個 email，找到就補建 member
+      // row。容量假設：MVP 階段會員數遠低於 1000，之後真的逼近才需要換更
+      // 完整的分頁掃描。
+      const { data: userPage, error: listError } =
+        await serviceRole.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      const matchedUser = listError
+        ? undefined
+        : userPage.users.find(
+            (u) => u.email && normalizeEmail(u.email) === email,
+          );
+      if (matchedUser) {
+        await findOrCreateMember(matchedUser.id, email);
+        return { ok: true, memberId: matchedUser.id };
+      }
+
       return {
         ok: false,
         error: "此 email 已有帳號但查無會員資料，請稍後再試",

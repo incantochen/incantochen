@@ -10,6 +10,10 @@ const state = {
     data: { user: { id: string } | null };
     error: any;
   },
+  listUsersResult: { data: { users: [] as { id: string; email: string }[] }, error: null } as {
+    data: { users: { id: string; email: string }[] };
+    error: any;
+  },
   memberById: null as { id: string } | null,
   inserted: [] as any[],
 };
@@ -21,6 +25,9 @@ function makeServiceRole() {
         createUser: vi
           .fn()
           .mockImplementation(() => Promise.resolve(state.createUserResult)),
+        listUsers: vi
+          .fn()
+          .mockImplementation(() => Promise.resolve(state.listUsersResult)),
       },
     },
     from: (table: string) => {
@@ -60,6 +67,7 @@ import { findOrCreateMemberByEmail } from "../find-or-create-member";
 beforeEach(() => {
   state.memberLookups = [];
   state.createUserResult = { data: { user: { id: "user-new" } }, error: null };
+  state.listUsersResult = { data: { users: [] }, error: null };
   state.memberById = null;
   state.inserted = [];
 });
@@ -110,7 +118,7 @@ describe("findOrCreateMemberByEmail", () => {
     expect(result).toEqual({ ok: true, memberId: "member-winner" });
   });
 
-  it("createUser 撞 email_exists 但重查仍無 member row（孤兒 auth user）→ 回明確錯誤", async () => {
+  it("createUser 撞 email_exists、重查仍無 member row（孤兒 auth user）→ listUsers 掃到後補建 member row", async () => {
     state.memberLookups = [
       { data: null, error: null },
       { data: null, error: null },
@@ -119,6 +127,30 @@ describe("findOrCreateMemberByEmail", () => {
       data: { user: null },
       error: { message: "User already registered" },
     };
+    state.listUsersResult = {
+      data: { users: [{ id: "orphan-user-id", email: "buyer@example.com" }] },
+      error: null,
+    };
+
+    const result = await findOrCreateMemberByEmail("buyer@example.com");
+
+    expect(result).toEqual({ ok: true, memberId: "orphan-user-id" });
+    expect(state.inserted).toContainEqual({
+      table: "member",
+      values: { id: "orphan-user-id", email: "buyer@example.com" },
+    });
+  });
+
+  it("createUser 撞 email_exists、重查仍無 member row，listUsers 也找不到 → 回明確錯誤", async () => {
+    state.memberLookups = [
+      { data: null, error: null },
+      { data: null, error: null },
+    ];
+    state.createUserResult = {
+      data: { user: null },
+      error: { message: "User already registered" },
+    };
+    state.listUsersResult = { data: { users: [] }, error: null };
 
     const result = await findOrCreateMemberByEmail("buyer@example.com");
 
@@ -126,6 +158,7 @@ describe("findOrCreateMemberByEmail", () => {
       ok: false,
       error: "此 email 已有帳號但查無會員資料，請稍後再試",
     });
+    expect(state.inserted).toHaveLength(0);
   });
 
   it("createUser 其他錯誤 → 回通用建立會員失敗", async () => {
