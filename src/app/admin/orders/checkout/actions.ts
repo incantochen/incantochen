@@ -81,11 +81,13 @@ export async function createAdminOrderFromCart(
   const memberId = memberResult.memberId;
 
   // Pending 訂單 dedup——帶 memberId 比對：admin 打錯 email 後改正重送同一張
-  // cart 時，舊單掛在錯誤會員下，必須取消重建，絕不能沿用其付款連結。
+  // cart 時，舊單掛在錯誤會員下，必須取消重建，絕不能沿用其付款連結。同時
+  // 帶收件資訊比對：admin 改地址錯字重送時同樣要取消重建，不能沿用舊地址。
   const pending = await resolvePendingOrderForCart(
     serviceRole,
     cartId,
     cart.updated_at,
+    { recipientName, recipientPhone, zipCode, shippingAddress },
     memberId,
   );
   if (pending.kind === "error") {

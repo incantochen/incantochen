@@ -198,6 +198,7 @@ describe("pending 訂單 dedup（T75，須在會員解析之前）", () => {
       expect.anything(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      expect.anything(),
     );
     expect(redirect).toHaveBeenCalledWith("/checkout/pay?order=INC-EXISTING-1");
     expect(findOrCreateMember).not.toHaveBeenCalled();

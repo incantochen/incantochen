@@ -2,20 +2,36 @@ import "server-only";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { normalizeEmail } from "@/lib/auth/normalize-email";
 
+// §6：SDK 錯誤回傳必檢查——insert 失敗過去被靜默吞掉，呼叫端（含 T111 新增
+// 的孤兒帳號補救路徑）會誤以為 member row 已建好，實際上沒有，直到後續
+// orders FK 撞牆才爆出不相關的錯誤訊息。這裡改為失敗即 throw，讓呼叫端
+// （目前皆未包 try/catch）以 fail-closed 的方式中止流程，而非帶著不存在的
+// member id 繼續往下走。
 export async function findOrCreateMember(userId: string, email: string) {
   const serviceRole = createServiceRoleClient();
 
-  const { data: existing } = await serviceRole
+  const { data: existing, error: lookupError } = await serviceRole
     .from("member")
     .select("id")
     .eq("id", userId)
     .maybeSingle();
 
+  if (lookupError) {
+    throw new Error(`findOrCreateMember: 查詢會員失敗 - ${lookupError.message}`);
+  }
   if (existing) {
     return;
   }
 
-  await serviceRole.from("member").insert({ id: userId, email });
+  const { error: insertError } = await serviceRole
+    .from("member")
+    .insert({ id: userId, email });
+
+  // 23505 = unique_violation：併發下兩個呼叫端同時幫同一個 userId 建 member
+  // row，其中一個撞唯一鍵——不是失敗，member row 確實已存在，視為成功。
+  if (insertError && insertError.code !== "23505") {
+    throw new Error(`findOrCreateMember: 建立會員失敗 - ${insertError.message}`);
+  }
 }
 
 // Admin 代客建單用：依 email 查會員，查無則建立 auth user＋member row。
@@ -73,11 +89,17 @@ export async function findOrCreateMemberByEmail(
       // 完整的分頁掃描。
       const { data: userPage, error: listError } =
         await serviceRole.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      const matchedUser = listError
-        ? undefined
-        : userPage.users.find(
-            (u) => u.email && normalizeEmail(u.email) === email,
-          );
+
+      // §6：查詢失敗 ≠ 查無資料——listUsers 本身出錯（逾時／暫時性限流）
+      // 不能跟「掃過一輪、真的沒有這個 email」混為一談，否則會給操作者一個
+      // 聽起來像資料損毀、實際上重試就會好的錯誤訊息。
+      if (listError) {
+        return { ok: false, error: "查詢帳號失敗，請稍後再試" };
+      }
+
+      const matchedUser = userPage.users.find(
+        (u) => u.email && normalizeEmail(u.email) === email,
+      );
       if (matchedUser) {
         await findOrCreateMember(matchedUser.id, email);
         return { ok: true, memberId: matchedUser.id };

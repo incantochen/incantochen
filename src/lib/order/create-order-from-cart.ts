@@ -66,10 +66,14 @@ export type ResolvePendingOrderResult =
 
 // T75 讓 cart 在下單後、付款前這段期間繼續存在，代表客人可能回到 /cart
 // 對同一張還沒結案的購物車重複按「結帳」。
-// - cart 沒被再動過：這是同一份內容的重複送出，直接沿用既有訂單（reuse）。
+// - cart 沒被再動過、收件資訊也沒變：這是同一份內容的重複送出，直接沿用
+//   既有訂單（reuse）。
 // - cart 有被動過（加了商品／改了數量）：既有訂單已不代表客人現在要買的
 //   東西，不能把人導去付舊金額——把舊單取消（pending_payment→cancelled
 //   合法轉換），回 proceed 讓呼叫端用最新內容開新單。
+// - 收件資訊變了（姓名／電話／郵遞區號／地址任一不同）：視同「cart 已
+//   變更」同樣取消重建——沿用舊單等於把新輸入的收件資訊整段丟掉，admin
+//   改地址錯字重送時會靜默寄到舊地址（審查發現，2026-07-12）。
 // - 帶 memberId 時（admin 代客建單）額外比對 member：舊單掛在別的會員下
 //   （例如 admin 打錯 email 後改正重送）視同「cart 已變更」取消重建——
 //   絕不能把掛在錯誤客戶帳上的訂單付款連結原樣沿用。客人流程**不帶**
@@ -83,11 +87,14 @@ export async function resolvePendingOrderForCart(
   serviceRole: ServiceRole,
   cartId: string,
   cartUpdatedAt: string,
+  recipient: RecipientInput,
   memberId?: string,
 ): Promise<ResolvePendingOrderResult> {
   const { data: existingPendingOrder, error: dedupError } = await serviceRole
     .from("orders")
-    .select("id, order_no, created_at, member_id")
+    .select(
+      "id, order_no, created_at, member_id, recipient_name, recipient_phone, zip_code, shipping_address",
+    )
     .eq("cart_id", cartId)
     .eq("status", "pending_payment")
     .order("created_at", { ascending: false })
@@ -105,22 +112,35 @@ export async function resolvePendingOrderForCart(
   const sameMember =
     memberId === undefined || existingPendingOrder.member_id === memberId;
 
-  if (sameMember && cartUpdatedAt <= existingPendingOrder.created_at) {
+  const sameRecipient =
+    existingPendingOrder.recipient_name === recipient.recipientName &&
+    existingPendingOrder.recipient_phone === recipient.recipientPhone &&
+    existingPendingOrder.zip_code === recipient.zipCode &&
+    existingPendingOrder.shipping_address === recipient.shippingAddress;
+
+  if (
+    sameMember &&
+    sameRecipient &&
+    cartUpdatedAt <= existingPendingOrder.created_at
+  ) {
     return { kind: "reuse", orderNo: existingPendingOrder.order_no };
   }
 
   try {
     await transitionOrder(existingPendingOrder.id, "cancelled", {
-      note: sameMember
-        ? "購物車內容已變更，舊待付款訂單自動取消（重新結帳）"
-        : "代客建單客戶已更換，舊待付款訂單自動取消（重新建單）",
+      note: !sameMember
+        ? "代客建單客戶已更換，舊待付款訂單自動取消（重新建單）"
+        : !sameRecipient
+          ? "收件資訊已變更，舊待付款訂單自動取消（重新結帳）"
+          : "購物車內容已變更，舊待付款訂單自動取消（重新結帳）",
     });
   } catch (e) {
     if (e instanceof OrderTransitionRaceError) {
-      // 舊單剛好被其他流程動過（多半是 webhook 轉 paid）。同會員時沿用它的
-      // 單號——呼叫端導頁後該頁會依最新狀態決定去向（已付款則進成功頁）；
-      // 不同會員時絕不能把別人的單交出去，回錯誤讓操作者重試。
-      if (sameMember) {
+      // 舊單剛好被其他流程動過（多半是 webhook 轉 paid）。同會員且收件資訊
+      // 也沒變時才沿用它的單號——呼叫端導頁後該頁會依最新狀態決定去向
+      // （已付款則進成功頁）；否則絕不能把（可能地址已過期或掛在別人帳上
+      // 的）舊單交出去，回錯誤讓操作者重試。
+      if (sameMember && sameRecipient) {
         return { kind: "reuse", orderNo: existingPendingOrder.order_no };
       }
       return { kind: "error", error: "建立訂單失敗，請稍後再試" };
@@ -175,6 +195,10 @@ export async function createOrderFromCart(
     await touchCartUpdatedAt(serviceRole, cartId);
     revalidatePath("/cart");
     revalidatePath("/checkout");
+    // 這支函式同時服務客人 checkout 與 admin 代客建單（T111）兩條路徑，
+    // 後者的購物袋摘要畫在 /admin/orders/checkout，不 revalidate 這條路徑
+    // 的話 admin 端會繼續看到變價前的小計。
+    revalidatePath("/admin/orders/checkout");
     return {
       ok: false,
       error: "商品金額已更新，請確認新金額後再次送出",

@@ -16,6 +16,7 @@ const state = {
   },
   memberById: null as { id: string } | null,
   inserted: [] as any[],
+  insertError: null as { code?: string; message: string } | null,
 };
 
 function makeServiceRole() {
@@ -51,7 +52,7 @@ function makeServiceRole() {
         },
         insert: (values: any) => {
           state.inserted.push({ table, values });
-          return Promise.resolve({ error: null });
+          return Promise.resolve({ error: state.insertError });
         },
       };
       return chain;
@@ -70,6 +71,7 @@ beforeEach(() => {
   state.listUsersResult = { data: { users: [] }, error: null };
   state.memberById = null;
   state.inserted = [];
+  state.insertError = null;
 });
 
 describe("findOrCreateMemberByEmail", () => {
@@ -101,6 +103,15 @@ describe("findOrCreateMemberByEmail", () => {
       table: "member",
       values: { id: "user-new", email: "buyer@example.com" },
     });
+  });
+
+  it("查無會員、insert 失敗（非 23505）→ 拋錯而非靜默回傳假成功（§6）", async () => {
+    state.memberLookups = [{ data: null, error: null }];
+    state.insertError = { message: "connection reset" };
+
+    await expect(
+      findOrCreateMemberByEmail("buyer@example.com"),
+    ).rejects.toThrow(/建立會員失敗/);
   });
 
   it("createUser 撞 email_exists（併發輸家）→ 重查 member，勝者已建好就沿用其 id", async () => {
@@ -139,6 +150,48 @@ describe("findOrCreateMemberByEmail", () => {
       table: "member",
       values: { id: "orphan-user-id", email: "buyer@example.com" },
     });
+  });
+
+  it("createUser 撞 email_exists、重查仍無 member row，listUsers 本身出錯 → 回可重試的錯誤，不誤判成孤兒帳號（§6）", async () => {
+    state.memberLookups = [
+      { data: null, error: null },
+      { data: null, error: null },
+    ];
+    state.createUserResult = {
+      data: { user: null },
+      error: { message: "User already registered" },
+    };
+    state.listUsersResult = {
+      data: { users: [] },
+      error: { message: "rate limited" },
+    };
+
+    const result = await findOrCreateMemberByEmail("buyer@example.com");
+
+    expect(result).toEqual({
+      ok: false,
+      error: "查詢帳號失敗，請稍後再試",
+    });
+  });
+
+  it("孤兒帳號補救 insert 失敗（非 23505）→ findOrCreateMember 拋錯，不回傳假成功", async () => {
+    state.memberLookups = [
+      { data: null, error: null },
+      { data: null, error: null },
+    ];
+    state.createUserResult = {
+      data: { user: null },
+      error: { message: "User already registered" },
+    };
+    state.listUsersResult = {
+      data: { users: [{ id: "orphan-user-id", email: "buyer@example.com" }] },
+      error: null,
+    };
+    state.insertError = { message: "unique_violation on email" };
+
+    await expect(
+      findOrCreateMemberByEmail("buyer@example.com"),
+    ).rejects.toThrow(/建立會員失敗/);
   });
 
   it("createUser 撞 email_exists、重查仍無 member row，listUsers 也找不到 → 回明確錯誤", async () => {

@@ -54,6 +54,10 @@ const state = {
     order_no: string;
     created_at: string;
     member_id: string;
+    recipient_name: string;
+    recipient_phone: string;
+    zip_code: string;
+    shipping_address: string;
   } | null,
   dedupError: null as { message?: string } | null,
   racedOrder: null as { order_no: string } | null,
@@ -68,6 +72,15 @@ const RECIPIENT = {
   recipientPhone: "0912345678",
   zipCode: "106",
   shippingAddress: "台北市大安區測試路 1 號",
+};
+
+// existingPendingOrder 的收件欄位對齊 RECIPIENT，模擬「內容完全沒變」；
+// 個別測試若要模擬「收件資訊變了」則覆寫這幾個欄位。
+const SAME_RECIPIENT_ROW = {
+  recipient_name: RECIPIENT.recipientName,
+  recipient_phone: RECIPIENT.recipientPhone,
+  zip_code: RECIPIENT.zipCode,
+  shipping_address: RECIPIENT.shippingAddress,
 };
 
 const VERIFIED_OK = [
@@ -183,16 +196,18 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
     );
     expect(result).toEqual({ kind: "proceed" });
   });
 
-  it("cart 沒被再動過 → reuse 既有訂單號，不呼叫 transitionOrder", async () => {
+  it("cart 沒被再動過、收件資訊也沒變 → reuse 既有訂單號，不呼叫 transitionOrder", async () => {
     state.existingPendingOrder = {
       id: "order-old",
       order_no: "INC-EXISTING-1",
       created_at: "2026-07-11T00:00:00+00:00",
       member_id: "member-1",
+      ...SAME_RECIPIENT_ROW,
     };
 
     // cart.updated_at (07-10) <= 訂單 created_at (07-11)：內容沒變
@@ -200,10 +215,38 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
     );
 
     expect(result).toEqual({ kind: "reuse", orderNo: "INC-EXISTING-1" });
     expect(transitionOrder).not.toHaveBeenCalled();
+  });
+
+  it("收件地址跟舊單不同（如 admin 改錯字重送）→ 即使 cart 與 member 都沒變也取消重建，不沿用舊地址", async () => {
+    state.existingPendingOrder = {
+      id: "order-old",
+      order_no: "INC-EXISTING-1",
+      created_at: "2026-07-11T00:00:00+00:00",
+      member_id: "member-1",
+      recipient_name: RECIPIENT.recipientName,
+      recipient_phone: RECIPIENT.recipientPhone,
+      zip_code: RECIPIENT.zipCode,
+      shipping_address: "台北市大安區舊地址 999 號", // 跟 RECIPIENT 不同
+    };
+
+    const result = await resolvePendingOrderForCart(
+      makeServiceRole(),
+      "cart-1",
+      "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
+    );
+
+    expect(transitionOrder).toHaveBeenCalledWith(
+      "order-old",
+      "cancelled",
+      expect.objectContaining({ note: expect.any(String) }),
+    );
+    expect(result).toEqual({ kind: "proceed" });
   });
 
   it("不帶 memberId（客人流程）→ 不比對 member，仍 reuse", async () => {
@@ -212,12 +255,14 @@ describe("resolvePendingOrderForCart", () => {
       order_no: "INC-EXISTING-1",
       created_at: "2026-07-11T00:00:00+00:00",
       member_id: "member-someone",
+      ...SAME_RECIPIENT_ROW,
     };
 
     const result = await resolvePendingOrderForCart(
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
     );
 
     expect(result).toEqual({ kind: "reuse", orderNo: "INC-EXISTING-1" });
@@ -229,6 +274,7 @@ describe("resolvePendingOrderForCart", () => {
       order_no: "INC-EXISTING-1",
       created_at: "2026-07-09T00:00:00+00:00",
       member_id: "member-1",
+      ...SAME_RECIPIENT_ROW,
     };
 
     // cart.updated_at (07-10) > 訂單 created_at (07-09)：下單後又動過購物車
@@ -236,6 +282,7 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
     );
 
     expect(transitionOrder).toHaveBeenCalledWith(
@@ -252,6 +299,7 @@ describe("resolvePendingOrderForCart", () => {
       order_no: "INC-WRONG-MEMBER",
       created_at: "2026-07-11T00:00:00+00:00",
       member_id: "member-typo",
+      ...SAME_RECIPIENT_ROW,
     };
 
     // cart 沒變（07-10 <= 07-11），但 member 不同 → 仍要取消重建
@@ -259,6 +307,7 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
       "member-correct",
     );
 
@@ -270,30 +319,33 @@ describe("resolvePendingOrderForCart", () => {
     expect(result).toEqual({ kind: "proceed" });
   });
 
-  it("帶 memberId 且與舊單 member 相同、cart 沒變 → reuse", async () => {
+  it("帶 memberId 且與舊單 member 相同、cart 與收件資訊都沒變 → reuse", async () => {
     state.existingPendingOrder = {
       id: "order-old",
       order_no: "INC-EXISTING-1",
       created_at: "2026-07-11T00:00:00+00:00",
       member_id: "member-1",
+      ...SAME_RECIPIENT_ROW,
     };
 
     const result = await resolvePendingOrderForCart(
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
       "member-1",
     );
 
     expect(result).toEqual({ kind: "reuse", orderNo: "INC-EXISTING-1" });
   });
 
-  it("取消舊單時搶輸（剛好被 webhook 轉 paid）且同 member → reuse 舊單號", async () => {
+  it("取消舊單時搶輸（剛好被 webhook 轉 paid）且同 member、收件資訊也沒變 → reuse 舊單號", async () => {
     state.existingPendingOrder = {
       id: "order-old",
       order_no: "INC-EXISTING-1",
       created_at: "2026-07-09T00:00:00+00:00",
       member_id: "member-1",
+      ...SAME_RECIPIENT_ROW,
     };
     transitionOrder.mockRejectedValue(
       new OrderTransitionRaceError("已被其他流程異動"),
@@ -303,6 +355,7 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
     );
 
     expect(result).toEqual({ kind: "reuse", orderNo: "INC-EXISTING-1" });
@@ -314,6 +367,7 @@ describe("resolvePendingOrderForCart", () => {
       order_no: "INC-WRONG-MEMBER",
       created_at: "2026-07-11T00:00:00+00:00",
       member_id: "member-typo",
+      ...SAME_RECIPIENT_ROW,
     };
     transitionOrder.mockRejectedValue(
       new OrderTransitionRaceError("已被其他流程異動"),
@@ -323,6 +377,7 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
       "member-correct",
     );
 
@@ -335,6 +390,7 @@ describe("resolvePendingOrderForCart", () => {
       order_no: "INC-EXISTING-1",
       created_at: "2026-07-09T00:00:00+00:00",
       member_id: "member-1",
+      ...SAME_RECIPIENT_ROW,
     };
     transitionOrder.mockRejectedValue(new Error("db down"));
 
@@ -342,6 +398,7 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
     );
 
     expect(result).toMatchObject({ kind: "error" });
@@ -354,6 +411,7 @@ describe("resolvePendingOrderForCart", () => {
       makeServiceRole(),
       "cart-1",
       "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
     );
 
     expect(result).toMatchObject({ kind: "error" });

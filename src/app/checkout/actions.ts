@@ -56,22 +56,29 @@ export async function createOrder(
     return { ok: false, error: "購物車已空，請重新加入商品" };
   }
 
-  const { data: cart } = await serviceRole
+  // §6：查詢失敗 ≠ 查無資料——DB 暫時性故障不可誤判成「購物車已空」。
+  const { data: cart, error: cartError } = await serviceRole
     .from("cart")
     .select("id, updated_at")
     .eq("guest_token", guestToken)
     .maybeSingle();
 
+  if (cartError) {
+    return { ok: false, error: "讀取購物車失敗，請稍後再試" };
+  }
   if (!cart) {
     return { ok: false, error: "購物車已空，請重新加入商品" };
   }
   const cartId = cart.id;
 
-  const { data: cartItems } = await serviceRole
+  const { data: cartItems, error: cartItemsError } = await serviceRole
     .from("cart_item")
     .select("id, product_id, quantity, unit_price_snapshot, config_snapshot")
     .eq("cart_id", cartId);
 
+  if (cartItemsError) {
+    return { ok: false, error: "讀取購物車失敗，請稍後再試" };
+  }
   if (!cartItems || cartItems.length === 0) {
     return { ok: false, error: "購物車已空，請重新加入商品" };
   }
@@ -84,6 +91,7 @@ export async function createOrder(
     serviceRole,
     cartId,
     cart.updated_at,
+    { recipientName, recipientPhone, zipCode, shippingAddress },
   );
   if (pending.kind === "error") {
     return { ok: false, error: pending.error };
