@@ -91,17 +91,16 @@ export default async function AdminOrdersPage({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold text-gray-900">訂單管理</h1>
-          <Link
-            href="/admin/orders/checkout"
-            className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
-          >
-            建立訂單
-          </Link>
-        </div>
+    <div>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-gray-900">訂單管理</h1>
+        <Link
+          href="/admin/orders/checkout"
+          className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          建立訂單
+        </Link>
+      </div>
 
         {/* 狀態篩選 */}
         <div className="flex flex-wrap gap-2 mb-4">
@@ -272,7 +271,6 @@ export default async function AdminOrdersPage({
             )}
           </div>
         )}
-      </div>
     </div>
   );
 }

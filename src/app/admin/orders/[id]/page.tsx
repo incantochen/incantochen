@@ -77,8 +77,7 @@ export default async function AdminOrderDetailPage({
   } | null;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+    <div className="max-w-5xl space-y-6">
         {/* 頁頭 */}
         <div className="flex items-center gap-3">
           <Link
@@ -336,7 +335,6 @@ export default async function AdminOrderDetailPage({
             </div>
           </div>
         </div>
-      </div>
     </div>
   );
 }
