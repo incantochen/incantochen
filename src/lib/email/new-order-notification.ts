@@ -2,6 +2,7 @@ import "server-only"
 import { Resend } from "resend"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
+import { escapeHtml } from "@/lib/email/escape-html"
 
 // TODO(T35): switch to verified custom domain before go-live
 const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
@@ -63,17 +64,21 @@ export async function sendNewOrderNotification(orderId: string): Promise<void> {
     },
   )
 
-  const addrLine = order.zip_code
-    ? `${order.zip_code} ${order.shipping_address}`
-    : order.shipping_address
+  const safeRecipientName = escapeHtml(order.recipient_name)
+  const safeCustomerEmail = customerEmail ? escapeHtml(customerEmail) : null
+  const addrLine = escapeHtml(
+    order.zip_code
+      ? `${order.zip_code} ${order.shipping_address}`
+      : order.shipping_address,
+  )
 
   const itemRows = items
     .map(
       (item) => `
   <tr>
     <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;">
-      <div style="font-size:14px;color:#111;font-weight:500;">${item.productName}</div>
-      ${item.selections.length ? `<div style="font-size:12px;color:#6b7280;margin-top:2px;">${item.selections.map((s) => s.label).join(" · ")}</div>` : ""}
+      <div style="font-size:14px;color:#111;font-weight:500;">${escapeHtml(item.productName)}</div>
+      ${item.selections.length ? `<div style="font-size:12px;color:#6b7280;margin-top:2px;">${escapeHtml(item.selections.map((s) => s.label).join(" · "))}</div>` : ""}
       <div style="font-size:12px;color:#6b7280;margin-top:2px;">數量：${item.quantity}</div>
     </td>
     <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:right;font-size:14px;color:#111;white-space:nowrap;">
@@ -97,11 +102,11 @@ export async function sendNewOrderNotification(orderId: string): Promise<void> {
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;font-size:13px;">
       <tr>
         <td style="color:#6b7280;padding:4px 0;width:80px;">客人姓名</td>
-        <td style="color:#111;padding:4px 0;">${order.recipient_name}</td>
+        <td style="color:#111;padding:4px 0;">${safeRecipientName}</td>
       </tr>
       <tr>
         <td style="color:#6b7280;padding:4px 0;">客人 Email</td>
-        <td style="color:#111;padding:4px 0;">${customerEmail ?? "—"}</td>
+        <td style="color:#111;padding:4px 0;">${safeCustomerEmail ?? "—"}</td>
       </tr>
       <tr>
         <td style="color:#6b7280;padding:4px 0;">收件地址</td>

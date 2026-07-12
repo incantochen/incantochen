@@ -2,6 +2,7 @@ import "server-only"
 import { Resend } from "resend"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
+import { escapeHtml } from "@/lib/email/escape-html"
 
 // TODO(T35): switch to verified custom domain (e.g. orders@incantochen.com) before go-live
 const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
@@ -49,11 +50,13 @@ function buildEmailHtml(params: {
 
   const itemRows = items
     .map((item) => {
-      const configLine = item.selections.map((s) => s.label).join(" · ")
+      const configLine = escapeHtml(
+        item.selections.map((s) => s.label).join(" · "),
+      )
       return `
         <tr>
           <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;vertical-align:top;">
-            <div style="font-size:15px;color:#111;font-weight:500;">${item.productName}</div>
+            <div style="font-size:15px;color:#111;font-weight:500;">${escapeHtml(item.productName)}</div>
             ${configLine ? `<div style="font-size:13px;color:#6b7280;margin-top:2px;">${configLine}</div>` : ""}
             <div style="font-size:13px;color:#6b7280;margin-top:2px;">數量：${item.quantity}</div>
           </td>
@@ -64,9 +67,10 @@ function buildEmailHtml(params: {
     })
     .join("")
 
-  const addressLine = zipCode
-    ? `${zipCode} ${shippingAddress}`
-    : shippingAddress
+  const safeRecipientName = escapeHtml(recipientName)
+  const addressLine = escapeHtml(
+    zipCode ? `${zipCode} ${shippingAddress}` : shippingAddress,
+  )
 
   return `<!DOCTYPE html>
 <html lang="zh-TW">
@@ -93,7 +97,7 @@ function buildEmailHtml(params: {
             <td style="padding:40px 40px 32px;">
 
               <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#c9a84c;">付款成功</p>
-              <h1 style="margin:0 0 20px;font-size:22px;font-weight:400;color:#111;line-height:1.3;">感謝您的訂購，${recipientName}</h1>
+              <h1 style="margin:0 0 20px;font-size:22px;font-weight:400;color:#111;line-height:1.3;">感謝您的訂購，${safeRecipientName}</h1>
               <p style="margin:0 0 32px;font-size:15px;color:#6b7280;line-height:1.6;">
                 我們已收到您的付款，將盡快為您精心製作。完成後我們會主動與您聯繫。
               </p>
