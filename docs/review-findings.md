@@ -21,7 +21,7 @@
 
 ## F-001 [P1] 售後通知 Email 未跳脫客人自由輸入的「說明」→ 店家信箱 HTML／釣魚注入
 
-- 狀態：已轉任務(T84)（使用者 2026-07-03 確認）
+- 狀態：✅ 已修復（2026-07-12，T72／T84／PR #54）：三支寄信程式（`order-confirmation.ts`／`new-order-notification.ts`／`support-request-notification.ts`）全數改用共用 `escapeHtml()`；checkoutFormSchema 補上長度上限。三輪本機 code-review（ultra 額度用盡改本機 max effort fallback）另修正 checkout maxLength UX、補齊回歸測試、email 欄位長度上限。
 - 位置：`src/lib/email/support-request-notification.ts:71`（`${request.description}`）；同檔 `:63` recipient_name 亦未跳脫
 - 失敗情境：任何登入會員在 `/account/orders/[id]/support` 的「說明」欄（自由文字，Zod／DB 上限 2000 字，內容完全由客人控制）填入 `</td></tr></table><a href="https://evil.example">請點此領取退款</a>` 之類的 HTML，送出後 `sendSupportRequestNotification` 直接把該字串以樣板字串插進信件 HTML（無跳脫），寄到店家信箱 `fishead02290@gmail.com`。店家收到的信會渲染攻擊者植入的任意 HTML／釣魚連結／偽造版面，可被用於社交工程（誘導店家點惡意連結或誤把退款匯到他處）。`description` 是全站最「純攻擊者可控」的欄位——它就是一個給客人自由打字的大文字框。全專案 grep 無任何 `escapeHtml`／`sanitize` 函式（三支寄信程式都靠樣板字串直插）。
 - 修法：新增共用 `escapeHtml()`（替換 `& < > " '`），套用到本檔所有插值（`description`、`recipient_name`、`order_no`、`typeLabel`、`customerEmail`）。**與 T72 同一根本原因**（Email 模板 HTML 注入），但 T72 只點名 `order-confirmation.ts`／`new-order-notification.ts` 兩支，**未涵蓋 T33 後新增的第三支 `support-request-notification.ts`**——修 T72 時務必把共用 escape 一併套到本檔，否則注入仍在。建議與 T72 合併為同一批修復並互相註記。
@@ -223,7 +223,7 @@
 - **T69（#11, P0）** ✅ **已修復（2026-07-04，PR #30）**：email 寄送改 `await`；新增 `src/lib/notification/send-once.ts` 落實 `notification` 表 `unique(order_id,type)` 去重（claim/reclaim/stale-pending）。**已知殘留缺口**：`sendOnce` 的 never-throw 契約讓「寄信本身失敗」這個情境的自癒機制打不到（webhook 仍回 `1|OK`，ECPay 不會重送觸發重試）——登記為 **T88** 另外處理，屬架構決策不阻塞本次 merge。
 - **T70（#12, P0）** ✅ **已修復（2026-07-09，PR #45）**：`uq_cart_guest_token` partial unique index（migration 0008）＋`addToCart` 23505-retry。本輪新發現 hot-path 選型問題→見 F-020（P2，效率／一致性，不影響正確性）。
 - **T71（#13, P1）** ✅ **已修復（2026-07-11，PR #50）**：`checkout/actions.ts` 訪客分支 email 命中既有會員時改回傳 `requiresLogin`（不再靜默掛單），新建帳號競態撞號分支回傳同一結果物件避免文案洩漏帳號存在與否。`/code-review ultra` 追加修復：createOrder 加 IP＋guest_token 限流（防 requiresLogin 被當帳號枚舉 oracle）；抽出 `normalizeEmail()` 單一出處，登入態分支也套用；建帳競態分支改先判 Supabase 結構化錯誤碼；`requiresLogin` 顯示時停用送出鈕。開發期間 T76（PR #51）同步把 createOrder 改走 RPC，二次合併 master 解決重疊，187 測試全綠。
-- **T72（#14, P1）** 三支寄信程式仍無 escape（本輪並發現 F-001 為其未涵蓋的第三支）。**確認仍在，且範圍擴大→見 F-001。**
+- **T72（#14, P1）** ✅ **已修復（2026-07-12，T72／T84／PR #54）**：三支寄信程式全數改用共用 `escapeHtml()`；checkoutFormSchema 補長度上限（含 F-001 涵蓋的第三支 `support-request-notification.ts`）。
 - **T73（#15, P1）** 成功頁仍憑 order_no 揭露個資；`generateOrderNo` 仍用 `Math.random`（`checkout/actions.ts:24`）。**確認仍在。**（本輪並發現同根因未涵蓋 pay／failed 兩頁→見 F-006，修 T73 時範圍須擴至三頁。）
 - **T66（P1）** ✅ **已修復（2026-07-11，PR #51）**：`/api/cron/pending-payment-expire`（72h 未付款自動轉 cancelled）＋ `transitionOrder` 補 CAS 守衛（`OrderTransitionRaceError`）。
 - **T74（#16, P1）** ✅ **已修復（2026-07-11，PR #51）**：`pay/page.tsx` 逾 30 分鐘未付款換發新 merchant_trade_no、舊 row 標 failed；本機三代理深度審查（比照 ultra）另修復 mark-failed 缺 CAS 守衛、併發掃除 mutual-kill、webhook 端 0 列更新的救援路徑。
