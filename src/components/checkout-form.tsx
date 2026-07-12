@@ -84,6 +84,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         </label>
         <input
           type="email"
+          maxLength={254}
           value={email}
           readOnly={!!defaultEmail}
           onChange={(e) => setEmail(e.target.value)}
@@ -101,6 +102,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         </label>
         <input
           type="text"
+          maxLength={50}
           value={recipientName}
           onChange={(e) => setRecipientName(e.target.value)}
           onBlur={validate}
@@ -155,6 +157,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
           </label>
           <input
             type="text"
+            maxLength={200}
             value={shippingAddress}
             onChange={(e) => setShippingAddress(e.target.value)}
             onBlur={validate}
