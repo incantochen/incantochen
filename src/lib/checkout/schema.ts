@@ -1,7 +1,11 @@
 import { z } from "zod"
 
 export const checkoutFormSchema = z.object({
-  email: z.string().min(1, "請輸入 Email").email("請輸入有效的 Email"),
+  email: z
+    .string()
+    .min(1, "請輸入 Email")
+    .max(254, "Email 長度上限 254 字")
+    .email("請輸入有效的 Email"),
   recipientName: z
     .string()
     .min(1, "請輸入收件人姓名")

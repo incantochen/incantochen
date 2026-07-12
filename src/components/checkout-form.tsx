@@ -84,6 +84,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         </label>
         <input
           type="email"
+          maxLength={254}
           value={email}
           readOnly={!!defaultEmail}
           onChange={(e) => setEmail(e.target.value)}
