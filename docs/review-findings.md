@@ -102,11 +102,11 @@
 
 ## F-011 [P2] createOrder 無伺服器端防重複提交：跨分頁併發送出→同一購物車建出兩張待付款訂單
 
-- 狀態：已轉任務(T98)（使用者 2026-07-08 確認）
+- 狀態：已修復（PR #55，2026-07-12；T98 完成）
 - 位置：`src/app/checkout/actions.ts:29-218`（全程無冪等鎖；`checkout-form.tsx:194` 的 `disabled={isPending}` 只擋同一分頁）
 - 失敗情境：客人開兩個分頁都停在 `/checkout`（或雙擊瞬間繞過 client disable 的邊緣時序），兩個 `createOrder` 併發進來：都在步驟②讀到同一 cart 與 cart_items（此時都還沒被刪）、各自通過驗價、各自 insert 一張 `pending_payment` 訂單（order_no 不同、不會撞 unique）、其中一個刪掉 cart。結果同一次購買意圖產生兩張有效待付款訂單，兩個分頁各自導向自己的 ECPay 付款頁——客人若困惑之下兩邊都完成付款，**真金白銀重複扣款**，只能靠人工發現後退刷。機率低（需要跨分頁近乎同時送出），故 P2。
 - 修法：建單前對 cart 做原子性 claim（如 `UPDATE cart SET status='checking_out' WHERE id=? AND status='active'` 的 CAS，0 列命中即回「訂單處理中」），或併入 T76 的 RPC 交易化時以 cart id 上 advisory lock 一次解決。**建議與 T76 同批**（同檔重構、機制相同）；若 T75（付款後才清車）先做，本項的曝險窗口會拉長，耦合更緊。
-- 記錄：2026-07-07 首次發現（B 類併發掃描套用到 createOrder 全流程）。
+- 記錄：2026-07-07 首次發現（B 類併發掃描套用到 createOrder 全流程）。2026-07-12 複核：核心防護已隨 T76（PR #51，migration 0011 `uq_orders_one_pending_per_cart` partial unique index）以更乾淨的形式落地——同一 cart 同時間僅允許一筆 `pending_payment` 訂單，DB 層擋下併發雙送出，`checkout/actions.ts` 靠 23505 constraint 名稱區分 order_no 撞號（換號重試）與併發搶輸（導去贏家付款頁）。PR #55 補齊該碰撞路徑原本缺失的測試覆蓋，並修正 `racedOrder` 重查查詢缺少的 `{error}` 檢查（§6）——**修法正確，狀態改已修復**。
 
 ## F-012 [P2-low] 對帳 cron 的 CRON_SECRET 比對非 timing-safe
 
