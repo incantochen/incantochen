@@ -58,3 +58,31 @@ export async function checkCartWriteRateLimit(
   const results = await Promise.all(checks);
   return results.every((r) => r.success);
 }
+
+// T71 ultra review：訪客結帳送出的 email 若命中既有會員，createOrder 會立刻
+// 回傳 requiresLogin——這條路徑等於一個未設限流的帳號存在偵測 oracle。比照
+// login/actions.ts 的 otpEmailRatelimit／otpIpRatelimit 對等處理，不是宣稱徹底
+// 消除 enumeration（回應形狀本身仍會透露資訊），而是限制攻擊者能嘗試的速率。
+const checkoutGuestIpRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(10, "10 m"),
+  prefix: "ratelimit:checkout-guest-ip",
+});
+
+const checkoutGuestTokenRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(10, "10 m"),
+  prefix: "ratelimit:checkout-guest-token",
+});
+
+export async function checkCheckoutGuestRateLimit(
+  ip: string | null,
+  guestToken: string | undefined,
+): Promise<boolean> {
+  const checks = [];
+  if (ip) checks.push(checkoutGuestIpRatelimit.limit(ip));
+  if (guestToken) checks.push(checkoutGuestTokenRatelimit.limit(guestToken));
+
+  const results = await Promise.all(checks);
+  return results.every((r) => r.success);
+}

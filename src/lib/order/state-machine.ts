@@ -1,13 +1,20 @@
 import "server-only";
 
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import {
-  type OrderStatus,
-  VALID_TRANSITIONS,
-} from "@/lib/order/order-status";
+import { type OrderStatus, VALID_TRANSITIONS } from "@/lib/order/order-status";
 
 export type { OrderStatus };
 export { VALID_TRANSITIONS };
+
+// 呼叫端（如 pending-payment-expire cron）需要區分「這筆訂單已經被其他流程
+// 動過，跳過即可」跟「真的失敗」——比照 query-trade-info.ts 的 RateLimitError
+// 慣例，用具名 Error 子類別＋instanceof 判斷，取代字串 code 手刻型別斷言。
+export class OrderTransitionRaceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OrderTransitionRaceError";
+  }
+}
 
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return VALID_TRANSITIONS[from].includes(to);
@@ -18,7 +25,7 @@ export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
 export async function transitionOrder(
   orderId: string,
   to: OrderStatus,
-  options?: { note?: string; actorId?: string }
+  options?: { note?: string; actorId?: string },
 ): Promise<void> {
   const supabase = createServiceRoleClient();
 
@@ -35,17 +42,23 @@ export async function transitionOrder(
   const from = order.status as OrderStatus;
 
   if (!canTransition(from, to)) {
-    throw new Error(
-      `非法狀態轉換：${from} → ${to}`
-    );
+    // 呼叫端（尤其是 cron／webhook）挑選候選當下 status 符合預期，但真正執行
+    // 到這裡時 status 已被別的流程搶先動過——不是呼叫端邏輯錯誤，是良性競態。
+    throw new OrderTransitionRaceError(`非法狀態轉換：${from} → ${to}`);
   }
 
-  const { error: updateError } = await supabase
+  const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({ status: to })
-    .eq("id", orderId);
+    .eq("id", orderId)
+    .eq("status", from)
+    .select("id")
+    .maybeSingle();
 
   if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
+  if (!updated) {
+    throw new OrderTransitionRaceError(`訂單狀態已被其他流程異動：${orderId}`);
+  }
 
   const { error: logError } = await supabase.from("order_status_log").insert({
     order_id: orderId,
@@ -64,7 +77,7 @@ export async function transitionOrder(
 export async function adminOverrideStatus(
   orderId: string,
   to: OrderStatus,
-  options: { operatorId: string; reason: string }
+  options: { operatorId: string; reason: string },
 ): Promise<void> {
   const supabase = createServiceRoleClient();
 
@@ -80,12 +93,32 @@ export async function adminOverrideStatus(
 
   const from = order.status as OrderStatus;
 
-  const { error: updateError } = await supabase
+  // to === from 時 SET 不會改動 WHERE 用到的 status 欄位，CAS 守衛在 Postgres
+  // READ COMMITTED 下會失效（EvalPlanQual 重新檢查條件仍會命中，CLAUDE.md
+  // §6）——兩個並發的「覆寫成同一個狀態」都會通過、都寫入稽核記錄。與其讓
+  // CAS 守衛在這個 edge case 悄悄失效，不如直接判定「目標與現況相同」不是
+  // 有意義的覆寫操作，提前擋下、完全不碰 UPDATE。
+  if (to === from) {
+    throw new Error(`目標狀態與目前狀態相同（${to}），無需覆寫`);
+  }
+
+  // Override 語意仍是「任意目標」（不受 VALID_TRANSITIONS 約束），但加上
+  // .eq("status", from) 條件式守衛確保雙擊或兩位管理者近乎同時對同一單送出
+  // 互斥的 override 目標時只有一筆會成功、只寫一筆 order_status_log——否則
+  // 兩者都會通過（本來就不檢查 canTransition）、都寫入稽核記錄，產生同一單
+  // 被記成兩段矛盾轉換的財務稽核缺口（T92／F-007）。
+  const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({ status: to })
-    .eq("id", orderId);
+    .eq("id", orderId)
+    .eq("status", from)
+    .select("id")
+    .maybeSingle();
 
   if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
+  if (!updated) {
+    throw new OrderTransitionRaceError(`訂單狀態已被其他流程異動：${orderId}`);
+  }
 
   const { error: logError } = await supabase.from("order_status_log").insert({
     order_id: orderId,

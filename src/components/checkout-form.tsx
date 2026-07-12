@@ -1,22 +1,25 @@
-"use client"
+"use client";
 
-import { useState, useTransition } from "react"
-import { useRouter } from "next/navigation"
-import { checkoutFormSchema } from "@/lib/checkout/schema"
-import { createOrder } from "@/app/checkout/actions"
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { checkoutFormSchema } from "@/lib/checkout/schema";
+import { createOrder } from "@/app/checkout/actions";
 
 export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
-  const router = useRouter()
-  const [email, setEmail] = useState(defaultEmail)
-  const [recipientName, setRecipientName] = useState("")
-  const [recipientPhone, setRecipientPhone] = useState("")
-  const [zipCode, setZipCode] = useState("")
-  const [shippingAddress, setShippingAddress] = useState("")
-  const [customConsent, setCustomConsent] = useState(false)
-  const [errors, setErrors] = useState<Record<string, string>>({})
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const [priceUpdatedMessage, setPriceUpdatedMessage] = useState<string | null>(null)
-  const [isPending, startTransition] = useTransition()
+  const router = useRouter();
+  const [email, setEmail] = useState(defaultEmail);
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("");
+  const [zipCode, setZipCode] = useState("");
+  const [shippingAddress, setShippingAddress] = useState("");
+  const [customConsent, setCustomConsent] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [priceUpdatedMessage, setPriceUpdatedMessage] = useState<string | null>(
+    null,
+  );
+  const [requiresLogin, setRequiresLogin] = useState(false);
+  const [isPending, startTransition] = useTransition();
 
   function validate() {
     const result = checkoutFormSchema.safeParse({
@@ -26,27 +29,28 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       zipCode,
       shippingAddress,
       customConsent,
-    })
+    });
     if (result.success) {
-      setErrors({})
-      return true
+      setErrors({});
+      return true;
     }
-    const fieldErrors: Record<string, string> = {}
+    const fieldErrors: Record<string, string> = {};
     for (const issue of result.error.issues) {
-      const key = issue.path[0]
+      const key = issue.path[0];
       if (typeof key === "string" && !fieldErrors[key]) {
-        fieldErrors[key] = issue.message
+        fieldErrors[key] = issue.message;
       }
     }
-    setErrors(fieldErrors)
-    return false
+    setErrors(fieldErrors);
+    return false;
   }
 
   function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setSubmitError(null)
-    setPriceUpdatedMessage(null)
-    if (!validate()) return
+    e.preventDefault();
+    setSubmitError(null);
+    setPriceUpdatedMessage(null);
+    setRequiresLogin(false);
+    if (!validate()) return;
     startTransition(async () => {
       const result = await createOrder({
         email,
@@ -55,51 +59,66 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         zipCode,
         shippingAddress,
         customConsent: customConsent as true,
-      })
+      });
       // redirect() in server action throws internally — only reach here on error
       if (!result.ok) {
-        if (result.priceUpdated) {
+        if (result.requiresLogin) {
+          setRequiresLogin(true);
+          setSubmitError(result.error);
+        } else if (result.priceUpdated) {
           // Prices changed — refresh server components so the page shows the new total
-          router.refresh()
-          setPriceUpdatedMessage(result.error)
+          router.refresh();
+          setPriceUpdatedMessage(result.error);
         } else {
-          setSubmitError(result.error)
+          setSubmitError(result.error);
         }
       }
-    })
+    });
   }
 
   return (
     <form onSubmit={handleSubmit}>
       <div className="mb-4">
-        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">Email</label>
+        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+          Email
+        </label>
         <input
           type="email"
+          maxLength={254}
           value={email}
           readOnly={!!defaultEmail}
           onChange={(e) => setEmail(e.target.value)}
           onBlur={validate}
           className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary read-only:bg-cloud"
         />
-        {errors.email && <p className="mt-1 text-sm text-destructive">{errors.email}</p>}
+        {errors.email && (
+          <p className="mt-1 text-sm text-destructive">{errors.email}</p>
+        )}
       </div>
 
       <div className="mb-4">
-        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">收件人姓名</label>
+        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+          收件人姓名
+        </label>
         <input
           type="text"
+          maxLength={50}
           value={recipientName}
           onChange={(e) => setRecipientName(e.target.value)}
           onBlur={validate}
           className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
         />
         {errors.recipientName && (
-          <p className="mt-1 text-sm text-destructive">{errors.recipientName}</p>
+          <p className="mt-1 text-sm text-destructive">
+            {errors.recipientName}
+          </p>
         )}
       </div>
 
       <div className="mb-4">
-        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">電話</label>
+        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+          電話
+        </label>
         <input
           type="tel"
           value={recipientPhone}
@@ -108,7 +127,9 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
           className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
         />
         {errors.recipientPhone && (
-          <p className="mt-1 text-sm text-destructive">{errors.recipientPhone}</p>
+          <p className="mt-1 text-sm text-destructive">
+            {errors.recipientPhone}
+          </p>
         )}
       </div>
 
@@ -126,39 +147,50 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
             onBlur={validate}
             className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
           />
-          {errors.zipCode && <p className="mt-1 text-sm text-destructive">{errors.zipCode}</p>}
+          {errors.zipCode && (
+            <p className="mt-1 text-sm text-destructive">{errors.zipCode}</p>
+          )}
         </div>
         <div>
-          <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">地址</label>
+          <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+            地址
+          </label>
           <input
             type="text"
+            maxLength={200}
             value={shippingAddress}
             onChange={(e) => setShippingAddress(e.target.value)}
             onBlur={validate}
             className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
           />
           {errors.shippingAddress && (
-            <p className="mt-1 text-sm text-destructive">{errors.shippingAddress}</p>
+            <p className="mt-1 text-sm text-destructive">
+              {errors.shippingAddress}
+            </p>
           )}
         </div>
       </div>
 
       <div className="mb-4">
-        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">配送方式</label>
+        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+          配送方式
+        </label>
         <div className="mt-2 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
           黑貓宅配（保價＋本人簽收）
         </div>
       </div>
 
       <div className="mb-5 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
-        ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong> 天，將於結帳再次告知。
+        ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong>{" "}
+        天，將於結帳再次告知。
       </div>
 
       {/* T57 客製例外同意 — ⚖️ TODO: 以律師審定版取代下方文字（T36） */}
       <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm">
         <p className="mb-3 font-medium text-amber-900">⚠️ 客製商品注意事項</p>
         <p className="mb-3 text-amber-800 leading-relaxed">
-          本商品為半客製品，依消費者保護法第 19 條但書，客製商品不適用七天猶豫期。
+          本商品為半客製品，依消費者保護法第 19
+          條但書，客製商品不適用七天猶豫期。
           如有品質瑕疵或製作錯誤，仍可依規定申請退換。
         </p>
         <label className="flex cursor-pointer items-start gap-2.5">
@@ -172,7 +204,9 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
           <span className="text-amber-900">我已閱讀並同意上述說明</span>
         </label>
         {errors.customConsent && (
-          <p className="mt-1.5 text-sm text-destructive">{errors.customConsent}</p>
+          <p className="mt-1.5 text-sm text-destructive">
+            {errors.customConsent}
+          </p>
         )}
       </div>
 
@@ -189,13 +223,27 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         </p>
       )}
 
+      {requiresLogin && (
+        <button
+          type="button"
+          onClick={() =>
+            router.push(`/login?redirect=${encodeURIComponent("/checkout")}`)
+          }
+          className="mb-3 w-full rounded-[2px] border border-primary px-8 py-3.5 text-[11.5px] font-medium tracking-[0.2em] text-primary uppercase"
+        >
+          前往登入
+        </button>
+      )}
+
+      {/* T71 ultra review #6：requiresLogin 時這顆按鈕註定再次被伺服器擋下，
+          disable 掉避免使用者重複點擊觸發沒有意義的請求。 */}
       <button
         type="submit"
-        disabled={isPending}
+        disabled={isPending || requiresLogin}
         className="w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase disabled:opacity-50"
       >
         {isPending ? "處理中…" : "前往付款"}
       </button>
     </form>
-  )
+  );
 }
