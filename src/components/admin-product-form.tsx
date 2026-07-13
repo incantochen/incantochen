@@ -39,7 +39,7 @@ export function AdminProductForm(props: Props) {
       const result =
         props.mode === "create"
           ? await createProduct(values)
-          : await updateProduct(props.productId, values)
+          : await updateProduct(props.productId, values, props.initialValues)
 
       if (!result.ok) {
         setError(result.error)
@@ -47,7 +47,7 @@ export function AdminProductForm(props: Props) {
         return
       }
 
-      router.push(`/admin/products/${result.id}`)
+      router.push(`/admin/products/${result.id}?saved=1&affected=${result.affectedRows}`)
       router.refresh()
     })
   }

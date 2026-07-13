@@ -5,6 +5,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
+import { StatusPill } from "@/components/status-pill";
 import { OrderActions } from "./order-actions";
 import { CustomerInfo } from "./customer-info";
 import { SupportRequests } from "./support-requests";
@@ -90,11 +91,10 @@ export default async function AdminOrderDetailPage({
           <h1 className="text-xl font-semibold text-gray-900 font-mono">
             {order.order_no}
           </h1>
-          <span
-            className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status as OrderStatus]}`}
-          >
-            {STATUS_LABELS[order.status as OrderStatus]}
-          </span>
+          <StatusPill
+            label={STATUS_LABELS[order.status as OrderStatus]}
+            colorClass={STATUS_COLORS[order.status as OrderStatus]}
+          />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

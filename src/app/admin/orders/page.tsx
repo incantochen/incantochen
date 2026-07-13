@@ -4,6 +4,8 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskEmail, maskName } from "@/lib/pii/mask";
+import { AdminFilterPills } from "@/components/admin-filter-pills";
+import { StatusPill } from "@/components/status-pill";
 
 const STATUS_COLORS: Record<OrderStatus, string> = {
   pending_payment: "bg-amber-100 text-amber-800",
@@ -103,23 +105,22 @@ export default async function AdminOrdersPage({
       </div>
 
         {/* 狀態篩選 */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          <Link
-            href={buildUrl({ status: undefined, page: "1" })}
-            className={`px-3 py-1.5 rounded text-sm font-medium ${!status ? "bg-gray-900 text-white" : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"}`}
-          >
-            全部 {!status && count != null ? `(${count})` : ""}
-          </Link>
-          {ALL_STATUSES.map((s) => (
-            <Link
-              key={s}
-              href={buildUrl({ status: s, page: "1" })}
-              className={`px-3 py-1.5 rounded text-sm font-medium ${status === s ? "bg-gray-900 text-white" : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"}`}
-            >
-              {STATUS_LABELS[s]}
-            </Link>
-          ))}
-        </div>
+        <AdminFilterPills
+          items={[
+            {
+              key: "all",
+              label: `全部 ${!status && count != null ? `(${count})` : ""}`,
+              href: buildUrl({ status: undefined, page: "1" }),
+              active: !status,
+            },
+            ...ALL_STATUSES.map((s) => ({
+              key: s,
+              label: STATUS_LABELS[s],
+              href: buildUrl({ status: s, page: "1" }),
+              active: status === s,
+            })),
+          ]}
+        />
 
         {/* 搜尋 */}
         <form method="get" action="/admin/orders" className="mb-4 flex gap-2">
@@ -228,11 +229,10 @@ export default async function AdminOrdersPage({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status as OrderStatus]}`}
-                      >
-                        {STATUS_LABELS[order.status as OrderStatus]}
-                      </span>
+                      <StatusPill
+                        label={STATUS_LABELS[order.status as OrderStatus]}
+                        colorClass={STATUS_COLORS[order.status as OrderStatus]}
+                      />
                     </td>
                     <td className="px-4 py-3 text-right">
                       {formatCurrency(Number(order.total_amount))}

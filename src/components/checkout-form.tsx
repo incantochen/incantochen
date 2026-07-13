@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { checkoutFormSchema } from "@/lib/checkout/schema";
 import { createOrder } from "@/app/checkout/actions";
+import { flattenFieldErrors } from "@/lib/zod/flatten-field-errors";
 
 export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const router = useRouter();
@@ -13,7 +14,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [zipCode, setZipCode] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [customConsent, setCustomConsent] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [priceUpdatedMessage, setPriceUpdatedMessage] = useState<string | null>(
     null,
@@ -34,14 +35,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       setErrors({});
       return true;
     }
-    const fieldErrors: Record<string, string> = {};
-    for (const issue of result.error.issues) {
-      const key = issue.path[0];
-      if (typeof key === "string" && !fieldErrors[key]) {
-        fieldErrors[key] = issue.message;
-      }
-    }
-    setErrors(fieldErrors);
+    setErrors(flattenFieldErrors(result.error));
     return false;
   }
 

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { checkoutFormSchema } from "@/lib/checkout/schema";
 import { createAdminOrderFromCart } from "@/app/admin/orders/checkout/actions";
+import { flattenFieldErrors } from "@/lib/zod/flatten-field-errors";
 
 export function AdminCheckoutForm() {
   const [email, setEmail] = useState("");
@@ -11,7 +12,7 @@ export function AdminCheckoutForm() {
   const [zipCode, setZipCode] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [customConsent, setCustomConsent] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [priceUpdatedMessage, setPriceUpdatedMessage] = useState<string | null>(
     null,
@@ -36,14 +37,7 @@ export function AdminCheckoutForm() {
       setErrors({});
       return true;
     }
-    const fieldErrors: Record<string, string> = {};
-    for (const issue of result.error.issues) {
-      const key = issue.path[0];
-      if (typeof key === "string" && !fieldErrors[key]) {
-        fieldErrors[key] = issue.message;
-      }
-    }
-    setErrors(fieldErrors);
+    setErrors(flattenFieldErrors(result.error));
     return false;
   }
 
