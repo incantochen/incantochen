@@ -27,7 +27,7 @@ export default async function OrdersPage() {
 
   return (
     <div className="overflow-hidden rounded-lg border border-border">
-      <div className="grid grid-cols-[1.2fr_1fr_1fr_auto] gap-3 bg-cloud px-5 py-3 text-[11px] tracking-[0.12em] text-ash uppercase">
+      <div className="hidden grid-cols-[1.2fr_1fr_1fr_auto] gap-3 bg-cloud px-5 py-3 text-[11px] tracking-[0.12em] text-ash uppercase md:grid">
         <span>訂單</span>
         <span>日期</span>
         <span>金額</span>
@@ -37,16 +37,18 @@ export default async function OrdersPage() {
         <Link
           key={order.id}
           href={`/account/orders/${order.id}`}
-          className="grid grid-cols-[1.2fr_1fr_1fr_auto] items-center gap-3 border-t border-border px-5 py-4 text-sm hover:bg-cloud"
+          className="flex flex-col gap-2 border-t border-border px-5 py-4 text-sm first:border-t-0 hover:bg-cloud md:grid md:grid-cols-[1.2fr_1fr_1fr_auto] md:items-center md:gap-3 md:first:border-t"
         >
-          <span className="text-primary underline underline-offset-2">{order.order_no}</span>
-          <span className="text-ash">{formatDateTime(order.created_at)}</span>
-          <span>{formatCurrency(Number(order.total_amount))}</span>
-          <span
-            className={`justify-self-start rounded-full px-2.5 py-1 text-[11px] tracking-[0.08em] ${STATUS_PILL_STYLES[order.status as OrderStatus]}`}
-          >
-            {STATUS_LABELS[order.status as OrderStatus]}
-          </span>
+          <div className="flex items-center justify-between md:contents">
+            <span className="text-primary underline underline-offset-2 md:order-1">{order.order_no}</span>
+            <span
+              className={`justify-self-start rounded-full px-2.5 py-1 text-[11px] tracking-[0.08em] md:order-4 ${STATUS_PILL_STYLES[order.status as OrderStatus]}`}
+            >
+              {STATUS_LABELS[order.status as OrderStatus]}
+            </span>
+          </div>
+          <span className="text-ash md:order-2">{formatDateTime(order.created_at)}</span>
+          <span className="md:order-3">{formatCurrency(Number(order.total_amount))}</span>
         </Link>
       ))}
     </div>

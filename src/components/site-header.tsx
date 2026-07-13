@@ -2,6 +2,7 @@ import Link from "next/link"
 import { Suspense } from "react"
 import { Search, ShoppingBag, User } from "lucide-react"
 import { getCartCount } from "@/lib/cart/get-cart-count"
+import { MobileNav } from "@/components/mobile-nav"
 
 const navLinks = [
   { label: "COLLECTIONS", href: "/collections/ring" },
@@ -62,6 +63,7 @@ export function SiteHeader() {
           >
             <CartIconWithBadge />
           </Suspense>
+          <MobileNav />
         </div>
       </div>
     </header>
