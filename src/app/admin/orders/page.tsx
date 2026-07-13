@@ -8,6 +8,7 @@ import {
 } from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskEmail, maskName } from "@/lib/pii/mask";
+import { AdminFilterPills } from "@/components/admin-filter-pills";
 import { AdminPill } from "@/components/admin-pill";
 
 const ALL_STATUSES: OrderStatus[] = [
@@ -98,23 +99,22 @@ export default async function AdminOrdersPage({
       </div>
 
         {/* 狀態篩選 */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          <Link
-            href={buildUrl({ status: undefined, page: "1" })}
-            className={`px-3 py-1.5 rounded text-sm font-medium ${!status ? "bg-gray-900 text-white" : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"}`}
-          >
-            全部 {!status && count != null ? `(${count})` : ""}
-          </Link>
-          {ALL_STATUSES.map((s) => (
-            <Link
-              key={s}
-              href={buildUrl({ status: s, page: "1" })}
-              className={`px-3 py-1.5 rounded text-sm font-medium ${status === s ? "bg-gray-900 text-white" : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"}`}
-            >
-              {STATUS_LABELS[s]}
-            </Link>
-          ))}
-        </div>
+        <AdminFilterPills
+          items={[
+            {
+              key: "all",
+              label: `全部 ${!status && count != null ? `(${count})` : ""}`,
+              href: buildUrl({ status: undefined, page: "1" }),
+              active: !status,
+            },
+            ...ALL_STATUSES.map((s) => ({
+              key: s,
+              label: STATUS_LABELS[s],
+              href: buildUrl({ status: s, page: "1" }),
+              active: status === s,
+            })),
+          ]}
+        />
 
         {/* 搜尋 */}
         <form method="get" action="/admin/orders" className="mb-4 flex gap-2">

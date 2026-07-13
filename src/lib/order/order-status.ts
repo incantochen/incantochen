@@ -27,6 +27,7 @@ export const STATUS_LABELS: Record<OrderStatus, string> = {
   refunded: "已退款",
 };
 
+// 前台／會員中心用（品牌 token）
 export const STATUS_PILL_STYLES: Record<OrderStatus, string> = {
   pending_payment: "bg-warning/10 text-warning",
   paid: "bg-success/10 text-success",

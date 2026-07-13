@@ -9,3 +9,6 @@ export const CATEGORY_LABELS: Record<CategoryCode, string> = {
   bracelet: "手鍊",
   necklace: "項鍊",
 };
+
+// 由 CATEGORY_LABELS 的 key 衍生，理由同 product-status.ts 的 ALL_PRODUCT_STATUSES。
+export const ALL_CATEGORIES = Object.keys(CATEGORY_LABELS) as CategoryCode[];
