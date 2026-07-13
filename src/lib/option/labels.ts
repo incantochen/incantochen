@@ -26,3 +26,14 @@ export const APPLIES_TO_LABELS: Record<OptionAppliesTo, string> = {
 export const ALL_APPLIES_TO = Object.keys(
   APPLIES_TO_LABELS,
 ) as OptionAppliesTo[];
+
+// 顯示狀態 pill 的單一出處（比照 PRODUCT_STATUS_META 的 label+color 綁同筆）；
+// option_type 與 option_value 的列表/詳情頁共用
+export function activePillMeta(isActive: boolean): {
+  label: string;
+  color: string;
+} {
+  return isActive
+    ? { label: "顯示中", color: "bg-green-100 text-green-800" }
+    : { label: "已隱藏", color: "bg-gray-100 text-gray-700" };
+}

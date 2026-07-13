@@ -18,10 +18,10 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 const uploadOptionValueImageFile = vi.fn();
-const deleteImageFile = vi.fn();
+const deleteImageFiles = vi.fn();
 vi.mock("@/lib/storage/product-images", () => ({
   uploadOptionValueImage: (...a: unknown[]) => uploadOptionValueImageFile(...a),
-  deleteImageFile: (...a: unknown[]) => deleteImageFile(...a),
+  deleteImageFiles: (...a: unknown[]) => deleteImageFiles(...a),
 }));
 
 const TYPE_ID = "11111111-1111-4111-8111-111111111111";
@@ -289,7 +289,7 @@ beforeEach(() => {
   rpcCalls.length = 0;
   revalidatePath.mockClear();
   uploadOptionValueImageFile.mockReset();
-  deleteImageFile.mockReset();
+  deleteImageFiles.mockReset();
   state.typeInsertError = null;
   state.typeInsertedId = "new-type-id";
   state.typeUpdateResult = { id: TYPE_ID };
@@ -409,13 +409,16 @@ describe("deleteOptionType", () => {
     ];
     const result = await deleteOptionType(TYPE_ID);
     expect(result.ok).toBe(true);
-    expect(deleteImageFile).toHaveBeenCalledTimes(2);
-    expect(deleteImageFile).toHaveBeenCalledWith("option-value/a/1.png");
+    expect(deleteImageFiles).toHaveBeenCalledTimes(1);
+    expect(deleteImageFiles).toHaveBeenCalledWith([
+      "option-value/a/1.png",
+      "option-value/b/2.png",
+    ]);
   });
 
   it("Storage 清檔失敗不擋成功回應", async () => {
     state.valuesWithImage = [{ image_path: "option-value/a/1.png" }];
-    deleteImageFile.mockRejectedValue(new Error("storage down"));
+    deleteImageFiles.mockRejectedValue(new Error("storage down"));
     const result = await deleteOptionType(TYPE_ID);
     expect(result.ok).toBe(true);
   });
@@ -478,9 +481,9 @@ describe("updateOptionValue", () => {
 });
 
 describe("moveOptionValue", () => {
-  it("走 move_option_value RPC 並帶對參數", async () => {
+  it("走 move_option_value RPC 並帶對參數，revalidate 用 DB 的 option_type_id", async () => {
     state.rpcResult = "moved";
-    const result = await moveOptionValue(VALUE_ID, TYPE_ID, "down");
+    const result = await moveOptionValue(VALUE_ID, "down");
     expect(result.ok).toBe(true);
     expect(rpcCalls[0]).toEqual({
       fn: "move_option_value",
@@ -491,15 +494,15 @@ describe("moveOptionValue", () => {
 
   it("not_found 回友善訊息", async () => {
     state.rpcResult = "not_found";
-    const result = await moveOptionValue(VALUE_ID, TYPE_ID, "up");
+    const result = await moveOptionValue(VALUE_ID, "up");
     expect(result.ok).toBe(false);
   });
 
-  it("edge 視為成功且不 revalidate", async () => {
+  it("edge 視為成功且仍 revalidate（畫面可能是舊的）", async () => {
     state.rpcResult = "edge";
-    const result = await moveOptionValue(VALUE_ID, TYPE_ID, "up");
+    const result = await moveOptionValue(VALUE_ID, "up");
     expect(result.ok).toBe(true);
-    expect(revalidatePath).not.toHaveBeenCalled();
+    expect(revalidatePath).toHaveBeenCalledWith(`/admin/options/${TYPE_ID}`);
   });
 });
 
@@ -518,13 +521,13 @@ describe("deleteOptionValue", () => {
     };
     const result = await deleteOptionValue(VALUE_ID);
     expect(result.ok).toBe(true);
-    expect(deleteImageFile).toHaveBeenCalledWith("option-value/x/1.png");
+    expect(deleteImageFiles).toHaveBeenCalledWith(["option-value/x/1.png"]);
   });
 
   it("無圖時不呼叫刪檔", async () => {
     const result = await deleteOptionValue(VALUE_ID);
     expect(result.ok).toBe(true);
-    expect(deleteImageFile).not.toHaveBeenCalled();
+    expect(deleteImageFiles).not.toHaveBeenCalled();
   });
 });
 
@@ -543,7 +546,7 @@ describe("uploadOptionValueImage", () => {
     const update = updates("option_value")[0];
     expect(update?.values).toEqual({ image_path: "option-value/x/new.png" });
     expect(update?.is).toEqual([["image_path", null]]);
-    expect(deleteImageFile).not.toHaveBeenCalled();
+    expect(deleteImageFiles).not.toHaveBeenCalled();
   });
 
   it("換圖成功：CAS 比對舊路徑，成功後刪舊檔", async () => {
@@ -559,7 +562,7 @@ describe("uploadOptionValueImage", () => {
       "image_path",
       "option-value/x/old.png",
     ]);
-    expect(deleteImageFile).toHaveBeenCalledWith("option-value/x/old.png");
+    expect(deleteImageFiles).toHaveBeenCalledWith(["option-value/x/old.png"]);
   });
 
   it("CAS 沒命中（並發換圖）：回滾新檔並回並發訊息", async () => {
@@ -568,7 +571,7 @@ describe("uploadOptionValueImage", () => {
     const result = await uploadOptionValueImage(buildFormData());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("重新整理");
-    expect(deleteImageFile).toHaveBeenCalledWith("option-value/x/new.png");
+    expect(deleteImageFiles).toHaveBeenCalledWith(["option-value/x/new.png"]);
   });
 
   it("DB 更新失敗：回滾新檔", async () => {
@@ -576,7 +579,7 @@ describe("uploadOptionValueImage", () => {
     state.valueImageUpdateError = { message: "db down" };
     const result = await uploadOptionValueImage(buildFormData());
     expect(result.ok).toBe(false);
-    expect(deleteImageFile).toHaveBeenCalledWith("option-value/x/new.png");
+    expect(deleteImageFiles).toHaveBeenCalledWith(["option-value/x/new.png"]);
   });
 
   it("找不到選項值時不上傳", async () => {
@@ -607,7 +610,7 @@ describe("removeOptionValueImage", () => {
       "image_path",
       "option-value/x/old.png",
     ]);
-    expect(deleteImageFile).toHaveBeenCalledWith("option-value/x/old.png");
+    expect(deleteImageFiles).toHaveBeenCalledWith(["option-value/x/old.png"]);
   });
 
   it("CAS 沒命中回並發訊息且不刪檔", async () => {
@@ -618,6 +621,6 @@ describe("removeOptionValueImage", () => {
     state.valueImageUpdateResult = null;
     const result = await removeOptionValueImage(VALUE_ID);
     expect(result.ok).toBe(false);
-    expect(deleteImageFile).not.toHaveBeenCalled();
+    expect(deleteImageFiles).not.toHaveBeenCalled();
   });
 });

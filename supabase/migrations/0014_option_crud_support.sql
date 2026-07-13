@@ -179,3 +179,19 @@ $$;
 
 comment on function public.move_option_value(uuid, text) is
   'T12：原子交換相鄰兩個選項值的 sort_order；row lock 序列化並發、交易保證無部分成功';
+
+-- =============================================================================
+-- 6. RPC 執行權收斂（0011 慣例：寫入路徑 RPC 只留 service role）
+--    public schema 的函式預設 grant execute to public，anon 可經 PostgREST
+--    /rest/v1/rpc 呼叫——RLS 雖擋住實際寫入，但 move 的 for update 仍可被
+--    匿名者拿來鎖目錄列。一併回補 0013 兩支商品圖 RPC 漏掉的同款 revoke。
+-- =============================================================================
+
+revoke execute on function public.insert_option_value(uuid, text, text, text)
+  from public, anon, authenticated;
+revoke execute on function public.move_option_value(uuid, text)
+  from public, anon, authenticated;
+revoke execute on function public.insert_product_image(uuid, text)
+  from public, anon, authenticated;
+revoke execute on function public.move_product_image(uuid, text)
+  from public, anon, authenticated;

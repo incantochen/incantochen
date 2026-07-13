@@ -1,19 +1,20 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { AdminActionResult } from "@/lib/admin/action-result";
-import { AdminNotifyBanner, useAdminNotify } from "@/components/admin-notify";
+import { AdminNotifyBanner, useAdminAction } from "@/components/admin-notify";
 import { AdminPill } from "@/components/admin-pill";
 import {
   ALL_APPLIES_TO,
   ALL_INPUT_TYPES,
   APPLIES_TO_LABELS,
   OPTION_INPUT_TYPE_LABELS,
+  activePillMeta,
   type OptionInputType,
   type OptionAppliesTo,
 } from "@/lib/option/labels";
+import { SWATCH_HEX_FORMAT } from "@/lib/option/schema";
 import {
   ALLOWED_IMAGE_MIME_TYPES,
   validateImageFile,
@@ -48,6 +49,7 @@ type Props = {
     input_type: string;
     isActive: boolean;
   };
+  updatedAt: string;
   values: ValueItem[];
   usedValueIds: string[];
   typeInUse: boolean;
@@ -58,17 +60,33 @@ const inputClass =
 const smallButtonClass =
   "rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40";
 
-export function OptionTypeDetail({
+type ActionRunner = ReturnType<typeof useAdminAction>;
+
+// 外殼：notify 訊息與 pending 狀態放在「不被 key 重掛」的這一層——
+// 型別的儲存/切換會 bump updated_at 觸發下層重掛（同商品編輯頁的並發顯示
+// 邏輯），成功訊息若放在被重掛的元件裡會跟著 instance 一起被丟掉、永遠不顯示
+export function OptionTypeDetail(props: Props) {
+  const runner = useAdminAction();
+
+  return (
+    <div className="space-y-6">
+      <AdminNotifyBanner message={runner.message} />
+      <OptionTypeDetailInner key={props.updatedAt} {...props} runner={runner} />
+    </div>
+  );
+}
+
+function OptionTypeDetailInner({
   optionType,
   values,
   usedValueIds,
   typeInUse,
-}: Props) {
+  runner,
+}: Props & { runner: ActionRunner }) {
   const router = useRouter();
-  const [isPending, startTransition] = useTransition();
-  const { message, notify } = useAdminNotify();
+  const { isPending, notify, run: runAction } = runner;
 
-  // type 基本資料表單（mount 當下快照；並發異動由 key={updated_at} 換掉 instance）
+  // type 基本資料表單（mount 當下快照；並發異動由外層 key={updatedAt} 換掉 instance）
   const [typeName, setTypeName] = useState(optionType.name);
   const [typeAppliesTo, setTypeAppliesTo] = useState<OptionAppliesTo>(
     optionType.applies_to,
@@ -85,29 +103,6 @@ export function OptionTypeDetail({
 
   const usedSet = new Set(usedValueIds);
 
-  function runAction(
-    action: () => Promise<AdminActionResult | { ok: true; id: string }>,
-    options: {
-      successMsg?: string;
-      fallbackError: string;
-      onSuccess?: () => void;
-    },
-  ) {
-    startTransition(async () => {
-      try {
-        const result = await action();
-        if (!result.ok) {
-          notify(result.error, true);
-          return;
-        }
-        if (options.successMsg) notify(options.successMsg);
-        options.onSuccess?.();
-      } catch (e) {
-        notify(e instanceof Error ? e.message : options.fallbackError, true);
-      }
-    });
-  }
-
   function handleSaveType() {
     runAction(
       () =>
@@ -118,6 +113,27 @@ export function OptionTypeDetail({
         }),
       { successMsg: "選項類型已更新", fallbackError: "更新失敗" },
     );
+  }
+
+  function handleToggleTypeActive() {
+    // 隱藏使用中的類別會讓前台配置器整組消失：必選項目沒得選、含此選項的
+    // 購物車結帳被拒——不擋（隱藏是刪除的唯一替代），但要求二次確認
+    if (
+      optionType.isActive &&
+      typeInUse &&
+      !confirm(
+        "此選項類型已有商品使用。隱藏後：前台配置器將不再顯示此選項、" +
+          "已含此選項的購物車將無法結帳（必選項目缺少選擇也會擋單）。確定要隱藏嗎？",
+      )
+    ) {
+      return;
+    }
+    runAction(() => setOptionTypeActive(optionType.id, !optionType.isActive), {
+      successMsg: optionType.isActive
+        ? "已隱藏（前台不再顯示此選項）"
+        : "已恢復顯示",
+      fallbackError: "切換失敗",
+    });
   }
 
   function handleDeleteType() {
@@ -179,6 +195,23 @@ export function OptionTypeDetail({
     );
   }
 
+  function handleToggleValueActive(value: ValueItem) {
+    if (
+      value.isActive &&
+      usedSet.has(value.id) &&
+      !confirm(
+        `「${value.label}」已有商品使用。隱藏後：前台將不再提供此選項值、` +
+          "已含此值的購物車將無法結帳。確定要隱藏嗎？",
+      )
+    ) {
+      return;
+    }
+    runAction(() => setOptionValueActive(value.id, !value.isActive), {
+      successMsg: value.isActive ? "已隱藏（前台不再顯示此值）" : "已恢復顯示",
+      fallbackError: "切換失敗",
+    });
+  }
+
   function handleDeleteValue(valueId: string) {
     if (!confirm("確定要刪除這個選項值嗎？此操作無法復原。")) return;
     runAction(() => deleteOptionValue(valueId), {
@@ -203,22 +236,15 @@ export function OptionTypeDetail({
     });
   }
 
-  return (
-    <div className="space-y-6">
-      <AdminNotifyBanner message={message} />
+  const typePill = activePillMeta(optionType.isActive);
 
+  return (
+    <>
       {/* ── 基本資料 ─────────────────────────────────────────── */}
       <section className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-gray-900">基本資料</h2>
-          <AdminPill
-            label={optionType.isActive ? "顯示中" : "已隱藏"}
-            color={
-              optionType.isActive
-                ? "bg-green-100 text-green-800"
-                : "bg-gray-100 text-gray-700"
-            }
-          />
+          <AdminPill label={typePill.label} color={typePill.color} />
         </div>
 
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -277,17 +303,7 @@ export function OptionTypeDetail({
           </button>
           <button
             type="button"
-            onClick={() =>
-              runAction(
-                () => setOptionTypeActive(optionType.id, !optionType.isActive),
-                {
-                  successMsg: optionType.isActive
-                    ? "已隱藏（前台不再顯示此選項）"
-                    : "已恢復顯示",
-                  fallbackError: "切換失敗",
-                },
-              )
-            }
+            onClick={handleToggleTypeActive}
             disabled={isPending}
             className={smallButtonClass}
           >
@@ -360,6 +376,7 @@ export function OptionTypeDetail({
               const inUse = usedSet.has(value.id);
               const swatchDraft =
                 swatchDrafts[value.id] ?? value.swatchHex ?? "";
+              const valuePill = activePillMeta(value.isActive);
               return (
                 <li
                   key={value.id}
@@ -385,11 +402,11 @@ export function OptionTypeDetail({
                     />
 
                     <div className="flex items-center gap-1.5">
-                      {/* 色票預覽圓點：格式正確才上色 */}
+                      {/* 色票預覽圓點：格式正確才上色（格式與 zod/DB 同一出處） */}
                       <span
                         className="inline-block size-5 rounded-full border border-gray-300"
                         style={
-                          /^#[0-9A-Fa-f]{6}$/.test(swatchDraft)
+                          SWATCH_HEX_FORMAT.test(swatchDraft)
                             ? { backgroundColor: swatchDraft }
                             : undefined
                         }
@@ -425,27 +442,12 @@ export function OptionTypeDetail({
 
                     <div className="ml-auto flex items-center gap-1">
                       <AdminPill
-                        label={value.isActive ? "顯示中" : "已隱藏"}
-                        color={
-                          value.isActive
-                            ? "bg-green-100 text-green-800"
-                            : "bg-gray-100 text-gray-700"
-                        }
+                        label={valuePill.label}
+                        color={valuePill.color}
                       />
                       <button
                         type="button"
-                        onClick={() =>
-                          runAction(
-                            () =>
-                              setOptionValueActive(value.id, !value.isActive),
-                            {
-                              successMsg: value.isActive
-                                ? "已隱藏（前台不再顯示此值）"
-                                : "已恢復顯示",
-                              fallbackError: "切換失敗",
-                            },
-                          )
-                        }
+                        onClick={() => handleToggleValueActive(value)}
                         disabled={isPending}
                         className={smallButtonClass}
                       >
@@ -454,11 +456,9 @@ export function OptionTypeDetail({
                       <button
                         type="button"
                         onClick={() =>
-                          runAction(
-                            () =>
-                              moveOptionValue(value.id, optionType.id, "up"),
-                            { fallbackError: "調整排序失敗" },
-                          )
+                          runAction(() => moveOptionValue(value.id, "up"), {
+                            fallbackError: "調整排序失敗",
+                          })
                         }
                         disabled={isPending || index === 0}
                         className={smallButtonClass}
@@ -468,11 +468,9 @@ export function OptionTypeDetail({
                       <button
                         type="button"
                         onClick={() =>
-                          runAction(
-                            () =>
-                              moveOptionValue(value.id, optionType.id, "down"),
-                            { fallbackError: "調整排序失敗" },
-                          )
+                          runAction(() => moveOptionValue(value.id, "down"), {
+                            fallbackError: "調整排序失敗",
+                          })
                         }
                         disabled={isPending || index === values.length - 1}
                         className={smallButtonClass}
@@ -548,6 +546,6 @@ export function OptionTypeDetail({
           </ul>
         )}
       </section>
-    </div>
+    </>
   );
 }

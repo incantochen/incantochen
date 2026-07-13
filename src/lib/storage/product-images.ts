@@ -79,6 +79,19 @@ export async function uploadOptionValueImage(
   );
 }
 
+// 批次刪除：Storage .remove() 收陣列，一次往返（deleteAllProductImageFiles 同款）
+export async function deleteImageFiles(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const supabase = createServiceRoleClient();
+  const { error } = await supabase.storage
+    .from(PRODUCT_IMAGES_BUCKET)
+    .remove(paths);
+
+  if (error) {
+    throw new Error(`刪除 Storage 圖片失敗：${error.message}`);
+  }
+}
+
 export async function deleteImageFile(path: string): Promise<void> {
   const supabase = createServiceRoleClient();
   const { error } = await supabase.storage

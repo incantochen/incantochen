@@ -86,7 +86,8 @@ export async function verifyCartPrices(
       .from("product_option")
       .select(
         `
-        option_type:option_type_id ( code, is_active ),
+        required,
+        option_type:option_type_id ( code, name, is_active ),
         product_option_value ( price_delta, option_value:option_value_id ( code, label, is_active ) )
       `,
       )
@@ -101,19 +102,23 @@ export async function verifyCartPrices(
       string,
       Map<string, { priceDelta: number; label: string }>
     >();
+    // 必選項目以「全部」product_option 為準（含隱藏中的類別）：管理員隱藏
+    // 使用中的必選類別時，PDP／addToCart 因 RLS 看不到它而收不到選擇，
+    // 若只驗看得見的部分，會建立出缺少必選規格（如戒圍）的無法履約訂單
+    const requiredTypes: { code: string; name: string }[] = [];
     for (const po of productOptions) {
-      // T12：隱藏的選項類別／選項值不進白名單——service role 不受 RLS 過濾，
-      // 在此排除；購物車若還帶著隱藏項目的 code，走下方「不在白名單」錯誤路徑
-      if (!po.option_type.is_active) {
-        continue;
+      if (po.required) {
+        requiredTypes.push({
+          code: po.option_type.code,
+          name: po.option_type.name,
+        });
       }
       const typeCode = po.option_type.code;
       const valueMap = new Map<string, { priceDelta: number; label: string }>();
       for (const pov of po.product_option_value) {
-        if (!pov.option_value.is_active) {
-          continue;
-        }
-        // Guard against DB-side price_delta corruption (null, NaN, Infinity, string)
+        // Guard against DB-side price_delta corruption (null, NaN, Infinity,
+        // string) — 先驗再看 is_active，隱藏值的資料損壞也要立即 fail-fast，
+        // 不留到重新顯示才爆
         const rawPriceDelta: unknown = pov.price_delta;
         if (
           typeof rawPriceDelta !== "number" ||
@@ -121,12 +126,32 @@ export async function verifyCartPrices(
         ) {
           throw new Error(`選項定價資料異常，無法建立訂單`);
         }
+        // T12：隱藏的選項值不進白名單——service role 不受 RLS 過濾，在此排除
+        if (!pov.option_value.is_active) {
+          continue;
+        }
         valueMap.set(pov.option_value.code, {
           priceDelta: rawPriceDelta,
           label: pov.option_value.label,
         });
       }
+      // T12：隱藏的選項類別整組不進白名單；購物車若還帶著隱藏項目的 code，
+      // 走下方「不在白名單」錯誤路徑
+      if (!po.option_type.is_active) {
+        continue;
+      }
       priceMap.set(typeCode, valueMap);
+    }
+
+    // 必選完整性：每個必選類別都要有選擇（快照被竄改刪掉選擇、或必選類別
+    // 隱藏期間加入購物車的項目，都在這裡擋下）
+    const selectedTypeCodes = new Set(
+      config.selections.map((sel) => sel.option_type_code),
+    );
+    for (const rt of requiredTypes) {
+      if (!selectedTypeCodes.has(rt.code)) {
+        throw new Error(`商品必選項目「${rt.name}」缺少選擇，無法建立訂單`);
+      }
     }
 
     // Recalculate price and rebuild selections using current DB data
@@ -141,15 +166,12 @@ export async function verifyCartPrices(
     for (const sel of config.selections) {
       const typeMap = priceMap.get(sel.option_type_code);
       if (!typeMap) {
-        throw new Error(
-          `選項類別「${sel.option_type_code}」不在此商品白名單，無法建立訂單`,
-        );
+        // sel.label 是客人看得懂的名稱；不外露內部 code
+        throw new Error(`選項「${sel.label}」不在此商品白名單，無法建立訂單`);
       }
       const entry = typeMap.get(sel.option_value_code);
       if (entry === undefined) {
-        throw new Error(
-          `選項值「${sel.option_value_code}」不在此商品白名單，無法建立訂單`,
-        );
+        throw new Error(`選項「${sel.label}」不在此商品白名單，無法建立訂單`);
       }
       verifiedUnitPrice += entry.priceDelta;
       verifiedSelections.push({

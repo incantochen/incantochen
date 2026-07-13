@@ -11,21 +11,23 @@ import { verifyCartPrices } from "./verify-prices";
 // ---------------------------------------------------------------------------
 
 type MockProductOption = {
-  option_type: { code: string; is_active?: boolean };
+  required?: boolean;
+  option_type: { code: string; name?: string; is_active?: boolean };
   product_option_value: Array<{
     price_delta: unknown;
     option_value: { code: string; label: string; is_active?: boolean };
   }>;
 };
 
-// T12 後 verifyCartPrices 會讀 is_active——既有 fixture 未指定時補 true，
-// 明確傳 false 的測試案例（隱藏項目）維持原值
+// T12 後 verifyCartPrices 會讀 is_active／required／option_type.name——
+// 既有 fixture 未指定時補預設值，明確傳入的測試案例維持原值
 function withActiveDefaults(
   productOptions: MockProductOption[] | null,
 ): MockProductOption[] | null {
   if (!productOptions) return productOptions;
   return productOptions.map((po) => ({
-    option_type: { is_active: true, ...po.option_type },
+    required: po.required ?? false,
+    option_type: { is_active: true, name: "測試選項", ...po.option_type },
     product_option_value: po.product_option_value.map((pov) => ({
       ...pov,
       option_value: { is_active: true, ...pov.option_value },
@@ -369,6 +371,67 @@ describe("A Core", () => {
         makeItem(),
       ]),
     ).rejects.toThrow("不在此商品白名單");
+  });
+
+  it("A15: required type without a selection in config → throw（防缺規格訂單）", async () => {
+    const requiredOptions: MockProductOption[] = [
+      {
+        option_type: { code: "gem_color" },
+        product_option_value: [
+          {
+            price_delta: 3000,
+            option_value: { code: "emerald", label: "翠綠" },
+          },
+        ],
+      },
+      {
+        required: true,
+        option_type: { code: "ring_size", name: "戒圍" },
+        product_option_value: [
+          {
+            price_delta: 0,
+            option_value: { code: "size-10", label: "10號" },
+          },
+        ],
+      },
+    ];
+    // config 只帶 gem_color，缺必選 ring_size
+    await expect(
+      verifyCartPrices(buildMock({ base_price: 10000 }, requiredOptions), [
+        makeItem(),
+      ]),
+    ).rejects.toThrow("必選項目「戒圍」缺少選擇");
+  });
+
+  it("A16: hidden required type still enforced（隱藏期間加車的缺規格項目要擋）", async () => {
+    const hiddenRequiredOptions: MockProductOption[] = [
+      {
+        required: true,
+        option_type: { code: "ring_size", name: "戒圍", is_active: false },
+        product_option_value: [
+          {
+            price_delta: 0,
+            option_value: { code: "size-10", label: "10號" },
+          },
+        ],
+      },
+    ];
+    const noSelectionItem = makeItem({
+      selections: [],
+      unit_price_snapshot: 10000,
+      config_snapshot: {
+        product_id: PRODUCT_ID,
+        base_price: 10000,
+        selections: [],
+        line_unit_price: 10000,
+      },
+    });
+    await expect(
+      verifyCartPrices(
+        buildMock({ base_price: 10000 }, hiddenRequiredOptions),
+        [noSelectionItem],
+      ),
+    ).rejects.toThrow("必選項目「戒圍」缺少選擇");
   });
 
   it("A14: hidden value on another type does not affect active selection", async () => {

@@ -5,6 +5,7 @@ import { formatDateTime } from "@/lib/utils";
 import {
   APPLIES_TO_LABELS,
   OPTION_INPUT_TYPE_LABELS,
+  activePillMeta,
   type OptionInputType,
 } from "@/lib/option/labels";
 import { AdminPill } from "@/components/admin-pill";
@@ -85,14 +86,7 @@ export default async function AdminOptionsPage() {
                     ] ?? t.input_type}
                   </td>
                   <td className="px-4 py-3">
-                    <AdminPill
-                      label={t.is_active ? "顯示中" : "已隱藏"}
-                      color={
-                        t.is_active
-                          ? "bg-green-100 text-green-800"
-                          : "bg-gray-100 text-gray-700"
-                      }
-                    />
+                    <AdminPill {...activePillMeta(t.is_active)} />
                   </td>
                   <td className="px-4 py-3 text-right text-gray-600">
                     {t.valueCount}

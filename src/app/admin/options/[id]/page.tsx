@@ -90,8 +90,8 @@ export default async function AdminOptionTypePage({
       </div>
 
       <OptionTypeDetail
-        // updated_at 變了就換 key 強制重新掛載（同商品編輯頁的並發顯示邏輯）
-        key={optionType.updated_at}
+        // updated_at 由元件內層自己當 key 用（外殼保住 notify 訊息不被重掛沖掉）
+        updatedAt={optionType.updated_at}
         optionType={{
           id: optionType.id,
           name: optionType.name,

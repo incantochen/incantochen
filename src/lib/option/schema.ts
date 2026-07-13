@@ -13,12 +13,15 @@ const codeBase = z
   .max(50, "代碼過長")
   .regex(CODE_FORMAT, CODE_FORMAT_MESSAGE);
 
-// swatch_hex 對齊 DB check constraint（0012：^#[0-9A-Fa-f]{6}$）；
+// swatch_hex 對齊 DB check constraint（0012）；export 供 UI 色票預覽共用，
+// 格式若要改（如開放 #RGB）只能開新 migration 改 0012 constraint＋這裡一處
+export const SWATCH_HEX_FORMAT = /^#[0-9A-Fa-f]{6}$/;
+
 // 表單空字串視為「清除色票」轉 null
 const swatchHexBase = z
   .string()
   .trim()
-  .regex(/^#[0-9A-Fa-f]{6}$/, "色碼格式須為 #RRGGBB（例如 #1A6B54）")
+  .regex(SWATCH_HEX_FORMAT, "色碼格式須為 #RRGGBB（例如 #1A6B54）")
   .nullable();
 
 export const optionTypeFormSchema = z.object({

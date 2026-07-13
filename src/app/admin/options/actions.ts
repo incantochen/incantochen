@@ -5,7 +5,10 @@ import * as Sentry from "@sentry/nextjs";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import type { AdminActionResult } from "@/lib/admin/action-result";
+import type {
+  AdminActionResult,
+  AdminFormActionResult,
+} from "@/lib/admin/action-result";
 import { REFRESH_TO_RETRY_SUFFIX } from "@/lib/concurrency-message";
 import { flattenFieldErrors } from "@/lib/zod/flatten-field-errors";
 import {
@@ -20,32 +23,48 @@ import {
 } from "@/lib/option/schema";
 import {
   uploadOptionValueImage as uploadOptionValueImageFile,
-  deleteImageFile,
+  deleteImageFiles,
 } from "@/lib/storage/product-images";
 
-// createOptionType 需要回傳 fieldErrors（鏡像 ProductActionResult）；
-// 其餘操作用共用 AdminActionResult 即可
-export type OptionTypeActionResult =
-  | { ok: true; id: string }
-  | {
-      ok: false;
-      error: string;
-      fieldErrors?: Partial<Record<keyof OptionTypeFormValues, string>>;
-    };
-
-export type OptionValueActionResult =
-  | { ok: true; id: string }
-  | {
-      ok: false;
-      error: string;
-      fieldErrors?: Partial<Record<keyof OptionValueFormValues, string>>;
-    };
+export type OptionTypeActionResult = AdminFormActionResult<
+  keyof OptionTypeFormValues
+>;
+export type OptionValueActionResult = AdminFormActionResult<
+  keyof OptionValueFormValues
+>;
 
 const RACE_MESSAGE = `此項目已被其他管理員異動${REFRESH_TO_RETRY_SUFFIX}`;
 
 function revalidateOptionsPages(typeId?: string) {
   revalidatePath("/admin/options");
   if (typeId) revalidatePath(`/admin/options/${typeId}`);
+}
+
+// 23505 衝突時查出既有項目給有脈絡的訊息（比照 products 的
+// buildSlugConflictError）；查詢本身失敗（CLAUDE.md §6：查詢失敗≠查無資料）
+// 就退回通用訊息——23505 已證明衝突存在，這裡只是補名字
+function buildCodeConflictResult(conflictName: string | null): {
+  ok: false;
+  error: string;
+  fieldErrors: { code: string };
+} {
+  const message = conflictName
+    ? `此代碼已被「${conflictName}」使用，請換一個`
+    : "此代碼已被使用，請換一個";
+  return { ok: false, error: message, fieldErrors: { code: message } };
+}
+
+// Storage 刪檔的 best-effort 收尾：DB 為準，刪檔失敗僅記錄不擋使用者
+async function bestEffortDeleteImages(
+  paths: string[],
+  extra: Record<string, string>,
+) {
+  try {
+    await deleteImageFiles(paths);
+  } catch (e) {
+    console.error("刪除選項圖檔失敗", e);
+    Sentry.captureException(e, { extra: { ...extra, paths } });
+  }
 }
 
 // =============================================================================
@@ -75,16 +94,14 @@ export async function createOptionType(
 
   if (error) {
     if (error.code === "23505") {
-      // 比照 buildSlugConflictError：查出衝突項目給有脈絡的訊息
-      const { data: conflict } = await supabase
+      const { data: conflict, error: lookupError } = await supabase
         .from("option_type")
         .select("name")
         .eq("code", parsed.data.code)
         .maybeSingle();
-      const message = conflict
-        ? `此代碼已被「${conflict.name}」使用，請換一個`
-        : "此代碼已被使用，請換一個";
-      return { ok: false, error: message, fieldErrors: { code: message } };
+      return buildCodeConflictResult(
+        lookupError ? null : (conflict?.name ?? null),
+      );
     }
     return { ok: false, error: "建立選項類型失敗，請稍後再試" };
   }
@@ -216,18 +233,13 @@ export async function deleteOptionType(id: string): Promise<AdminActionResult> {
     return { ok: false, error: "刪除選項類型失敗，請稍後再試" };
   }
 
-  // DB 為準：Storage 刪檔失敗僅記錄，不擋使用者
-  for (const row of valuesWithImage ?? []) {
-    if (!row.image_path) continue;
-    try {
-      await deleteImageFile(row.image_path);
-    } catch (e) {
-      console.error("刪除選項圖檔失敗", e);
-      Sentry.captureException(e, {
-        extra: { imagePath: row.image_path, optionTypeId: parsed.data },
-      });
-    }
-  }
+  // DB 為準：一次批次呼叫刪檔（.remove() 收陣列），失敗僅記錄不擋使用者。
+  // 註：路徑快照在 delete 之前讀取，與並發上傳之間有極小 race window，
+  // 輸掉的那個檔案成為孤兒——與整段 cascade delete 的原子性相比可接受
+  const imagePaths = (valuesWithImage ?? [])
+    .map((row) => row.image_path)
+    .filter((p): p is string => p !== null);
+  await bestEffortDeleteImages(imagePaths, { optionTypeId: parsed.data });
 
   revalidateOptionsPages();
   return { ok: true };
@@ -272,16 +284,15 @@ export async function createOptionValue(
 
   if (error || !newId) {
     if (error?.code === "23505") {
-      const { data: conflict } = await supabase
+      const { data: conflict, error: lookupError } = await supabase
         .from("option_value")
         .select("label")
         .eq("option_type_id", idParsed.data)
         .eq("code", parsed.data.code)
         .maybeSingle();
-      const message = conflict
-        ? `此代碼已被「${conflict.label}」使用，請換一個`
-        : "此代碼已被使用，請換一個";
-      return { ok: false, error: message, fieldErrors: { code: message } };
+      return buildCodeConflictResult(
+        lookupError ? null : (conflict?.label ?? null),
+      );
     }
     // 23503：type 剛被別的分頁刪掉
     if (error?.code === "23503") {
@@ -368,18 +379,16 @@ export async function setOptionValueActive(
 
 const moveSchema = z.object({
   valueId: z.string().uuid(),
-  typeId: z.string().uuid(),
   direction: z.enum(["up", "down"]),
 });
 
 export async function moveOptionValue(
   valueId: string,
-  typeId: string,
   direction: "up" | "down",
 ): Promise<AdminActionResult> {
   await requireAdmin();
 
-  const parsed = moveSchema.safeParse({ valueId, typeId, direction });
+  const parsed = moveSchema.safeParse({ valueId, direction });
   if (!parsed.success) {
     return { ok: false, error: "參數格式不正確" };
   }
@@ -403,10 +412,19 @@ export async function moveOptionValue(
   if (moveResult === "not_found") {
     return { ok: false, error: "找不到選項值，可能已被刪除" };
   }
-  if (moveResult === "moved") {
-    revalidatePath(`/admin/options/${parsed.data.typeId}`);
+
+  // revalidate 路徑用 DB 裡的 option_type_id，不信任 client 傳來的 typeId；
+  // 'edge' 也 revalidate——按了「下移」卻已在最後，通常代表畫面是舊的
+  //（別的管理員剛動過排序），重整列表讓使用者看到現況
+  const { data: row, error: rowError } = await supabase
+    .from("option_value")
+    .select("option_type_id")
+    .eq("id", parsed.data.valueId)
+    .maybeSingle();
+  if (!rowError && row) {
+    revalidatePath(`/admin/options/${row.option_type_id}`);
   }
-  return { ok: true }; // 'edge'＝已在最前／最後，無事可做
+  return { ok: true };
 }
 
 export async function deleteOptionValue(
@@ -460,14 +478,9 @@ export async function deleteOptionValue(
   // DB 為準：image_path 可為 null（與 product_image.storage_path 不同），
   // 有圖才刪；刪檔失敗僅記錄
   if (deleted.image_path) {
-    try {
-      await deleteImageFile(deleted.image_path);
-    } catch (e) {
-      console.error("刪除選項圖檔失敗", e);
-      Sentry.captureException(e, {
-        extra: { imagePath: deleted.image_path, optionValueId: parsed.data },
-      });
-    }
+    await bestEffortDeleteImages([deleted.image_path], {
+      optionValueId: parsed.data,
+    });
   }
 
   revalidateOptionsPages(deleted.option_type_id);
@@ -545,14 +558,7 @@ export async function uploadOptionValueImage(
 
   if (updateError || !updated) {
     // 回滾剛上傳的新檔，避免孤兒檔；回滾失敗僅記錄
-    try {
-      await deleteImageFile(newPath);
-    } catch (e) {
-      console.error("回滾選項圖檔失敗", e);
-      Sentry.captureException(e, {
-        extra: { imagePath: newPath, optionValueId },
-      });
-    }
+    await bestEffortDeleteImages([newPath], { optionValueId });
     if (updateError) {
       return { ok: false, error: "圖片建檔失敗，請稍後再試" };
     }
@@ -561,14 +567,7 @@ export async function uploadOptionValueImage(
 
   // DB 已指向新檔，舊檔才能刪；失敗僅記錄（孤兒檔，不影響正確性）
   if (oldPath) {
-    try {
-      await deleteImageFile(oldPath);
-    } catch (e) {
-      console.error("刪除舊選項圖檔失敗", e);
-      Sentry.captureException(e, {
-        extra: { imagePath: oldPath, optionValueId },
-      });
-    }
+    await bestEffortDeleteImages([oldPath], { optionValueId });
   }
 
   revalidateOptionsPages(current.option_type_id);
@@ -618,14 +617,9 @@ export async function removeOptionValueImage(
     return { ok: false, error: RACE_MESSAGE };
   }
 
-  try {
-    await deleteImageFile(current.image_path);
-  } catch (e) {
-    console.error("刪除選項圖檔失敗", e);
-    Sentry.captureException(e, {
-      extra: { imagePath: current.image_path, optionValueId: parsed.data },
-    });
-  }
+  await bestEffortDeleteImages([current.image_path], {
+    optionValueId: parsed.data,
+  });
 
   revalidateOptionsPages(current.option_type_id);
   return { ok: true };
