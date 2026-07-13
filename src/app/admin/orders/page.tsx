@@ -16,8 +16,13 @@ const STATUS_COLORS: Record<OrderStatus, string> = {
 };
 
 const ALL_STATUSES: OrderStatus[] = [
-  "pending_payment", "paid", "in_production",
-  "shipped", "completed", "cancelled", "refunded",
+  "pending_payment",
+  "paid",
+  "in_production",
+  "shipped",
+  "completed",
+  "cancelled",
+  "refunded",
 ];
 
 const PAGE_SIZE = 20;
@@ -53,7 +58,7 @@ export default async function AdminOrdersPage({
     .select(
       `id, order_no, status, total_amount, recipient_name, created_at,
        member!inner(email)`,
-      { count: "exact" }
+      { count: "exact" },
     )
     .order(sort, { ascending: dir === "asc" })
     .range(from, to);
@@ -63,9 +68,7 @@ export default async function AdminOrdersPage({
   }
 
   if (q.trim()) {
-    query = query.or(
-      `order_no.ilike.%${q}%,recipient_name.ilike.%${q}%`
-    );
+    query = query.or(`order_no.ilike.%${q}%,recipient_name.ilike.%${q}%`);
   }
 
   const { data: orders, count } = await query;
@@ -73,7 +76,14 @@ export default async function AdminOrdersPage({
 
   function buildUrl(overrides: Record<string, string | undefined>) {
     const p = new URLSearchParams();
-    const merged = { status: status ?? "", q, sort, dir, page: String(page), ...overrides };
+    const merged = {
+      status: status ?? "",
+      q,
+      sort,
+      dir,
+      page: String(page),
+      ...overrides,
+    };
     for (const [k, v] of Object.entries(merged)) {
       if (v) p.set(k, v);
     }
@@ -81,9 +91,16 @@ export default async function AdminOrdersPage({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-6">訂單管理</h1>
+    <div>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-gray-900">訂單管理</h1>
+        <Link
+          href="/admin/orders/checkout"
+          className="rounded bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          建立訂單
+        </Link>
+      </div>
 
         {/* 狀態篩選 */}
         <div className="flex flex-wrap gap-2 mb-4">
@@ -136,17 +153,47 @@ export default async function AdminOrdersPage({
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">訂單號</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">客人</th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">狀態</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">
+                  訂單號
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">
+                  客人
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600">
+                  狀態
+                </th>
                 <th className="px-4 py-3 text-right font-medium text-gray-600">
-                  <Link href={buildUrl({ sort: "total_amount", dir: sort === "total_amount" && dir === "desc" ? "asc" : "desc", page: "1" })}>
-                    金額 {sort === "total_amount" ? (dir === "desc" ? "↓" : "↑") : ""}
+                  <Link
+                    href={buildUrl({
+                      sort: "total_amount",
+                      dir:
+                        sort === "total_amount" && dir === "desc"
+                          ? "asc"
+                          : "desc",
+                      page: "1",
+                    })}
+                  >
+                    金額{" "}
+                    {sort === "total_amount"
+                      ? dir === "desc"
+                        ? "↓"
+                        : "↑"
+                      : ""}
                   </Link>
                 </th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600">
-                  <Link href={buildUrl({ sort: "created_at", dir: sort === "created_at" && dir === "desc" ? "asc" : "desc", page: "1" })}>
-                    建立時間 {sort === "created_at" ? (dir === "desc" ? "↓" : "↑") : ""}
+                  <Link
+                    href={buildUrl({
+                      sort: "created_at",
+                      dir:
+                        sort === "created_at" && dir === "desc"
+                          ? "asc"
+                          : "desc",
+                      page: "1",
+                    })}
+                  >
+                    建立時間{" "}
+                    {sort === "created_at" ? (dir === "desc" ? "↓" : "↑") : ""}
                   </Link>
                 </th>
               </tr>
@@ -154,7 +201,10 @@ export default async function AdminOrdersPage({
             <tbody className="divide-y divide-gray-100">
               {orders?.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+                  <td
+                    colSpan={5}
+                    className="px-4 py-8 text-center text-gray-400"
+                  >
                     沒有符合的訂單
                   </td>
                 </tr>
@@ -164,7 +214,10 @@ export default async function AdminOrdersPage({
                 return (
                   <tr key={order.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-mono">
-                      <Link href={`/admin/orders/${order.id}`} className="text-blue-600 hover:underline">
+                      <Link
+                        href={`/admin/orders/${order.id}`}
+                        className="text-blue-600 hover:underline"
+                      >
                         {order.order_no}
                       </Link>
                     </td>
@@ -175,7 +228,9 @@ export default async function AdminOrdersPage({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status as OrderStatus]}`}>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status as OrderStatus]}`}
+                      >
                         {STATUS_LABELS[order.status as OrderStatus]}
                       </span>
                     </td>
@@ -196,7 +251,10 @@ export default async function AdminOrdersPage({
         {totalPages > 1 && (
           <div className="flex gap-2 mt-4 justify-center">
             {page > 1 && (
-              <Link href={buildUrl({ page: String(page - 1) })} className="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50">
+              <Link
+                href={buildUrl({ page: String(page - 1) })}
+                className="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50"
+              >
                 ← 上一頁
               </Link>
             )}
@@ -204,13 +262,15 @@ export default async function AdminOrdersPage({
               第 {page} / {totalPages} 頁
             </span>
             {page < totalPages && (
-              <Link href={buildUrl({ page: String(page + 1) })} className="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50">
+              <Link
+                href={buildUrl({ page: String(page + 1) })}
+                className="px-3 py-1.5 bg-white border border-gray-300 rounded text-sm hover:bg-gray-50"
+              >
                 下一頁 →
               </Link>
             )}
           </div>
         )}
-      </div>
     </div>
   );
 }
