@@ -36,3 +36,15 @@ export const STATUS_PILL_STYLES: Record<OrderStatus, string> = {
   cancelled: "bg-stone text-ash",
   refunded: "bg-destructive/10 text-destructive",
 };
+
+// admin 端用 Tailwind gray 系素色（與前台品牌 token 刻意分開，CLAUDE.md §0.2）；
+// 原本 admin/orders 列表與詳情頁各複製一份，T11 code review 收斂於此
+export const ADMIN_STATUS_COLORS: Record<OrderStatus, string> = {
+  pending_payment: "bg-amber-100 text-amber-800",
+  paid: "bg-blue-100 text-blue-800",
+  in_production: "bg-purple-100 text-purple-800",
+  shipped: "bg-indigo-100 text-indigo-800",
+  completed: "bg-green-100 text-green-800",
+  cancelled: "bg-gray-100 text-gray-700",
+  refunded: "bg-red-100 text-red-800",
+};

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import type { AdminActionResult } from "@/lib/admin/action-result";
 import { logPiiAccess } from "@/lib/pii/audit";
 import { sendOrderShippedNotification } from "@/lib/email/order-shipped-notification";
 import { sendOnce } from "@/lib/notification/send-once";
@@ -20,10 +21,8 @@ import type { SupportRequestStatus } from "@/lib/support/support-request";
 
 // transitionOrder 的 CAS 守衛（T66）代表狀態轉換現在可能因為別的流程（cron
 // 自動取消、ECPay webhook）搶先動過而失敗。這種情況不是操作失敗，是頁面顯示
-// 的狀態已經過期。注意：Server Action 拋出的 Error 在 production 會被
-// Next.js 遮罩成通用 digest 訊息，client 根本看不到內容——所以走結構化回傳
-// { ok, error }，client 端 notify 才顯示得出來；成功路徑照舊 revalidate。
-export type AdminActionResult = { ok: true } | { ok: false; error: string };
+// 的狀態已經過期。回傳契約（結構化 { ok, error }）的緣由見 action-result.ts。
+export type { AdminActionResult };
 
 const RACE_MESSAGE =
   "此訂單狀態已被其他流程異動，請重新整理頁面確認最新狀態後再操作";

@@ -2,22 +2,17 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
+import {
+  ADMIN_STATUS_COLORS,
+  STATUS_LABELS,
+  type OrderStatus,
+} from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
 import { OrderActions } from "./order-actions";
 import { CustomerInfo } from "./customer-info";
 import { SupportRequests } from "./support-requests";
-
-const STATUS_COLORS: Record<OrderStatus, string> = {
-  pending_payment: "bg-amber-100 text-amber-800",
-  paid: "bg-blue-100 text-blue-800",
-  in_production: "bg-purple-100 text-purple-800",
-  shipped: "bg-indigo-100 text-indigo-800",
-  completed: "bg-green-100 text-green-800",
-  cancelled: "bg-gray-100 text-gray-700",
-  refunded: "bg-red-100 text-red-800",
-};
+import { AdminPill } from "@/components/admin-pill";
 
 export default async function AdminOrderDetailPage({
   params,
@@ -90,11 +85,10 @@ export default async function AdminOrderDetailPage({
           <h1 className="text-xl font-semibold text-gray-900 font-mono">
             {order.order_no}
           </h1>
-          <span
-            className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status as OrderStatus]}`}
-          >
-            {STATUS_LABELS[order.status as OrderStatus]}
-          </span>
+          <AdminPill
+            label={STATUS_LABELS[order.status as OrderStatus]}
+            color={ADMIN_STATUS_COLORS[order.status as OrderStatus]}
+          />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
