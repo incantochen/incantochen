@@ -55,7 +55,7 @@ T13,M3,選項,款式選項對應＋可選值白名單,ProductOption／ProductOpt
 T14,M4,前台,商品目錄頁（多品類框架）,支援多類，先上戒指,T10,1.5,75.5,P0,未開始
 T54,M4,前台,🚀戒圍尺寸對照／量法說明頁,降低選錯尺寸的重做成本,T16,0.5,76,P1,未開始
 T44,M4,設計,🚀品牌視覺打磨,在 UI kit 基礎上提升質感,"T39,T16",2,78,P1,未開始
-T40,M4,前台,🚀RWD 與互動打磨,響應式、載入／過場／空狀態,"T16,T22",2.5,80.5,P0,未開始
+T40,M4,前台,🚀RWD 與互動打磨,"響應式、載入／過場／空狀態｜✅ 完成（2026-07-13，PR #58）：SiteHeader 新增 MobileNav（radix-ui Dialog 抽屜，COLLECTIONS/CUSTOM/ABOUT），修補手機版導覽連結完全消失且無替代入口的缺口；products/[slug]／cart／checkout／account/orders／account/orders/[id] 補上 loading.tsx 骨架（品牌風格 Skeleton 元件）；account layout 側邊選單與訂單列表改 RWD（手機單欄堆疊／卡片式）。","T16,T22",2.5,80.5,P0,完成
 T59,M4,SEO,◆ SEO 基礎,meta／OG 分享卡／sitemap／robots／商品結構化資料,T14,1,81.5,P1,未開始
 T60,M4,分析,🚀◆ 網站分析＋Cookie 同意,GA4／轉換追蹤＋Cookie 同意 banner,T14,0.5,82,P1,未開始
 T62,M4,前台,🚀◆ 客製錯誤頁＋圖片效能優化,404／500 頁、Next.js Image 最佳化、lazy load,T40,0.5,82.5,P1,未開始
