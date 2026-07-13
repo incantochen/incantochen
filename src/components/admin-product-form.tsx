@@ -9,7 +9,13 @@ import { ALL_PRODUCT_STATUSES, PRODUCT_STATUS_LABELS } from "@/lib/product/produ
 
 type Props =
   | { mode: "create" }
-  | { mode: "edit"; productId: string; initialValues: ProductFormValues }
+  | {
+      mode: "edit"
+      productId: string
+      initialValues: ProductFormValues
+      updatedAt: string
+      hasConfiguredOptions: boolean
+    }
 
 export function AdminProductForm(props: Props) {
   const router = useRouter()
@@ -39,7 +45,10 @@ export function AdminProductForm(props: Props) {
       const result =
         props.mode === "create"
           ? await createProduct(values)
-          : await updateProduct(props.productId, values, props.initialValues)
+          : await updateProduct(props.productId, values, {
+              values: props.initialValues,
+              updatedAt: props.updatedAt,
+            })
 
       if (!result.ok) {
         setError(result.error)
@@ -48,12 +57,13 @@ export function AdminProductForm(props: Props) {
       }
 
       router.push(`/admin/products/${result.id}?saved=1&affected=${result.affectedRows}`)
-      router.refresh()
     })
   }
 
   const inputClass =
     "border border-gray-300 rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-gray-400"
+
+  const categoryLocked = props.mode === "edit" && props.hasConfiguredOptions
 
   return (
     <form onSubmit={handleSubmit} className="max-w-lg space-y-4">
@@ -93,8 +103,9 @@ export function AdminProductForm(props: Props) {
         <label className="block text-xs text-gray-600 mb-1">品類</label>
         <select
           value={values.category}
+          disabled={categoryLocked}
           onChange={(e) => update("category", e.target.value as ProductFormValues["category"])}
-          className={inputClass}
+          className={`${inputClass} disabled:bg-gray-100 disabled:text-gray-400`}
         >
           {ALL_CATEGORIES.map((c) => (
             <option key={c} value={c}>
@@ -103,6 +114,11 @@ export function AdminProductForm(props: Props) {
           ))}
         </select>
         {fieldErrors.category && <p className="mt-1 text-xs text-red-600">{fieldErrors.category}</p>}
+        {categoryLocked && (
+          <p className="mt-1 text-xs text-gray-400">
+            已設定配置器選項，無法變更品類（避免與選項白名單脫鉤）。
+          </p>
+        )}
       </div>
 
       <div>
@@ -111,8 +127,8 @@ export function AdminProductForm(props: Props) {
           type="number"
           min={0}
           step={1}
-          value={values.base_price}
-          onChange={(e) => update("base_price", Number(e.target.value))}
+          value={Number.isNaN(values.base_price) ? "" : values.base_price}
+          onChange={(e) => update("base_price", e.target.valueAsNumber)}
           className={inputClass}
         />
         {fieldErrors.base_price && (

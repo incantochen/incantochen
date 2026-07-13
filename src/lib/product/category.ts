@@ -9,4 +9,7 @@ export const CATEGORY_LABELS: Record<CategoryCode, string> = {
   necklace: "項鍊",
 }
 
-export const ALL_CATEGORIES: CategoryCode[] = ["ring", "earring", "bracelet", "necklace"]
+// 由 CATEGORY_LABELS 的 key 衍生（而非另外手key陣列）：CATEGORY_LABELS 型別是
+// Record<CategoryCode, string>，少列舉一個 enum 值會直接編譯錯誤；衍生陣列可
+// 確保未來 DB 加新品類時，這裡不會因為「手動陣列忘記同步」而悄悄漏掉。
+export const ALL_CATEGORIES = Object.keys(CATEGORY_LABELS) as CategoryCode[]

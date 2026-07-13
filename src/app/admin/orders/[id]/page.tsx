@@ -2,23 +2,13 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
+import { STATUS_LABELS, ADMIN_STATUS_COLORS, type OrderStatus } from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
 import { StatusPill } from "@/components/status-pill";
 import { OrderActions } from "./order-actions";
 import { CustomerInfo } from "./customer-info";
 import { SupportRequests } from "./support-requests";
-
-const STATUS_COLORS: Record<OrderStatus, string> = {
-  pending_payment: "bg-amber-100 text-amber-800",
-  paid: "bg-blue-100 text-blue-800",
-  in_production: "bg-purple-100 text-purple-800",
-  shipped: "bg-indigo-100 text-indigo-800",
-  completed: "bg-green-100 text-green-800",
-  cancelled: "bg-gray-100 text-gray-700",
-  refunded: "bg-red-100 text-red-800",
-};
 
 export default async function AdminOrderDetailPage({
   params,
@@ -93,7 +83,7 @@ export default async function AdminOrderDetailPage({
           </h1>
           <StatusPill
             label={STATUS_LABELS[order.status as OrderStatus]}
-            colorClass={STATUS_COLORS[order.status as OrderStatus]}
+            colorClass={ADMIN_STATUS_COLORS[order.status as OrderStatus]}
           />
         </div>
 

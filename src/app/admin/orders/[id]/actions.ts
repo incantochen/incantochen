@@ -17,6 +17,7 @@ import {
   type AdminSupportCaseValues,
 } from "@/lib/support/schema";
 import type { SupportRequestStatus } from "@/lib/support/support-request";
+import { REFRESH_TO_RETRY_SUFFIX } from "@/lib/concurrency-message";
 
 // transitionOrder 的 CAS 守衛（T66）代表狀態轉換現在可能因為別的流程（cron
 // 自動取消、ECPay webhook）搶先動過而失敗。這種情況不是操作失敗，是頁面顯示
@@ -25,8 +26,7 @@ import type { SupportRequestStatus } from "@/lib/support/support-request";
 // { ok, error }，client 端 notify 才顯示得出來；成功路徑照舊 revalidate。
 export type AdminActionResult = { ok: true } | { ok: false; error: string };
 
-const RACE_MESSAGE =
-  "此訂單狀態已被其他流程異動，請重新整理頁面確認最新狀態後再操作";
+const RACE_MESSAGE = `此訂單狀態已被其他流程異動${REFRESH_TO_RETRY_SUFFIX}`;
 
 export async function changeStatus(
   orderId: string,
