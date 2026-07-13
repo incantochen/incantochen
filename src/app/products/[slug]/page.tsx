@@ -2,17 +2,8 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import { Gem } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
-import type { Database } from "@/types/database.types"
 import { ProductConfigurator, type ConfiguratorOption } from "@/components/product-configurator"
-
-type CategoryCode = Database["public"]["Enums"]["product_category"]
-
-const CATEGORY_LABELS: Record<CategoryCode, string> = {
-  ring: "戒指",
-  earring: "耳環",
-  bracelet: "手鍊",
-  necklace: "項鍊",
-}
+import { CATEGORY_LABELS } from "@/lib/product/category"
 
 const GALLERY_CAPTIONS = ["正面", "側面", "配戴情境", "生活情境"]
 

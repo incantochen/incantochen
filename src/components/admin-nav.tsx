@@ -14,11 +14,15 @@ const linkClass = (active: boolean) =>
 export function AdminNav() {
   const pathname = usePathname()
   const isOrdersActive = pathname.startsWith("/admin/orders")
+  const isProductsActive = pathname.startsWith("/admin/products")
 
   return (
     <nav className="flex flex-col gap-1">
       <Link href="/admin/orders" className={linkClass(isOrdersActive)}>
         訂單管理
+      </Link>
+      <Link href="/admin/products" className={linkClass(isProductsActive)}>
+        商品管理
       </Link>
       <form action={signOut} className="mt-4 px-3">
         <button
