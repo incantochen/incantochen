@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { getProductImagePublicUrl } from "@/lib/storage/product-images";
@@ -13,12 +14,19 @@ export default async function AdminProductImagesPage({
   await requireAdmin();
 
   const { id } = await params;
+  // 非 uuid 的網址（舊書籤、手改）直接 404，不讓 uuid cast 錯誤變 500
+  if (!z.string().uuid().safeParse(id).success) notFound();
+
   const supabase = createServiceRoleClient();
 
+  // 商品＋圖片一次 embedded 查詢（省一趟往返）；sort_order 加 id 當第二排序鍵，
+  // 順序完全確定
   const { data: product, error: productError } = await supabase
     .from("product")
-    .select("id, name, slug")
+    .select("id, name, slug, product_image(id, storage_path, alt, sort_order)")
     .eq("id", id)
+    .order("sort_order", { ascending: true, referencedTable: "product_image" })
+    .order("id", { ascending: true, referencedTable: "product_image" })
     .maybeSingle();
 
   if (productError) {
@@ -26,18 +34,8 @@ export default async function AdminProductImagesPage({
   }
   if (!product) notFound();
 
-  const { data: images, error: imagesError } = await supabase
-    .from("product_image")
-    .select("id, storage_path, alt, sort_order")
-    .eq("product_id", id)
-    .order("sort_order", { ascending: true });
-
-  if (imagesError) {
-    throw new Error(`查詢商品圖片失敗：${imagesError.message}`);
-  }
-
   // 公開 URL 在伺服器端組好再下傳，client 不需要知道 Storage 路徑規則
-  const items = (images ?? []).map((img) => ({
+  const items = product.product_image.map((img) => ({
     id: img.id,
     alt: img.alt,
     publicUrl: getProductImagePublicUrl(img.storage_path),

@@ -22,6 +22,7 @@ const altSchema = z.object({
 
 const moveSchema = z.object({
   imageId: z.string().uuid(),
+  productId: z.string().uuid(),
   direction: z.enum(["up", "down"]),
 });
 
@@ -55,32 +56,18 @@ export async function uploadImage(
 
   const supabase = createServiceRoleClient();
 
-  // 兩個查詢互不依賴，平行送出省一趟往返：
-  // ① 確認商品存在（也擋掉對不存在 id 亂丟檔案產生的孤兒目錄）
-  // ② sort_order 排最後：現有最大值 +1；沒有任何圖片時視 max 為 -1，首張圖＝0
-  const [
-    { data: product, error: productError },
-    { data: last, error: lastError },
-  ] = await Promise.all([
-    supabase.from("product").select("id").eq("id", productId).maybeSingle(),
-    supabase
-      .from("product_image")
-      .select("sort_order")
-      .eq("product_id", productId)
-      .order("sort_order", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
+  // 確認商品存在（也擋掉對不存在 id 亂丟檔案產生的孤兒目錄）
+  const { data: product, error: productError } = await supabase
+    .from("product")
+    .select("id")
+    .eq("id", productId)
+    .maybeSingle();
   if (productError) {
     return { ok: false, error: "查詢商品失敗，請稍後再試" };
   }
   if (!product) {
     return { ok: false, error: "找不到商品" };
   }
-  if (lastError) {
-    return { ok: false, error: "查詢圖片排序失敗，請稍後再試" };
-  }
-  const nextSortOrder = (last?.sort_order ?? -1) + 1;
 
   let storagePath: string;
   try {
@@ -92,10 +79,11 @@ export async function uploadImage(
     };
   }
 
-  const { error: insertError } = await supabase.from("product_image").insert({
-    product_id: productId,
-    storage_path: storagePath,
-    sort_order: nextSortOrder,
+  // 取號＋插入走 insert_product_image() RPC（migration 0013）：max+1 在函式內
+  // 原子執行，並發搶號由 unique 約束攔下重試——應用層不再 check-then-act
+  const { error: insertError } = await supabase.rpc("insert_product_image", {
+    p_product_id: productId,
+    p_storage_path: storagePath,
   });
 
   if (insertError) {
@@ -152,83 +140,36 @@ export async function deleteImage(imageId: string): Promise<AdminActionResult> {
 
 export async function moveImage(
   imageId: string,
+  productId: string,
   direction: "up" | "down",
 ): Promise<AdminActionResult> {
   await requireAdmin();
 
-  const parsed = moveSchema.safeParse({ imageId, direction });
+  const parsed = moveSchema.safeParse({ imageId, productId, direction });
   if (!parsed.success) {
     return { ok: false, error: "參數格式不正確" };
   }
 
   const supabase = createServiceRoleClient();
-  const { data: target, error: targetError } = await supabase
-    .from("product_image")
-    .select("id, product_id, sort_order")
-    .eq("id", parsed.data.imageId)
-    .maybeSingle();
 
-  if (targetError) {
-    return { ok: false, error: "查詢圖片失敗，請稍後再試" };
+  // 鄰居選取＋交換全部收進 move_product_image() RPC（migration 0013）：
+  // 單一交易＋row lock，並發交錯與「部分成功留下重複 sort_order」都在 DB 層消滅
+  const { data: moveResult, error: moveError } = await supabase.rpc(
+    "move_product_image",
+    { p_image_id: parsed.data.imageId, p_direction: parsed.data.direction },
+  );
+
+  if (moveError) {
+    // 含極端情況的鎖競爭（deadlock 中止），重試即可恢復
+    return { ok: false, error: "調整排序失敗，請重新整理後再試" };
   }
-  if (!target) {
+  if (moveResult === "not_found") {
     return { ok: false, error: "找不到圖片，可能已被刪除" };
   }
-
-  // sort_order 不保證連續（0、3、8、15 皆合法），排序只看相對大小：
-  // 找方向上「最接近」的相鄰一筆，與之交換 sort_order。只更新這兩筆，
-  // 禁止全量 reindex（更新過多 row、放大 race 風險）。
-  const ascending = parsed.data.direction === "down";
-  const neighborQuery = supabase
-    .from("product_image")
-    .select("id, sort_order")
-    .eq("product_id", target.product_id);
-  const { data: neighbor, error: neighborError } = await (
-    ascending
-      ? neighborQuery.gt("sort_order", target.sort_order)
-      : neighborQuery.lt("sort_order", target.sort_order)
-  )
-    .order("sort_order", { ascending })
-    .limit(1)
-    .maybeSingle();
-
-  if (neighborError) {
-    return { ok: false, error: "查詢相鄰圖片失敗，請稍後再試" };
+  if (moveResult === "moved") {
+    revalidateImagesPage(parsed.data.productId);
   }
-  if (!neighbor) {
-    return { ok: true }; // 已在最前／最後，無事可做
-  }
-
-  const { error: updateTargetError } = await supabase
-    .from("product_image")
-    .update({ sort_order: neighbor.sort_order })
-    .eq("id", target.id);
-  if (updateTargetError) {
-    return { ok: false, error: "調整排序失敗，請稍後再試" };
-  }
-
-  const { error: updateNeighborError } = await supabase
-    .from("product_image")
-    .update({ sort_order: target.sort_order })
-    .eq("id", neighbor.id);
-  if (updateNeighborError) {
-    // 第一筆已寫入、第二筆失敗＝兩張圖暫時同值。best-effort 還原第一筆，
-    // 避免留下重複 sort_order（還原也失敗就只記錄——單管理員場景可重新操作）
-    const { error: revertError } = await supabase
-      .from("product_image")
-      .update({ sort_order: target.sort_order })
-      .eq("id", target.id);
-    if (revertError) {
-      console.error("排序交換還原失敗", revertError);
-      Sentry.captureException(new Error("moveImage 交換還原失敗"), {
-        extra: { targetId: target.id, neighborId: neighbor.id, revertError },
-      });
-    }
-    return { ok: false, error: "調整排序失敗，請重新整理確認順序" };
-  }
-
-  revalidateImagesPage(target.product_id);
-  return { ok: true };
+  return { ok: true }; // 'edge'＝已在最前／最後，無事可做
 }
 
 export async function updateAlt(

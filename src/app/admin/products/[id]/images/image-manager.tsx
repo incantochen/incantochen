@@ -1,8 +1,9 @@
 "use client";
 
 import Image from "next/image";
-import { useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import type { AdminActionResult } from "@/lib/admin/action-result";
+import { AdminNotifyBanner, useAdminNotify } from "@/components/admin-notify";
 import {
   ALLOWED_IMAGE_MIME_TYPES,
   validateImageFile,
@@ -23,27 +24,8 @@ export function ImageManager({
   images: ImageItem[];
 }) {
   const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const { message, notify } = useAdminNotify();
   const [altDrafts, setAltDrafts] = useState<Record<string, string>>({});
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function notify(msg: string, isError = false) {
-    if (isError) {
-      setError(msg);
-      setSuccess(null);
-    } else {
-      setSuccess(msg);
-      setError(null);
-    }
-    // 取消前一則的自動消失計時，避免舊計時器提早清掉新訊息
-    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
-    dismissTimerRef.current = setTimeout(() => {
-      setError(null);
-      setSuccess(null);
-    }, 4000);
-  }
 
   // 四個操作共用同一套「呼叫 action → !ok 顯示錯誤 → 成功顯示訊息/後續」骨架
   function runAction(
@@ -83,9 +65,6 @@ export function ImageManager({
     runAction(() => uploadImage(formData), {
       successMsg: "圖片已上傳",
       fallbackError: "上傳失敗",
-      onSuccess: () => {
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      },
     });
   }
 
@@ -99,7 +78,7 @@ export function ImageManager({
 
   function handleMove(imageId: string, direction: "up" | "down") {
     // 排序結果畫面立即可見，成功不另跳訊息
-    runAction(() => moveImage(imageId, direction), {
+    runAction(() => moveImage(imageId, productId, direction), {
       fallbackError: "調整排序失敗",
     });
   }
@@ -121,16 +100,7 @@ export function ImageManager({
 
   return (
     <div className="space-y-4">
-      {error && (
-        <div className="rounded border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-      {success && (
-        <div className="rounded border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-700">
-          {success}
-        </div>
-      )}
+      <AdminNotifyBanner message={message} />
 
       <div className="rounded-lg border border-gray-200 bg-white p-4">
         <label className="block text-sm font-medium text-gray-700">
@@ -140,12 +110,13 @@ export function ImageManager({
           </span>
         </label>
         <input
-          ref={fileInputRef}
           type="file"
           accept={ALLOWED_IMAGE_MIME_TYPES.join(",")}
           disabled={isPending}
           onChange={(e) => {
             const file = e.target.files?.[0];
+            // 立即清空 value：上傳失敗後重選同一個檔案才會再觸發 change
+            e.target.value = "";
             if (file) handleUpload(file);
           }}
           className="mt-2 block text-sm text-gray-600 file:mr-3 file:rounded file:border-0 file:bg-gray-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-gray-800 disabled:opacity-50"

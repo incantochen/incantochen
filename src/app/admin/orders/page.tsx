@@ -1,19 +1,14 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { STATUS_LABELS, type OrderStatus } from "@/lib/order/order-status";
+import {
+  ADMIN_STATUS_COLORS,
+  STATUS_LABELS,
+  type OrderStatus,
+} from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskEmail, maskName } from "@/lib/pii/mask";
-
-const STATUS_COLORS: Record<OrderStatus, string> = {
-  pending_payment: "bg-amber-100 text-amber-800",
-  paid: "bg-blue-100 text-blue-800",
-  in_production: "bg-purple-100 text-purple-800",
-  shipped: "bg-indigo-100 text-indigo-800",
-  completed: "bg-green-100 text-green-800",
-  cancelled: "bg-gray-100 text-gray-700",
-  refunded: "bg-red-100 text-red-800",
-};
+import { AdminPill } from "@/components/admin-pill";
 
 const ALL_STATUSES: OrderStatus[] = [
   "pending_payment",
@@ -228,11 +223,10 @@ export default async function AdminOrdersPage({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status as OrderStatus]}`}
-                      >
-                        {STATUS_LABELS[order.status as OrderStatus]}
-                      </span>
+                      <AdminPill
+                        label={STATUS_LABELS[order.status as OrderStatus]}
+                        color={ADMIN_STATUS_COLORS[order.status as OrderStatus]}
+                      />
                     </td>
                     <td className="px-4 py-3 text-right">
                       {formatCurrency(Number(order.total_amount))}

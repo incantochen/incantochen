@@ -2,16 +2,8 @@ import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { CATEGORY_LABELS } from "@/lib/product/category-labels";
-import type { Database } from "@/types/database.types";
-
-type ProductStatus = Database["public"]["Enums"]["product_status"];
-
-// label 與 badge 色綁在同一筆，新增狀態時不會只改到其中一張表
-const STATUS_META: Record<ProductStatus, { label: string; color: string }> = {
-  draft: { label: "草稿", color: "bg-amber-100 text-amber-800" },
-  active: { label: "上架中", color: "bg-green-100 text-green-800" },
-  archived: { label: "已封存", color: "bg-gray-100 text-gray-700" },
-};
+import { PRODUCT_STATUS_META } from "@/lib/product/product-status";
+import { AdminPill } from "@/components/admin-pill";
 
 export default async function AdminProductsPage() {
   await requireAdmin();
@@ -86,11 +78,7 @@ export default async function AdminProductsPage() {
                   {CATEGORY_LABELS[product.category]}
                 </td>
                 <td className="px-4 py-3">
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_META[product.status].color}`}
-                  >
-                    {STATUS_META[product.status].label}
-                  </span>
+                  <AdminPill {...PRODUCT_STATUS_META[product.status]} />
                 </td>
                 <td className="px-4 py-3 text-right">{product.imageCount}</td>
                 <td className="px-4 py-3">

@@ -37,3 +37,38 @@ export function validateImageFile(
   }
   return { ok: true, ext };
 }
+
+function ascii(bytes: Uint8Array, start: number, end: number): string {
+  return String.fromCharCode(...bytes.subarray(start, end));
+}
+
+// 由檔案開頭 magic bytes 判定實際圖片格式——瀏覽器宣告的 file.type 只看副檔名，
+// 偽裝檔（文字改名 .jpg）三層 mime 檢查都攔不到，內容檢查才是真正的第二道防線
+export function detectImageMime(bytes: Uint8Array): string | null {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (
+    bytes.length >= 12 &&
+    ascii(bytes, 0, 4) === "RIFF" &&
+    ascii(bytes, 8, 12) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  if (
+    bytes.length >= 12 &&
+    ascii(bytes, 4, 8) === "ftyp" &&
+    ["avif", "avis"].includes(ascii(bytes, 8, 12))
+  ) {
+    return "image/avif";
+  }
+  return null;
+}

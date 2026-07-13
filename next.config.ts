@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 import { env } from "./src/lib/env";
+import { MAX_IMAGE_FILE_SIZE } from "./src/lib/storage/constants";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -42,8 +43,9 @@ const nextConfig: NextConfig = {
   },
   experimental: {
     serverActions: {
-      // Server Action body 預設上限 1MB；圖片上傳（T11，單檔上限 5MB）需要放寬
-      bodySizeLimit: "6mb",
+      // Server Action body 預設上限 1MB；圖片上傳需要放寬——直接由檔案上限
+      // 推導（+1MB 給 FormData 開銷），日後調 MAX_IMAGE_FILE_SIZE 不會漏改這裡
+      bodySizeLimit: `${Math.ceil(MAX_IMAGE_FILE_SIZE / (1024 * 1024)) + 1}mb`,
     },
   },
   async headers() {

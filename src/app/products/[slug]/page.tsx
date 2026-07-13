@@ -18,7 +18,7 @@ export default async function ProductDetailPage({
   const { slug } = await params;
   const supabase = await createClient();
 
-  const { data: product } = await supabase
+  const { data: product, error } = await supabase
     .from("product")
     .select(
       `
@@ -35,8 +35,13 @@ export default async function ProductDetailPage({
     )
     .eq("slug", slug)
     .eq("status", "active")
-    .single();
+    .maybeSingle();
 
+  // 查詢失敗 ≠ 查無商品（CLAUDE.md §6）：DB 暫時性故障要拋錯，
+  // 不能讓存在的商品被誤判成 404
+  if (error) {
+    throw new Error(`查詢商品失敗：${error.message}`);
+  }
   if (!product) {
     notFound();
   }
