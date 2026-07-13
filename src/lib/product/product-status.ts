@@ -1,19 +1,20 @@
-import type { Database } from "@/types/database.types"
+import type { Database } from "@/types/database.types";
 
-export type ProductStatus = Database["public"]["Enums"]["product_status"]
+export type ProductStatus = Database["public"]["Enums"]["product_status"];
 
-export const PRODUCT_STATUS_LABELS: Record<ProductStatus, string> = {
-  draft: "草稿",
-  active: "上架中",
-  archived: "已封存",
-}
+// label 與 admin badge 色綁同一筆（比照 order-status.ts 的集中放法），
+// 新增狀態時不會只改到其中一張表
+export const PRODUCT_STATUS_META: Record<
+  ProductStatus,
+  { label: string; color: string }
+> = {
+  draft: { label: "草稿", color: "bg-amber-100 text-amber-800" },
+  active: { label: "上架中", color: "bg-green-100 text-green-800" },
+  archived: { label: "已封存", color: "bg-gray-100 text-gray-700" },
+};
 
-// 由 PRODUCT_STATUS_LABELS 的 key 衍生，理由同 category.ts 的 ALL_CATEGORIES。
-export const ALL_PRODUCT_STATUSES = Object.keys(PRODUCT_STATUS_LABELS) as ProductStatus[]
-
-// 後台採 Tailwind gray 素色（與前台品牌 token 刻意分開，CLAUDE.md §後台）
-export const PRODUCT_STATUS_PILL_STYLES: Record<ProductStatus, string> = {
-  draft: "bg-amber-100 text-amber-800",
-  active: "bg-green-100 text-green-800",
-  archived: "bg-gray-100 text-gray-700",
-}
+// 由 PRODUCT_STATUS_META 的 key 衍生（而非另外手key陣列）：PRODUCT_STATUS_META
+// 型別是 Record<ProductStatus, ...>，少列舉一個 enum 值會直接編譯錯誤。
+export const ALL_PRODUCT_STATUSES = Object.keys(
+  PRODUCT_STATUS_META,
+) as ProductStatus[];

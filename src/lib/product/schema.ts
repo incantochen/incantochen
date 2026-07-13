@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { ALL_CATEGORIES } from "@/lib/product/category"
+import { ALL_CATEGORIES } from "@/lib/product/category-labels"
 import { ALL_PRODUCT_STATUSES } from "@/lib/product/product-status"
 
 const SLUG_FORMAT = /^[a-z0-9]+(-[a-z0-9]+)*$/

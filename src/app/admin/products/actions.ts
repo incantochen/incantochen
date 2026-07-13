@@ -5,7 +5,7 @@ import { requireAdmin } from "@/lib/auth/require-admin"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { flattenFieldErrors } from "@/lib/zod/flatten-field-errors"
 import { REFRESH_TO_RETRY_SUFFIX } from "@/lib/concurrency-message"
-import { PRODUCT_STATUS_LABELS } from "@/lib/product/product-status"
+import { PRODUCT_STATUS_META } from "@/lib/product/product-status"
 import {
   productFormSchema,
   productUpdateSchema,
@@ -33,7 +33,7 @@ async function buildSlugConflictError(
     .maybeSingle()
 
   const error = conflict
-    ? `此網址代稱（slug）已被「${conflict.name}」使用（狀態：${PRODUCT_STATUS_LABELS[conflict.status]}），請換一個`
+    ? `此網址代稱（slug）已被「${conflict.name}」使用（狀態：${PRODUCT_STATUS_META[conflict.status].label}），請換一個`
     : "此網址代稱（slug）已被使用，請換一個"
 
   return { ok: false, error, fieldErrors: { slug: error } }

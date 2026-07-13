@@ -38,9 +38,8 @@ export const STATUS_PILL_STYLES: Record<OrderStatus, string> = {
   refunded: "bg-destructive/10 text-destructive",
 };
 
-// 後台專用（Tailwind gray 素色，與前台品牌 token 刻意分開，CLAUDE.md §後台）；
-// 原本 admin/orders/page.tsx 與 admin/orders/[id]/page.tsx 各自複製一份，
-// 抽到這裡單一出處。
+// admin 端用 Tailwind gray 系素色（與前台品牌 token 刻意分開，CLAUDE.md §0.2）；
+// 原本 admin/orders 列表與詳情頁各複製一份，T11 code review 收斂於此
 export const ADMIN_STATUS_COLORS: Record<OrderStatus, string> = {
   pending_payment: "bg-amber-100 text-amber-800",
   paid: "bg-blue-100 text-blue-800",

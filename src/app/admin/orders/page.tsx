@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { STATUS_LABELS, ADMIN_STATUS_COLORS, type OrderStatus } from "@/lib/order/order-status";
+import {
+  ADMIN_STATUS_COLORS,
+  STATUS_LABELS,
+  type OrderStatus,
+} from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { maskEmail, maskName } from "@/lib/pii/mask";
 import { AdminFilterPills } from "@/components/admin-filter-pills";
-import { StatusPill } from "@/components/status-pill";
+import { AdminPill } from "@/components/admin-pill";
 
 const ALL_STATUSES: OrderStatus[] = [
   "pending_payment",
@@ -219,9 +223,9 @@ export default async function AdminOrdersPage({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <StatusPill
+                      <AdminPill
                         label={STATUS_LABELS[order.status as OrderStatus]}
-                        colorClass={ADMIN_STATUS_COLORS[order.status as OrderStatus]}
+                        color={ADMIN_STATUS_COLORS[order.status as OrderStatus]}
                       />
                     </td>
                     <td className="px-4 py-3 text-right">

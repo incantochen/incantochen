@@ -4,8 +4,8 @@ import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { createProduct, updateProduct } from "@/app/admin/products/actions"
 import type { ProductFormValues } from "@/lib/product/schema"
-import { ALL_CATEGORIES, CATEGORY_LABELS } from "@/lib/product/category"
-import { ALL_PRODUCT_STATUSES, PRODUCT_STATUS_LABELS } from "@/lib/product/product-status"
+import { ALL_CATEGORIES, CATEGORY_LABELS } from "@/lib/product/category-labels"
+import { ALL_PRODUCT_STATUSES, PRODUCT_STATUS_META } from "@/lib/product/product-status"
 
 type Props =
   | { mode: "create" }
@@ -145,7 +145,7 @@ export function AdminProductForm(props: Props) {
         >
           {ALL_PRODUCT_STATUSES.map((s) => (
             <option key={s} value={s}>
-              {PRODUCT_STATUS_LABELS[s]}
+              {PRODUCT_STATUS_META[s].label}
             </option>
           ))}
         </select>

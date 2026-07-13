@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { AdminNotifyBanner, useAdminNotify } from "@/components/admin-notify";
 import {
   VALID_TRANSITIONS,
   STATUS_LABELS,
@@ -28,8 +29,7 @@ export function OrderActions({
   currentTrackingNo: string | null;
 }) {
   const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const { message, notify } = useAdminNotify();
 
   // 出貨表單狀態
   const [shipMethod, setShipMethod] = useState<"delivery" | "pickup">("delivery");
@@ -58,12 +58,6 @@ export function OrderActions({
 
   const nextStatuses = VALID_TRANSITIONS[currentStatus].filter((s) => s !== "shipped");
   const canShip = VALID_TRANSITIONS[currentStatus].includes("shipped");
-
-  function notify(msg: string, isError = false) {
-    if (isError) { setError(msg); setSuccess(null); }
-    else { setSuccess(msg); setError(null); }
-    setTimeout(() => { setError(null); setSuccess(null); }, 4000);
-  }
 
   function handleChangeStatus(to: OrderStatus) {
     startTransition(async () => {
@@ -144,8 +138,7 @@ export function OrderActions({
   return (
     <div className="space-y-6">
       {/* 訊息 */}
-      {success && <div className="p-3 bg-green-50 border border-green-200 text-green-800 rounded text-sm">{success}</div>}
-      {error && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded text-sm">{error}</div>}
+      <AdminNotifyBanner message={message} />
 
       {/* 正常狀態轉換 */}
       {nextStatuses.length > 0 && (
