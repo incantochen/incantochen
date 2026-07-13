@@ -1,6 +1,6 @@
 import Link from "next/link"
-import { Gem } from "lucide-react"
 import { formatCurrency } from "@/lib/utils"
+import { PlaceholderImage } from "@/components/placeholder-image"
 
 export type ProductCardData = {
   slug: string
@@ -17,12 +17,11 @@ export function ProductCard({ product }: { product: ProductCardData }) {
       href={`/products/${product.slug}`}
       className="group overflow-hidden rounded-lg border border-border bg-white transition hover:-translate-y-1 hover:shadow-[0_22px_44px_-28px_rgba(6,59,47,0.5)]"
     >
-      <div className="relative flex aspect-square items-center justify-center border-b border-border bg-cloud">
-        <Gem className="size-10 text-ash/60" strokeWidth={1.2} />
-        <span className="absolute bottom-2 left-0 right-0 text-center text-[10.5px] tracking-[0.14em] text-ash uppercase">
-          配戴情境圖
-        </span>
-      </div>
+      <PlaceholderImage
+        className="aspect-square border-b border-border"
+        iconSize="size-10"
+        caption="配戴情境圖"
+      />
       <div className="px-4 py-4">
         {product.meta && (
           <div className="mb-1.5 flex items-center gap-2">

@@ -3,11 +3,16 @@ import { notFound } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/product/category-labels"
 import type { CategoryCode } from "@/lib/product/category-labels"
+import { ALL_SORT_KEYS, type SortKey } from "@/lib/product/collection-sort"
+import { GEM_COLOR_OPTION_CODE, METAL_COLOR_OPTION_CODE } from "@/lib/product/option-type-codes"
 import { ProductCard, type ProductCardData } from "@/components/product-card"
 import { CollectionSortSelect } from "@/components/collection-sort-select"
+import { Breadcrumb } from "@/components/breadcrumb"
 
-type SortKey = "featured" | "price_asc" | "price_desc" | "newest"
-const VALID_SORT_KEYS: SortKey[] = ["featured", "price_asc", "price_desc", "newest"]
+// 每個品類最多先撈這麼多筆；MVP 目錄規模遠小於此，真正的分頁/無限捲動留給
+// 目錄成長到需要時再做（CLAUDE.md：不為假設中的規模預先設計），這裡只是
+// 避免查詢完全不設上限。
+const MAX_PRODUCTS_PER_CATEGORY = 60
 
 export default async function CollectionPage({
   params,
@@ -23,7 +28,8 @@ export default async function CollectionPage({
   const categoryCode = category as CategoryCode
 
   const { sort } = await searchParams
-  const sortKey: SortKey = VALID_SORT_KEYS.includes(sort as SortKey) ? (sort as SortKey) : "featured"
+  const sortKey: SortKey =
+    typeof sort === "string" && ALL_SORT_KEYS.includes(sort as SortKey) ? (sort as SortKey) : "featured"
 
   const supabase = await createClient()
 
@@ -35,7 +41,7 @@ export default async function CollectionPage({
       product_option (
         option_type ( code ),
         product_option_value (
-          is_default,
+          is_default, price_delta,
           option_value ( label, swatch_hex )
         )
       )
@@ -43,6 +49,7 @@ export default async function CollectionPage({
     )
     .eq("status", "active")
     .eq("category", categoryCode)
+    .limit(MAX_PRODUCTS_PER_CATEGORY)
 
   if (sortKey === "price_asc") {
     productQuery = productQuery.order("base_price", { ascending: true })
@@ -53,48 +60,75 @@ export default async function CollectionPage({
     productQuery = productQuery.order("created_at", { ascending: false })
   }
 
-  const [{ data: products, error }, { data: activeProducts, error: countsError }] = await Promise.all([
+  // 品類 tab 是否可點：後台上架該品類任一商品後自動點亮。用每品類各一次
+  // .limit(1) 存在性探測（命中 (category,status) 複合索引即可回答，不需要
+  // 撈出全站所有上架商品的 category 欄位再在 JS 端數）。
+  const [{ data: products, error }, ...categoryChecks] = await Promise.all([
     productQuery,
-    supabase.from("product").select("category").eq("status", "active"),
+    ...ALL_CATEGORIES.map((c) =>
+      supabase.from("product").select("id").eq("status", "active").eq("category", c).limit(1),
+    ),
   ])
 
   if (error) {
     throw new Error(`載入商品列表失敗：${error.message}`)
   }
-  if (countsError) {
-    throw new Error(`載入品類狀態失敗：${countsError.message}`)
-  }
 
-  // 品類 tab 是否可點：後台上架該品類任一商品後自動點亮，不需另外維護開關。
-  const categoriesWithProducts = new Set((activeProducts ?? []).map((p) => p.category))
+  const categoriesWithProducts = new Set<CategoryCode>()
+  ALL_CATEGORIES.forEach((c, i) => {
+    const check = categoryChecks[i]
+    if (check?.error) {
+      throw new Error(`載入品類狀態失敗：${check.error.message}`)
+    }
+    if ((check?.data?.length ?? 0) > 0) {
+      categoriesWithProducts.add(c)
+    }
+  })
 
   const cards: ProductCardData[] = products.map((product) => {
-    const gemOption = product.product_option.find((o) => o.option_type.code === "gem_color")
-    const metalOption = product.product_option.find((o) => o.option_type.code === "metal_color")
-    const gemDefault = gemOption?.product_option_value.find((v) => v.is_default)?.option_value
-    const metalDefault = metalOption?.product_option_value.find((v) => v.is_default)?.option_value
+    const gemOption = product.product_option.find((o) => o.option_type.code === GEM_COLOR_OPTION_CODE)
+    const metalOption = product.product_option.find(
+      (o) => o.option_type.code === METAL_COLOR_OPTION_CODE,
+    )
+    const gemDefault = (
+      gemOption?.product_option_value.find((v) => v.is_default) ?? gemOption?.product_option_value[0]
+    )?.option_value
+    const metalDefault = (
+      metalOption?.product_option_value.find((v) => v.is_default) ??
+      metalOption?.product_option_value[0]
+    )?.option_value
     const metaParts = [metalDefault?.label, gemDefault?.label].filter((v): v is string => Boolean(v))
+
+    // 「起」價＝底價＋每組選項「預設值」的加價總和，比照 product-configurator.tsx
+    // 對 PDP 預設組合的算法——只用 base_price 的話，一旦某必選項的預設值本身
+    // 帶加價，目錄頁顯示的價格會比 PDP／結帳實際金額低。
+    const defaultPriceDeltaSum = product.product_option.reduce((sum, po) => {
+      const def = po.product_option_value.find((v) => v.is_default) ?? po.product_option_value[0]
+      return sum + (def?.price_delta ?? 0)
+    }, 0)
 
     return {
       slug: product.slug,
       name: product.name,
-      basePrice: Number(product.base_price),
+      basePrice: Number(product.base_price) + Number(defaultPriceDeltaSum),
       meta: metaParts.length > 0 ? metaParts.join(" · ") : null,
       gemColor: gemDefault?.swatch_hex ?? null,
     }
   })
 
+  function buildCategoryHref(c: CategoryCode) {
+    return sortKey !== "featured" ? `/collections/${c}?sort=${sortKey}` : `/collections/${c}`
+  }
+
   return (
     <div className="mx-auto max-w-[1240px] px-6 py-8">
-      <nav className="text-xs tracking-[0.1em] text-ash uppercase">
-        <Link href="/" className="hover:text-primary">
-          首頁
-        </Link>
-        {" / "}
-        <span>商品</span>
-        {" / "}
-        <span>{CATEGORY_LABELS[categoryCode]}</span>
-      </nav>
+      <Breadcrumb
+        items={[
+          { label: "首頁", href: "/" },
+          { label: "商品" },
+          { label: CATEGORY_LABELS[categoryCode] },
+        ]}
+      />
 
       <div className="mt-6">
         <div className="eyebrow">COLLECTIONS</div>
@@ -109,11 +143,12 @@ export default async function CollectionPage({
           {ALL_CATEGORIES.map((c) => {
             const isActive = c === categoryCode
             const hasProducts = categoriesWithProducts.has(c)
+            const label = hasProducts ? CATEGORY_LABELS[c] : `${CATEGORY_LABELS[c]}（即將推出）`
 
             if (!hasProducts && !isActive) {
               return (
                 <span key={c} className="text-xs tracking-[0.22em] text-stone uppercase">
-                  {CATEGORY_LABELS[c]}（即將推出）
+                  {label}
                 </span>
               )
             }
@@ -121,14 +156,15 @@ export default async function CollectionPage({
             return (
               <Link
                 key={c}
-                href={`/collections/${c}`}
+                href={buildCategoryHref(c)}
+                aria-current={isActive ? "page" : undefined}
                 className={
                   isActive
                     ? "border-b-2 border-secondary-400 pb-1 text-xs tracking-[0.22em] text-primary uppercase"
                     : "pb-1 text-xs tracking-[0.22em] text-ink/80 uppercase hover:text-secondary-400"
                 }
               >
-                {CATEGORY_LABELS[c]}
+                {label}
               </Link>
             )
           })}
