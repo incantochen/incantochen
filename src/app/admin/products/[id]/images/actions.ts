@@ -8,7 +8,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import type { AdminActionResult } from "@/lib/admin/action-result";
 import {
   uploadProductImage,
-  deleteProductImageFile,
+  deleteImageFile,
 } from "@/lib/storage/product-images";
 
 const uploadSchema = z.object({
@@ -89,7 +89,7 @@ export async function uploadImage(
   if (insertError) {
     // 回滾已上傳的檔案，避免孤兒檔；回滾失敗僅記錄，不再往外拋
     try {
-      await deleteProductImageFile(storagePath);
+      await deleteImageFile(storagePath);
     } catch (e) {
       console.error("回滾 Storage 圖片失敗", e);
       Sentry.captureException(e, { extra: { storagePath, productId } });
@@ -126,7 +126,7 @@ export async function deleteImage(imageId: string): Promise<AdminActionResult> {
 
   // DB 為準：Storage 刪檔失敗僅記錄，不擋使用者
   try {
-    await deleteProductImageFile(deleted.storage_path);
+    await deleteImageFile(deleted.storage_path);
   } catch (e) {
     console.error("刪除 Storage 圖片失敗", e);
     Sentry.captureException(e, {

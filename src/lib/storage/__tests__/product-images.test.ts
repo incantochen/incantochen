@@ -91,8 +91,10 @@ import {
 } from "@/lib/storage/constants";
 import {
   buildProductImagePath,
+  buildOptionValueImagePath,
   uploadProductImage,
-  getProductImagePublicUrl,
+  uploadOptionValueImage,
+  getImagePublicUrl,
 } from "@/lib/storage/product-images";
 import {
   uploadImage,
@@ -164,8 +166,9 @@ describe("detectImageMime", () => {
   });
 
   it("文字內容／未知格式回 null", () => {
-    expect(detectImageMime(new TextEncoder().encode("this is not an image")))
-      .toBeNull();
+    expect(
+      detectImageMime(new TextEncoder().encode("this is not an image")),
+    ).toBeNull();
     expect(detectImageMime(new Uint8Array(0))).toBeNull();
   });
 });
@@ -181,11 +184,44 @@ describe("buildProductImagePath", () => {
   });
 });
 
-describe("getProductImagePublicUrl", () => {
+describe("buildOptionValueImagePath", () => {
+  it("組出 option-value/{optionValueId}/{uuid}.{ext}（同 bucket 前綴區隔）", () => {
+    const a = buildOptionValueImagePath("val-1", "png");
+    const b = buildOptionValueImagePath("val-1", "png");
+    expect(a).toMatch(
+      /^option-value\/val-1\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.png$/,
+    );
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("uploadOptionValueImage", () => {
+  it("成功時回傳 option-value 前綴的 storage path", async () => {
+    const path = await uploadOptionValueImage("val-1", makeFile("image/webp"));
+    expect(path).toMatch(/^option-value\/val-1\/.+\.webp$/);
+    expect(state.uploadedPaths).toEqual([path]);
+  });
+
+  it("magic bytes 不符時拒絕（與商品圖共用核心檢查）", async () => {
+    await expect(
+      uploadOptionValueImage("val-1", makeFile("image/jpeg", 1024, false)),
+    ).rejects.toThrow(/檔案內容與宣告的圖片格式不符/);
+    expect(state.uploadedPaths).toHaveLength(0);
+  });
+
+  it("Storage upload 回傳 error 時必須 throw（不靜默）", async () => {
+    state.uploadResult = { error: { message: "boom" } };
+    await expect(uploadOptionValueImage("val-1", makeFile())).rejects.toThrow(
+      /圖片上傳 Storage 失敗/,
+    );
+  });
+});
+
+describe("getImagePublicUrl", () => {
   it("以正規化後的 base URL 組公開 URL（不因尾斜線產生雙斜線）", () => {
     // env mock 無尾斜線；正規化行為由 SUPABASE_URL_BASE 的 replace 保證，
     // 此處驗證輸出形狀單斜線
-    expect(getProductImagePublicUrl("prod-1/a.webp")).toBe(
+    expect(getImagePublicUrl("prod-1/a.webp")).toBe(
       "https://example.supabase.co/storage/v1/object/public/product-images/prod-1/a.webp",
     );
   });

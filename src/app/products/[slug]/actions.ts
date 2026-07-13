@@ -50,13 +50,14 @@ export async function addToCart(
     return { ok: false, error: "商品不存在或已下架" };
   }
 
+  // !inner 理由同 PDP 查詢：RLS 濾掉的隱藏選項要整列消失，不能變 null
   const { data: productOptions } = await supabase
     .from("product_option")
     .select(
       `
       id, required,
-      option_type:option_type_id ( code, name ),
-      product_option_value ( id, price_delta, option_value:option_value_id ( code, label ) )
+      option_type:option_type_id!inner ( code, name ),
+      product_option_value ( id, price_delta, option_value:option_value_id!inner ( code, label ) )
     `,
     )
     .eq("product_id", productId);

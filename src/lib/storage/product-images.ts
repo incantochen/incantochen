@@ -15,28 +15,28 @@ const SUPABASE_URL_BASE = env.NEXT_PUBLIC_SUPABASE_URL.replace(/\/+$/, "");
 const IMMUTABLE_CACHE_SECONDS = "31536000";
 
 // Storage 路徑的單一出處：DB（product_image.storage_path、option_value.image_path）
-// 一律只存這種相對路徑，不存完整 URL——公開 URL 由 getProductImagePublicUrl 組出，
+// 一律只存這種相對路徑，不存完整 URL——公開 URL 由 getImagePublicUrl 組出，
 // 換 Supabase 專案／網域不需改資料（migration 0012 欄位 comment 同此約定）。
 export function buildProductImagePath(productId: string, ext: string): string {
   return `${productId}/${crypto.randomUUID()}.${ext}`;
 }
 
-export async function uploadProductImage(
-  productId: string,
-  file: File,
-): Promise<string> {
-  const validation = validateImageFile(file.type, file.size);
-  if (!validation.ok) {
-    throw new Error(validation.error);
-  }
+// 選項圖與商品圖同 bucket，以 option-value/ 前綴區隔（0012 comment 預告的路徑）
+export function buildOptionValueImagePath(
+  optionValueId: string,
+  ext: string,
+): string {
+  return `option-value/${optionValueId}/${crypto.randomUUID()}.${ext}`;
+}
 
+// 驗證＋magic bytes 檢查＋上傳的共用核心：路徑由呼叫端決定
+async function uploadImageToPath(path: string, file: File): Promise<string> {
   // 宣告的 mime 只反映副檔名，內容檢查才擋得住偽裝檔
   const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
   if (detectImageMime(head) !== file.type) {
     throw new Error("檔案內容與宣告的圖片格式不符");
   }
 
-  const path = buildProductImagePath(productId, validation.ext);
   const supabase = createServiceRoleClient();
   const { error } = await supabase.storage
     .from(PRODUCT_IMAGES_BUCKET)
@@ -51,7 +51,35 @@ export async function uploadProductImage(
   return path;
 }
 
-export async function deleteProductImageFile(path: string): Promise<void> {
+export async function uploadProductImage(
+  productId: string,
+  file: File,
+): Promise<string> {
+  const validation = validateImageFile(file.type, file.size);
+  if (!validation.ok) {
+    throw new Error(validation.error);
+  }
+  return uploadImageToPath(
+    buildProductImagePath(productId, validation.ext),
+    file,
+  );
+}
+
+export async function uploadOptionValueImage(
+  optionValueId: string,
+  file: File,
+): Promise<string> {
+  const validation = validateImageFile(file.type, file.size);
+  if (!validation.ok) {
+    throw new Error(validation.error);
+  }
+  return uploadImageToPath(
+    buildOptionValueImagePath(optionValueId, validation.ext),
+    file,
+  );
+}
+
+export async function deleteImageFile(path: string): Promise<void> {
   const supabase = createServiceRoleClient();
   const { error } = await supabase.storage
     .from(PRODUCT_IMAGES_BUCKET)
@@ -86,6 +114,6 @@ export async function deleteAllProductImageFiles(
   }
 }
 
-export function getProductImagePublicUrl(path: string): string {
+export function getImagePublicUrl(path: string): string {
   return `${SUPABASE_URL_BASE}/storage/v1/object/public/${PRODUCT_IMAGES_BUCKET}/${path}`;
 }
