@@ -216,27 +216,33 @@ export type Database = {
           code: string;
           created_at: string;
           id: string;
+          image_path: string | null;
           label: string;
           option_type_id: string;
           sort_order: number;
+          swatch_hex: string | null;
           updated_at: string;
         };
         Insert: {
           code: string;
           created_at?: string;
           id?: string;
+          image_path?: string | null;
           label: string;
           option_type_id: string;
           sort_order?: number;
+          swatch_hex?: string | null;
           updated_at?: string;
         };
         Update: {
           code?: string;
           created_at?: string;
           id?: string;
+          image_path?: string | null;
           label?: string;
           option_type_id?: string;
           sort_order?: number;
+          swatch_hex?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -546,6 +552,44 @@ export type Database = {
           updated_at?: string;
         };
         Relationships: [];
+      };
+      product_image: {
+        Row: {
+          alt: string;
+          created_at: string;
+          id: string;
+          product_id: string;
+          sort_order: number;
+          storage_path: string;
+          updated_at: string;
+        };
+        Insert: {
+          alt?: string;
+          created_at?: string;
+          id?: string;
+          product_id: string;
+          sort_order?: number;
+          storage_path: string;
+          updated_at?: string;
+        };
+        Update: {
+          alt?: string;
+          created_at?: string;
+          id?: string;
+          product_id?: string;
+          sort_order?: number;
+          storage_path?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "product_image_product_id_fkey";
+            columns: ["product_id"];
+            isOneToOne: false;
+            referencedRelation: "product";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       product_option: {
         Row: {
