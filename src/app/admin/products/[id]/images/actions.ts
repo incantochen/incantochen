@@ -5,12 +5,11 @@ import * as Sentry from "@sentry/nextjs";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import type { AdminActionResult } from "@/lib/admin/action-result";
 import {
   uploadProductImage,
   deleteProductImageFile,
 } from "@/lib/storage/product-images";
-
-export type AdminActionResult = { ok: true } | { ok: false; error: string };
 
 const uploadSchema = z.object({
   productId: z.string().uuid(),
@@ -26,8 +25,13 @@ const moveSchema = z.object({
   direction: z.enum(["up", "down"]),
 });
 
-function revalidateImagePages(productId: string) {
+function revalidateImagesPage(productId: string) {
   revalidatePath(`/admin/products/${productId}/images`);
+}
+
+// 商品列表只顯示圖片數，僅上傳/刪除需要連列表一起 revalidate
+function revalidateImageCountPages(productId: string) {
+  revalidateImagesPage(productId);
   revalidatePath("/admin/products");
 }
 
@@ -51,27 +55,28 @@ export async function uploadImage(
 
   const supabase = createServiceRoleClient();
 
-  // 先確認商品存在（也擋掉對不存在 id 亂丟檔案產生的孤兒目錄）
-  const { data: product, error: productError } = await supabase
-    .from("product")
-    .select("id")
-    .eq("id", productId)
-    .maybeSingle();
+  // 兩個查詢互不依賴，平行送出省一趟往返：
+  // ① 確認商品存在（也擋掉對不存在 id 亂丟檔案產生的孤兒目錄）
+  // ② sort_order 排最後：現有最大值 +1；沒有任何圖片時視 max 為 -1，首張圖＝0
+  const [
+    { data: product, error: productError },
+    { data: last, error: lastError },
+  ] = await Promise.all([
+    supabase.from("product").select("id").eq("id", productId).maybeSingle(),
+    supabase
+      .from("product_image")
+      .select("sort_order")
+      .eq("product_id", productId)
+      .order("sort_order", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
   if (productError) {
     return { ok: false, error: "查詢商品失敗，請稍後再試" };
   }
   if (!product) {
     return { ok: false, error: "找不到商品" };
   }
-
-  // sort_order 排最後：現有最大值 +1；沒有任何圖片時視 max 為 -1，首張圖＝0
-  const { data: last, error: lastError } = await supabase
-    .from("product_image")
-    .select("sort_order")
-    .eq("product_id", productId)
-    .order("sort_order", { ascending: false })
-    .limit(1)
-    .maybeSingle();
   if (lastError) {
     return { ok: false, error: "查詢圖片排序失敗，請稍後再試" };
   }
@@ -104,7 +109,7 @@ export async function uploadImage(
     return { ok: false, error: "圖片建檔失敗，請稍後再試" };
   }
 
-  revalidateImagePages(productId);
+  revalidateImageCountPages(productId);
   return { ok: true };
 }
 
@@ -141,7 +146,7 @@ export async function deleteImage(imageId: string): Promise<AdminActionResult> {
     });
   }
 
-  revalidateImagePages(deleted.product_id);
+  revalidateImageCountPages(deleted.product_id);
   return { ok: true };
 }
 
@@ -207,10 +212,22 @@ export async function moveImage(
     .update({ sort_order: target.sort_order })
     .eq("id", neighbor.id);
   if (updateNeighborError) {
+    // 第一筆已寫入、第二筆失敗＝兩張圖暫時同值。best-effort 還原第一筆，
+    // 避免留下重複 sort_order（還原也失敗就只記錄——單管理員場景可重新操作）
+    const { error: revertError } = await supabase
+      .from("product_image")
+      .update({ sort_order: target.sort_order })
+      .eq("id", target.id);
+    if (revertError) {
+      console.error("排序交換還原失敗", revertError);
+      Sentry.captureException(new Error("moveImage 交換還原失敗"), {
+        extra: { targetId: target.id, neighborId: neighbor.id, revertError },
+      });
+    }
     return { ok: false, error: "調整排序失敗，請重新整理確認順序" };
   }
 
-  revalidateImagePages(target.product_id);
+  revalidateImagesPage(target.product_id);
   return { ok: true };
 }
 
@@ -243,6 +260,6 @@ export async function updateAlt(
     return { ok: false, error: "找不到圖片，可能已被刪除" };
   }
 
-  revalidateImagePages(updated.product_id);
+  revalidateImagesPage(updated.product_id);
   return { ok: true };
 }

@@ -1,28 +1,22 @@
-import Link from "next/link"
-import { notFound } from "next/navigation"
-import { Gem } from "lucide-react"
-import { createClient } from "@/lib/supabase/server"
-import type { Database } from "@/types/database.types"
-import { ProductConfigurator, type ConfiguratorOption } from "@/components/product-configurator"
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { Gem } from "lucide-react";
+import { createClient } from "@/lib/supabase/server";
+import { CATEGORY_LABELS } from "@/lib/product/category-labels";
+import {
+  ProductConfigurator,
+  type ConfiguratorOption,
+} from "@/components/product-configurator";
 
-type CategoryCode = Database["public"]["Enums"]["product_category"]
-
-const CATEGORY_LABELS: Record<CategoryCode, string> = {
-  ring: "戒指",
-  earring: "耳環",
-  bracelet: "手鍊",
-  necklace: "項鍊",
-}
-
-const GALLERY_CAPTIONS = ["正面", "側面", "配戴情境", "生活情境"]
+const GALLERY_CAPTIONS = ["正面", "側面", "配戴情境", "生活情境"];
 
 export default async function ProductDetailPage({
   params,
 }: {
-  params: Promise<{ slug: string }>
+  params: Promise<{ slug: string }>;
 }) {
-  const { slug } = await params
-  const supabase = await createClient()
+  const { slug } = await params;
+  const supabase = await createClient();
 
   const { data: product } = await supabase
     .from("product")
@@ -41,15 +35,17 @@ export default async function ProductDetailPage({
     )
     .eq("slug", slug)
     .eq("status", "active")
-    .single()
+    .single();
 
   if (!product) {
-    notFound()
+    notFound();
   }
 
-  const options = [...product.product_option].sort((a, b) => a.sort_order - b.sort_order)
+  const options = [...product.product_option].sort(
+    (a, b) => a.sort_order - b.sort_order,
+  );
 
-  const categoryLabel = CATEGORY_LABELS[product.category]
+  const categoryLabel = CATEGORY_LABELS[product.category];
 
   const configuratorOptions: ConfiguratorOption[] = options.map((option) => ({
     id: option.id,
@@ -62,7 +58,7 @@ export default async function ProductDetailPage({
         isDefault: value.is_default,
         priceDelta: value.price_delta,
       })),
-  }))
+  }));
 
   return (
     <div className="mx-auto max-w-[1240px] px-6 py-8">
@@ -71,7 +67,10 @@ export default async function ProductDetailPage({
           首頁
         </Link>
         {" / "}
-        <Link href={`/collections/${product.category}`} className="hover:text-primary">
+        <Link
+          href={`/collections/${product.category}`}
+          className="hover:text-primary"
+        >
           {categoryLabel}
         </Link>
         {" / "}
@@ -106,7 +105,9 @@ export default async function ProductDetailPage({
           <div className="text-[11px] tracking-[0.34em] text-secondary-400 uppercase">
             {product.category} · {categoryLabel}
           </div>
-          <h1 className="mt-2 font-heading text-[34px] text-ink">{product.name}</h1>
+          <h1 className="mt-2 font-heading text-[34px] text-ink">
+            {product.name}
+          </h1>
 
           <div className="mt-4">
             <ProductConfigurator
@@ -118,5 +119,5 @@ export default async function ProductDetailPage({
         </div>
       </div>
     </div>
-  )
+  );
 }

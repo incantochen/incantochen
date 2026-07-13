@@ -1,0 +1,11 @@
+import type { Database } from "@/types/database.types";
+
+export type CategoryCode = Database["public"]["Enums"]["product_category"];
+
+// 品類中文名的單一出處：前台 PDP 與後台商品列表共用
+export const CATEGORY_LABELS: Record<CategoryCode, string> = {
+  ring: "戒指",
+  earring: "耳環",
+  bracelet: "手鍊",
+  necklace: "項鍊",
+};

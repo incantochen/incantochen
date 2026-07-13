@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useRef, useState, useTransition } from "react";
+import type { AdminActionResult } from "@/lib/admin/action-result";
 import {
   ALLOWED_IMAGE_MIME_TYPES,
   validateImageFile,
@@ -26,6 +27,7 @@ export function ImageManager({
   const [success, setSuccess] = useState<string | null>(null);
   const [altDrafts, setAltDrafts] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function notify(msg: string, isError = false) {
     if (isError) {
@@ -35,10 +37,36 @@ export function ImageManager({
       setSuccess(msg);
       setError(null);
     }
-    setTimeout(() => {
+    // 取消前一則的自動消失計時，避免舊計時器提早清掉新訊息
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+    dismissTimerRef.current = setTimeout(() => {
       setError(null);
       setSuccess(null);
     }, 4000);
+  }
+
+  // 四個操作共用同一套「呼叫 action → !ok 顯示錯誤 → 成功顯示訊息/後續」骨架
+  function runAction(
+    action: () => Promise<AdminActionResult>,
+    options: {
+      successMsg?: string;
+      fallbackError: string;
+      onSuccess?: () => void;
+    },
+  ) {
+    startTransition(async () => {
+      try {
+        const result = await action();
+        if (!result.ok) {
+          notify(result.error, true);
+          return;
+        }
+        if (options.successMsg) notify(options.successMsg);
+        options.onSuccess?.();
+      } catch (e) {
+        notify(e instanceof Error ? e.message : options.fallbackError, true);
+      }
+    });
   }
 
   function handleUpload(file: File) {
@@ -49,73 +77,45 @@ export function ImageManager({
       return;
     }
 
-    startTransition(async () => {
-      try {
-        const formData = new FormData();
-        formData.set("productId", productId);
-        formData.set("file", file);
-        const result = await uploadImage(formData);
-        if (!result.ok) {
-          notify(result.error, true);
-          return;
-        }
-        notify("圖片已上傳");
+    const formData = new FormData();
+    formData.set("productId", productId);
+    formData.set("file", file);
+    runAction(() => uploadImage(formData), {
+      successMsg: "圖片已上傳",
+      fallbackError: "上傳失敗",
+      onSuccess: () => {
         if (fileInputRef.current) fileInputRef.current.value = "";
-      } catch (e) {
-        notify(e instanceof Error ? e.message : "上傳失敗", true);
-      }
+      },
     });
   }
 
   function handleDelete(imageId: string) {
     if (!confirm("確定要刪除這張圖片嗎？此操作無法復原。")) return;
-    startTransition(async () => {
-      try {
-        const result = await deleteImage(imageId);
-        if (!result.ok) {
-          notify(result.error, true);
-          return;
-        }
-        notify("圖片已刪除");
-      } catch (e) {
-        notify(e instanceof Error ? e.message : "刪除失敗", true);
-      }
+    runAction(() => deleteImage(imageId), {
+      successMsg: "圖片已刪除",
+      fallbackError: "刪除失敗",
     });
   }
 
   function handleMove(imageId: string, direction: "up" | "down") {
-    startTransition(async () => {
-      try {
-        const result = await moveImage(imageId, direction);
-        if (!result.ok) {
-          notify(result.error, true);
-          return;
-        }
-      } catch (e) {
-        notify(e instanceof Error ? e.message : "調整排序失敗", true);
-      }
+    // 排序結果畫面立即可見，成功不另跳訊息
+    runAction(() => moveImage(imageId, direction), {
+      fallbackError: "調整排序失敗",
     });
   }
 
   function handleSaveAlt(imageId: string) {
     const draft = altDrafts[imageId];
     if (draft === undefined) return;
-    startTransition(async () => {
-      try {
-        const result = await updateAlt(imageId, draft);
-        if (!result.ok) {
-          notify(result.error, true);
-          return;
-        }
-        notify("替代文字已更新");
+    runAction(() => updateAlt(imageId, draft), {
+      successMsg: "替代文字已更新",
+      fallbackError: "更新失敗",
+      onSuccess: () =>
         setAltDrafts((prev) => {
           const next = { ...prev };
           delete next[imageId];
           return next;
-        });
-      } catch (e) {
-        notify(e instanceof Error ? e.message : "更新失敗", true);
-      }
+        }),
     });
   }
 

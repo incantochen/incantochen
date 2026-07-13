@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
+import { env } from "./src/lib/env";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -16,13 +17,18 @@ const csp = [
 ].join("; ");
 
 // next/image 只允許本專案的 Supabase Storage 公開圖（不用 *.supabase.co 萬用字元）；
-// hostname 由 env 導出，換專案不需改碼。build 時缺 env 直接 throw（fail fast，
-// 與 src/lib/env.ts 同精神——這裡不能 import 它，next.config 不走 tsconfig paths）。
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-if (!supabaseUrl) {
-  throw new Error("Missing environment variable: NEXT_PUBLIC_SUPABASE_URL");
+// hostname 由集中 env 模組（§2 規範）導出，換專案不需改碼。缺 env 時 env.ts 在
+// config 載入即 throw（fail fast）；URL 格式錯誤（複製貼上殘留空白等）給明確訊息。
+function parseSupabaseHostname(): string {
+  try {
+    return new URL(env.NEXT_PUBLIC_SUPABASE_URL).hostname;
+  } catch {
+    throw new Error(
+      `Invalid NEXT_PUBLIC_SUPABASE_URL (not a parseable URL): "${env.NEXT_PUBLIC_SUPABASE_URL}"`,
+    );
+  }
 }
-const supabaseHostname = new URL(supabaseUrl).hostname;
+const supabaseHostname = parseSupabaseHostname();
 
 const nextConfig: NextConfig = {
   images: {
