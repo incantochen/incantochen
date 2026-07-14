@@ -1,12 +1,14 @@
 import { z } from "zod";
 
 // price_delta 對齊 DB check（numeric(12,0) >= 0）：整數 NT$、非負、有上限防手誤
-// 打成天價；表單傳字串進來，先 coerce 再驗
-export const priceDeltaSchema = z.coerce
-  .number({ message: "請輸入加價金額" })
-  .int("加價須為整數")
-  .min(0, "加價不可為負")
-  .max(9_999_999, "加價金額過大");
+// 打成天價。表單傳字串進來——用 ^\d+$ 一次擋掉空字串（避免 z.coerce.number("")
+// 靜默變 0）、負號、小數點與非數字，再轉成數字並驗上限。
+export const priceDeltaSchema = z
+  .string({ message: "請輸入加價金額" })
+  .trim()
+  .regex(/^\d+$/, "加價須為非負整數")
+  .transform((s) => Number(s))
+  .refine((n) => n <= 9_999_999, "加價金額過大");
 
 export const addProductOptionSchema = z.object({
   productId: z.string().uuid(),

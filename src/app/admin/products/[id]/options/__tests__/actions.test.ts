@@ -45,12 +45,10 @@ const state = {
     product_id: string;
   } | null,
   productOptionDeleteError: null as MockError,
-  productIdOfOptionRow: { product_id: PRODUCT_ID } as {
-    product_id: string;
-  } | null,
   // option_value lookup (cross-type guard)
-  optionValueRow: { option_type_id: OPTION_TYPE_ID } as {
+  optionValueRow: { option_type_id: OPTION_TYPE_ID, is_active: true } as {
     option_type_id: string;
+    is_active: boolean;
   } | null,
   optionValueError: null as MockError,
   // product_option_value insert / update / delete
@@ -60,8 +58,12 @@ const state = {
     | { product_option_id: string }[]
     | null,
   povUpdateError: null as MockError,
-  povRow: { product_option_id: PRODUCT_OPTION_ID } as {
+  povRow: {
+    product_option_id: PRODUCT_OPTION_ID,
+    option_value: { is_active: true },
+  } as {
     product_option_id: string;
+    option_value: { is_active: boolean };
   } | null,
   povRowError: null as MockError,
   povDeleteRow: { product_option_id: PRODUCT_OPTION_ID } as {
@@ -144,14 +146,18 @@ vi.mock("@/lib/supabase/service-role", () => ({
           select: (cols: string) => ({
             eq: () => ({
               maybeSingle: () => {
-                // productIdOfOption 用 select("product_id")；addProductOptionValue
-                // 的 guard 用 select("option_type_id, product_id")
-                if (cols === "product_id") {
+                // revalidateForProductOption 用 join：
+                // select("product_id, product:product_id ( slug, category )")
+                if (cols.includes("product:product_id")) {
                   return Promise.resolve({
-                    data: state.productIdOfOptionRow,
+                    data: {
+                      product_id: PRODUCT_ID,
+                      product: { slug: "test-slug", category: "ring" },
+                    },
                     error: null,
                   });
                 }
+                // addProductOptionValue 的 guard 用 select("option_type_id, product_id")
                 return Promise.resolve({
                   data: state.productOptionRow,
                   error: null,
@@ -320,14 +326,16 @@ beforeEach(() => {
   state.productOptionUpdateError = null;
   state.productOptionDeleteRow = { product_id: PRODUCT_ID };
   state.productOptionDeleteError = null;
-  state.productIdOfOptionRow = { product_id: PRODUCT_ID };
-  state.optionValueRow = { option_type_id: OPTION_TYPE_ID };
+  state.optionValueRow = { option_type_id: OPTION_TYPE_ID, is_active: true };
   state.optionValueError = null;
   state.povInsertRow = { id: POV_ID };
   state.povInsertError = null;
   state.povUpdateRows = [{ product_option_id: PRODUCT_OPTION_ID }];
   state.povUpdateError = null;
-  state.povRow = { product_option_id: PRODUCT_OPTION_ID };
+  state.povRow = {
+    product_option_id: PRODUCT_OPTION_ID,
+    option_value: { is_active: true },
+  };
   state.povRowError = null;
   state.povDeleteRow = { product_option_id: PRODUCT_OPTION_ID };
   state.povDeleteError = null;
@@ -469,7 +477,10 @@ describe("addProductOptionValue", () => {
   });
 
   it("跨型別塞值被拒", async () => {
-    state.optionValueRow = { option_type_id: "99999999-9999-4999-8999-999999999999" };
+    state.optionValueRow = {
+      option_type_id: "99999999-9999-4999-8999-999999999999",
+      is_active: true,
+    };
     const result = await addProductOptionValue(
       PRODUCT_OPTION_ID,
       OPTION_VALUE_ID,
@@ -512,6 +523,41 @@ describe("addProductOptionValue", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("已加入白名單");
+  });
+
+  it("隱藏中的值不能同時設為預設，且不插入", async () => {
+    state.optionValueRow = { option_type_id: OPTION_TYPE_ID, is_active: false };
+    const result = await addProductOptionValue(
+      PRODUCT_OPTION_ID,
+      OPTION_VALUE_ID,
+      "0",
+      true,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("隱藏");
+    expect(inserts("product_option_value")).toHaveLength(0);
+  });
+
+  it("隱藏中的值可加入白名單（不設預設時）", async () => {
+    state.optionValueRow = { option_type_id: OPTION_TYPE_ID, is_active: false };
+    const result = await addProductOptionValue(
+      PRODUCT_OPTION_ID,
+      OPTION_VALUE_ID,
+      "0",
+      false,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("加價空字串被拒（不靜默當 0）", async () => {
+    const result = await addProductOptionValue(
+      PRODUCT_OPTION_ID,
+      OPTION_VALUE_ID,
+      "",
+      false,
+    );
+    expect(result.ok).toBe(false);
+    expect(inserts("product_option_value")).toHaveLength(0);
   });
 });
 
@@ -561,6 +607,17 @@ describe("setDefaultProductOptionValue", () => {
     state.povRow = null;
     const result = await setDefaultProductOptionValue(POV_ID);
     expect(result.ok).toBe(false);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it("值為隱藏狀態時擋下、不打 RPC", async () => {
+    state.povRow = {
+      product_option_id: PRODUCT_OPTION_ID,
+      option_value: { is_active: false },
+    };
+    const result = await setDefaultProductOptionValue(POV_ID);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("隱藏");
     expect(rpcCalls).toHaveLength(0);
   });
 });

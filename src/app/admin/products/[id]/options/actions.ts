@@ -31,35 +31,51 @@ const RACE_MESSAGE = `此項目已被其他管理員異動${REFRESH_TO_RETRY_SUF
 
 // 選項對應改動同時影響：後台設定頁、PDP 配置器、目錄卡片「起」價與 swatch。
 // 需要商品的 slug/category 才能 revalidate 前台兩條路徑——這支查一次共用。
+// §6：查詢失敗要跟查無資料分開——失敗時記錄後仍 revalidate admin 頁（至少
+// 後台看得到最新），只是前台兩條路徑這次跳過（下次成功操作會補上），不靜默
+// 假裝成功。
 async function revalidateForProduct(
   supabase: ServiceRole,
   productId: string,
 ): Promise<void> {
   revalidatePath(`/admin/products/${productId}/options`);
-  const { data: product } = await supabase
+  const { data: product, error } = await supabase
     .from("product")
     .select("slug, category")
     .eq("id", productId)
     .maybeSingle();
+  if (error) {
+    console.error("revalidateForProduct 查詢商品失敗", error);
+    return;
+  }
   if (product) {
     revalidatePath(`/products/${product.slug}`);
     revalidatePath(`/collections/${product.category}`);
   }
 }
 
-// product_option_id → product_id：pov 層操作只拿得到 product_option_id，
-// 但 revalidate 要 product_id。查詢失敗（§6：查詢失敗 ≠ 查無資料）回 null
-// 讓呼叫端走「找不到」路徑，不靜默略過 revalidate。
-async function productIdOfOption(
+// pov 層操作只拿得到 product_option_id：用一次 embedded 查詢同時取 product_id
+// （組 admin 路徑）與 product.slug/category（組前台路徑），省掉「先查 product_id
+// 再查 product」兩趟往返。error 明確檢查（§6）。
+async function revalidateForProductOption(
   supabase: ServiceRole,
   productOptionId: string,
-): Promise<string | null> {
-  const { data } = await supabase
+): Promise<void> {
+  const { data, error } = await supabase
     .from("product_option")
-    .select("product_id")
+    .select("product_id, product:product_id ( slug, category )")
     .eq("id", productOptionId)
     .maybeSingle();
-  return data?.product_id ?? null;
+  if (error) {
+    console.error("revalidateForProductOption 查詢失敗", error);
+    return;
+  }
+  if (!data) return;
+  revalidatePath(`/admin/products/${data.product_id}/options`);
+  if (data.product) {
+    revalidatePath(`/products/${data.product.slug}`);
+    revalidatePath(`/collections/${data.product.category}`);
+  }
 }
 
 // =============================================================================
@@ -310,7 +326,7 @@ export async function addProductOptionValue(
         .maybeSingle(),
       supabase
         .from("option_value")
-        .select("option_type_id")
+        .select("option_type_id, is_active")
         .eq("id", parsed.data.optionValueId)
         .maybeSingle(),
     ]);
@@ -332,6 +348,15 @@ export async function addProductOptionValue(
       ok: false,
       error: "此選項值不屬於這個選項類型",
       fieldErrors: { optionValueId: "不屬於這個選項類型" },
+    };
+  }
+  // 隱藏的值不能同時設為預設（同 setDefault 的理由：前台 !inner 濾掉隱藏值會
+  // fallback，導致預設與前台呈現分歧）。允許加入白名單（可預先設定），但擋預設。
+  if (parsed.data.isDefault && !ov.is_active) {
+    return {
+      ok: false,
+      error: "已隱藏的選項值不能設為預設，請先恢復顯示或改加入後再設定",
+      fieldErrors: { optionValueId: "已隱藏的值不能設為預設" },
     };
   }
 
@@ -412,11 +437,7 @@ export async function updateProductOptionValuePrice(
     return { ok: false, error: RACE_MESSAGE };
   }
 
-  const productId = await productIdOfOption(
-    supabase,
-    updated[0]!.product_option_id,
-  );
-  if (productId) await revalidateForProduct(supabase, productId);
+  await revalidateForProductOption(supabase, updated[0]!.product_option_id);
   return { ok: true };
 }
 
@@ -432,10 +453,12 @@ export async function setDefaultProductOptionValue(
 
   const supabase = createServiceRoleClient();
 
-  // 先取 product_option_id：既是 revalidate 需要的路徑來源，也先確認 pov 存在
+  // 先取 product_option_id＋所指 option_value 的 is_active：既確認 pov 存在，
+  // 也擋「把已隱藏的值設為預設」——前台 PDP/目錄用 !inner 濾掉隱藏值，會 fallback
+  // 到第一個顯示中的值，導致後台設定的預設與前台實際呈現不一致（無聲分歧）。
   const { data: pov, error: povError } = await supabase
     .from("product_option_value")
-    .select("product_option_id")
+    .select("product_option_id, option_value:option_value_id ( is_active )")
     .eq("id", parsed.data)
     .maybeSingle();
   if (povError) {
@@ -443,6 +466,13 @@ export async function setDefaultProductOptionValue(
   }
   if (!pov) {
     return { ok: false, error: "找不到選項值，可能已被移除" };
+  }
+  if (!pov.option_value.is_active) {
+    return {
+      ok: false,
+      error:
+        "此選項值目前為隱藏狀態，設為預設也不會顯示於前台；請先於「選項管理」恢復顯示再設為預設",
+    };
   }
 
   // 原子切換：set_default_product_option_value RPC 把整組 is_default 一次算成
@@ -458,8 +488,7 @@ export async function setDefaultProductOptionValue(
     return { ok: false, error: "找不到選項值，可能已被移除" };
   }
 
-  const productId = await productIdOfOption(supabase, pov.product_option_id);
-  if (productId) await revalidateForProduct(supabase, productId);
+  await revalidateForProductOption(supabase, pov.product_option_id);
   return { ok: true };
 }
 
@@ -489,11 +518,7 @@ export async function clearDefaultProductOptionValue(
     return { ok: false, error: "找不到選項值，可能已被移除" };
   }
 
-  const productId = await productIdOfOption(
-    supabase,
-    updated.product_option_id,
-  );
-  if (productId) await revalidateForProduct(supabase, productId);
+  await revalidateForProductOption(supabase, updated.product_option_id);
   return { ok: true };
 }
 
@@ -524,10 +549,6 @@ export async function removeProductOptionValue(
     return { ok: false, error: "找不到選項值，可能已被移除" };
   }
 
-  const productId = await productIdOfOption(
-    supabase,
-    deleted.product_option_id,
-  );
-  if (productId) await revalidateForProduct(supabase, productId);
+  await revalidateForProductOption(supabase, deleted.product_option_id);
   return { ok: true };
 }
