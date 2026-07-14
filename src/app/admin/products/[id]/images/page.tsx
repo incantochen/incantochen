@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { getProductImagePublicUrl } from "@/lib/storage/product-images";
+import { getImagePublicUrl } from "@/lib/storage/product-images";
 import { ImageManager } from "./image-manager";
 
 export default async function AdminProductImagesPage({
@@ -38,7 +38,7 @@ export default async function AdminProductImagesPage({
   const items = product.product_image.map((img) => ({
     id: img.id,
     alt: img.alt,
-    publicUrl: getProductImagePublicUrl(img.storage_path),
+    publicUrl: getImagePublicUrl(img.storage_path),
   }));
 
   return (

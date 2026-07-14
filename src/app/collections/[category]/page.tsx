@@ -33,16 +33,20 @@ export default async function CollectionPage({
 
   const supabase = await createClient()
 
+  // option_type / option_value 的 !inner 必要（同 PDP 查詢，T12/0014）：RLS 會
+  // 濾掉 is_active=false 的列，非 inner 的多對一 embed 會變 null——下面
+  // `o.option_type.code` 直接取值會炸；!inner 讓隱藏項目整列從陣列消失，
+  // find 撈不到就自然略過，「起」價的預設加價總和也只算客人實際選得到的選項
   let productQuery = supabase
     .from("product")
     .select(
       `
       slug, name, base_price,
       product_option (
-        option_type ( code ),
+        option_type!inner ( code ),
         product_option_value (
           is_default, price_delta,
-          option_value ( label, swatch_hex )
+          option_value!inner ( label, swatch_hex )
         )
       )
     `,

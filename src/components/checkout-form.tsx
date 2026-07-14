@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { checkoutFormSchema } from "@/lib/checkout/schema";
 import { createOrder } from "@/app/checkout/actions";
@@ -20,6 +21,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
     null,
   );
   const [requiresLogin, setRequiresLogin] = useState(false);
+  const [showCartLink, setShowCartLink] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   function validate() {
@@ -44,6 +46,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
     setSubmitError(null);
     setPriceUpdatedMessage(null);
     setRequiresLogin(false);
+    setShowCartLink(false);
     if (!validate()) return;
     startTransition(async () => {
       const result = await createOrder({
@@ -65,6 +68,7 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
           setPriceUpdatedMessage(result.error);
         } else {
           setSubmitError(result.error);
+          setShowCartLink(!!result.showCartLink);
         }
       }
     });
@@ -212,9 +216,14 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       )}
 
       {submitError && (
-        <p className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-sm text-destructive">
-          {submitError}
-        </p>
+        <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-sm text-destructive">
+          <p>{submitError}</p>
+          {showCartLink && (
+            <Link href="/cart" className="mt-1 inline-block underline">
+              前往購物車調整
+            </Link>
+          )}
+        </div>
       )}
 
       {requiresLogin && (

@@ -18,6 +18,9 @@ export default async function ProductDetailPage({
   const { slug } = await params;
   const supabase = await createClient();
 
+  // option_type / option_value 的 !inner 必要：RLS（0014）會濾掉 is_active=false
+  // 的列，非 inner 的多對一 embed 會變成 null 欄位（取屬性即炸），!inner 才是
+  // 「隱藏項目整列從陣列消失」
   const { data: product, error } = await supabase
     .from("product")
     .select(
@@ -25,10 +28,10 @@ export default async function ProductDetailPage({
       *,
       product_option (
         id, sort_order, required,
-        option_type:option_type_id ( id, code, name, applies_to, input_type ),
+        option_type:option_type_id!inner ( id, code, name, applies_to, input_type ),
         product_option_value (
           id, price_delta, is_default,
-          option_value:option_value_id ( id, code, label, sort_order )
+          option_value:option_value_id!inner ( id, code, label, sort_order )
         )
       )
     `,
