@@ -675,6 +675,18 @@
 | 待辦     | T116 工具動工（引擎層做成可抽換 adapter：Gemini 主力＋OpenAI 備援）；使用者備妥各款實拍底圖；`GEMINI_API_KEY` 由使用者於 AI Studio 生成填入 env；Gemini 端測試樣本（Downloads 兩張）與 GPT 定稿候選移入 `Desktop\GEM\` 保存。 |
 | 依賴     | T114（匯入腳本，供定稿上傳）；T17 依賴本任務產出素材 |
 
+#### #T88 / M2 通知 / sendOnce 失敗信件可重試（PR #66，Ultraplan＋本地 max review 修正）
+
+**說明**：關掉「寄信失敗→通知永久卡 failed、無機制可救」的缺口（PR #30 ultrareview 第三輪遺留）。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 完成（PR #66 squash merge `1591861`） |
+| 產出     | Ultraplan 雲端初版（sendOnce 回傳 boolean＋webhook 回 ERR 觸發 ECPay 重送）＋本地 `/code-review max`（10 finder＋verify＋sweep，15 findings）修正 commit `d0a3d5c`；新檔 `src/lib/notification/senders.ts`（type→寄信函式對照）；chore：auto-format hook 的 eslint --fix 排除 suggestion 類（`1eecda5`）；tasks.csv 登記 T123 技術債；ops-runbook §4 改寫；coding-system 案例庫回寫 2 型 |
+| 更新描述 | 1. 兩層重試：快路徑＝webhook 對 ECPay 回 `0\|notification delivery failed` 觸發重送、reclaim 補寄；兜底＝每日 reconcile cron 新增 failed-notification sweep（掃 `status='failed'` 逐筆補寄，order_shipped 一併涵蓋），ECPay 重送降級為加速器，最壞情況從「永久遺失」變「延遲至下一個 cron 週期」。2. max review 三個關鍵發現：借用 ECPay 重送當唯一重試迴路的三個終止切斷點（額度耗盡／訂單推進過 paid／reconcile 兜底單無重送可用）→ sweep＋`PAID_LINEAGE` 關掉；send-once 多處 resolve `{error}` 未檢查（supabase-js 不 throw，舊 try/catch 是死碼）→ 全數補檢查；測試 mock 用 throw 模擬 DB 失敗與真實 SDK 不符 → mock 補 resolve `{error}` 形態。3. 其他：標 failed 加 pending 守衛防蓋掉 sent、best-effort 寄成後補去重錨點、webhook 四複本抽 `settlePaid()`（`return await` 保外層 catch）、reconcile per-candidate try/catch＋`notifyFailed` 等獨立計數、shipOrder 寄失敗以 warning 告知管理員。4. 驗收：tsc／lint／vitest 419／build 全綠；CI 過後 merge。5. merge 前撞號：master 已用掉 T122（電子發票），本任務技術債改編 **T123**。 |
+| 待辦     | production 首次 cron 執行看 summary 新欄位（`sweepRetried`/`sweepSent`/`sweepStillFailing`）與 Sentry（T38 checklist 既有項涵蓋）；永久失敗分類＝T123（營運後視告警噪音） |
+| 依賴     | T69（send-once 原始落地）、T89（reconcile cron 基建） |
+
 ---
 
 ## 📋 日誌範本（複製使用）
