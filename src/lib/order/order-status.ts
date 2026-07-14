@@ -7,6 +7,17 @@ export type OrderStatus =
   | "cancelled"
   | "refunded";
 
+// 「付款已成立」的狀態集合（paid 與其一切後續）。付款成立契約類的通知（訂單
+// 確認信等）在這些狀態下都應補寄——訂單推進到製作／出貨不代表確認信不用寄
+//（T88 review：原本只認 paid，狀態一推進就靜默切斷失敗信件的重試）。
+// cancelled／refunded 不在此列：對已取消／退款的訂單補寄確認信是誤導。
+export const PAID_LINEAGE: OrderStatus[] = [
+  "paid",
+  "in_production",
+  "shipped",
+  "completed",
+];
+
 export const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   pending_payment: ["paid", "cancelled"],
   paid: ["in_production", "refunded"],

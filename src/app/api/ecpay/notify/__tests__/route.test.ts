@@ -384,6 +384,18 @@ describe("冪等：payment 已是 paid", () => {
     expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
     expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
   });
+
+  it("補寄通知仍失敗（sendOnce 回 false）→ 冪等路徑也要回 0|... 觸發重送，不得從這裡漏回 1|OK（T88 review：四個入口都要守住）", async () => {
+    // 這正是 T88 的核心情境：第一次 webhook 信寄失敗回 ERR，ECPay 重送時
+    // payment 已是 paid、走這條冪等路徑——若這裡回 1|OK，重試迴路就斷了。
+    db.payment = { id: "p1", status: "paid", order_id: "o1", amount: 25000 };
+    db.orderStatus = "paid";
+    sendOnceResult = { order_confirmation: false };
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|notification delivery failed");
+  });
 });
 
 describe("冪等：fallback 路徑，已有其他 paid payment", () => {
@@ -401,6 +413,37 @@ describe("冪等：fallback 路徑，已有其他 paid payment", () => {
     expect(insertsTo("order_status_log")).toHaveLength(1);
     expect(sendOrderConfirmation).toHaveBeenCalledWith("o1");
     expect(sendNewOrderNotification).toHaveBeenCalledWith("o1");
+  });
+
+  it("補寄通知仍失敗（sendOnce 回 false）→ 回 0|... 觸發重送（T88 review：四個入口都要守住）", async () => {
+    db.payment = null;
+    db.paidPayment = { id: "p-other" };
+    db.order = { id: "o1", total_amount: 25000 };
+    db.orderStatus = "paid";
+    sendOnceResult = { new_order_notification: false };
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|notification delivery failed");
+  });
+});
+
+describe("fallback 路徑：payment row 需現場補建（pay page 預建失敗）", () => {
+  it("補建 payment＋推進成功，但通知投遞失敗 → 回 0|... 觸發重送（T88 review：四個入口都要守住）", async () => {
+    db.payment = null;
+    db.paidPayment = null;
+    db.order = { id: "o1", total_amount: 25000 };
+    db.orderStatus = "pending_payment";
+    sendOnceResult = { order_confirmation: false };
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|notification delivery failed");
+    // 金流面已完成：payment 補建為 paid、訂單推進 paid，ERR 只是請 ECPay 重送。
+    const paymentInsert = insertsTo("payment")[0]?.values as any;
+    expect(paymentInsert.status).toBe("paid");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
   });
 });
 

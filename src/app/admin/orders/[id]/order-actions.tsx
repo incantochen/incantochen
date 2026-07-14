@@ -92,7 +92,7 @@ export function OrderActions({
           notify(result.error, true);
           return;
         }
-        notify("已標記出貨");
+        notify(result.warning ?? "已標記出貨", Boolean(result.warning));
       } catch (e) {
         notify(e instanceof Error ? e.message : "操作失敗", true);
       }

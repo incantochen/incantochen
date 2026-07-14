@@ -15,15 +15,13 @@ const STALE_PENDING_MS = 2 * 60 * 1000;
 // insert 先佔位 status='pending'，send() 完成才回填 sent/failed，
 // 避免「insert 成功但送信失敗」被誤判為已寄出、之後 webhook 重送也不會再試。
 //
-// 呼叫這支函式時，訂單／付款多半已經標記 paid：往後任何 webhook 重送都會被
-// 冪等短路擋在最前面、不會再進到這裡，所以這支函式本身必須保證絕對不往外
-// 拋例外——內部任何一步（DB 讀寫、送信）失敗都只能記 log、絕不能讓例外
-// 傳出去影響 webhook 的回應，否則會造成通知永久遺失且無法重試。
+// 這支函式本身必須保證絕對不往外拋例外——內部任何一步（DB 讀寫、送信）失敗
+// 都只能記 log、絕不能讓例外傳出去影響 webhook 的回應。
 //
-// 回傳 boolean 而非 throw（T88）：`false` 只代表「真的嘗試寄信但 send() 拋錯
-// （信沒送出）」，在意的呼叫端（webhook）可據此對 ECPay 回錯誤以觸發重送，
-// 重送時上面的 reclaim 機制就會補寄。其餘一律 `true`（已送出／重複已寄／
-// 無事可做）。仍不往外拋例外，維持出貨 best-effort 呼叫端的契約。
+// 回傳 boolean 而非 throw（T88）：`false` 代表「無法確認信已送達」（send()
+// 拋錯、或 DB 狀態無法確認），在意的呼叫端（webhook）可據此對 ECPay 回錯誤
+// 以觸發重送，重送時 reclaim 機制會補寄；每日 reconcile cron 的 failed sweep
+// 是最終兜底。其餘一律 `true`（已送出／重複已寄／無事可做）。
 export async function sendOnce(
   serviceRole: ServiceRole,
   params: { orderId: string; type: string; send: () => Promise<void> },
@@ -52,30 +50,67 @@ async function sendOnceInner(
   if (claim === "claimed") return attemptSend(serviceRole, id, send);
 
   if (claim === "unknown") {
-    // 無法建立去重紀錄（DB 暫時性故障）：此時訂單多半已標記 paid，
-    // 之後的 webhook 重送會被冪等短路擋掉、永遠不會再呼叫這裡。
-    // 寧可 best-effort 直接寄一次（極端情況下可能重複），也不要讓信永久消失。
-    // 送出 → true；send() 拋錯（信沒送出）→ false 讓上游重送重試。
-    return send()
-      .then(() => true)
-      .catch((e) => {
-        console.error("[notification] best-effort send failed", type, e);
-        return false;
-      });
+    // 無法建立去重紀錄（DB 暫時性故障）：寧可 best-effort 直接寄一次，
+    // 也不要讓信永久消失。
+    try {
+      await send();
+    } catch (e) {
+      console.error("[notification] best-effort send failed", type, e);
+      Sentry.captureException(e, { extra: { orderId, type } });
+      // 信沒送出 → false 讓上游重送重試。
+      return false;
+    }
+    // 信已送出：補寫一筆 status='sent' 的去重紀錄。T88 之後 webhook 重送
+    // 會再進到這裡（兄弟信失敗即觸發 ERR 重送），沒有這筆錨點的話每一輪
+    // 重送都會把這封信重寄一次。insert 失敗只記錄——這個情境 DB 本來就在
+    // 故障（第一次 insert 才會走到 unknown），resolve {error} 或直接 throw
+    // 都可能發生，兩者都不得影響回傳值：信已送達，必須回 true。
+    try {
+      const { error: recordError } = await serviceRole
+        .from("notification")
+        .insert({
+          id,
+          order_id: orderId,
+          channel: "email",
+          type,
+          status: "sent",
+          sent_at: new Date().toISOString(),
+        });
+      if (recordError && recordError.code !== "23505") {
+        console.error(
+          "[notification] best-effort dedup record failed (email was delivered)",
+          type,
+          recordError,
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[notification] best-effort dedup record threw (email was delivered)",
+        type,
+        e,
+      );
+    }
+    return true;
   }
 
-  // conflict：已有紀錄。用條件式 UPDATE 原子性地把 failed 轉回 pending 才重試，
-  // 避免兩個並發請求同時讀到 failed、都各自呼叫 send() 造成重複寄信。
-  let reclaimed = await tryReclaim(serviceRole, orderId, type, (q) =>
-    q.eq("status", "failed"),
-  );
+  // conflict：已有紀錄。先查目前狀態——最常見的情境是重複 webhook 撞上
+  // 已寄出的通知，一次 SELECT 即可短路，免去固定打兩發 reclaim UPDATE。
+  const status = await fetchStatus(serviceRole, orderId, type);
+  if (status === "sent") return true;
+  // 查詢失敗（fetchStatus 已記錄）：無法確認送達，回 false 讓上游重試。
+  if (status === null) return false;
 
-  if (!reclaimed) {
-    // 找不到 failed 可撿：再試著撿「pending 太久」的紀錄——process 可能在
-    // attemptSend 執行到一半就被砍斷（serverless 執行時間上限等），導致
-    // 卡在 pending 永遠沒人處理。created_at 早於門檻才視為卡住，避免誤
-    // 撿到真的還在處理中的並發請求（那個情境已由上面的 failed reclaim
-    // 與最初的 claim insert 保護）。
+  // 用條件式 UPDATE 原子性地 reclaim 才重試，避免兩個並發請求同時讀到
+  // failed／stale pending、都各自呼叫 send() 造成重複寄信。
+  let reclaimed: { id: string } | null = null;
+  if (status === "failed") {
+    reclaimed = await tryReclaim(serviceRole, orderId, type, (q) =>
+      q.eq("status", "failed"),
+    );
+  } else if (status === "pending") {
+    // pending 太久＝process 可能在 attemptSend 執行到一半被砍斷（serverless
+    // 執行時間上限等），卡住永遠沒人處理。created_at 早於門檻才視為卡住，
+    // 避免誤撿到真的還在處理中的並發請求。
     const staleThreshold = new Date(
       Date.now() - STALE_PENDING_MS,
     ).toISOString();
@@ -85,23 +120,40 @@ async function sendOnceInner(
   }
 
   if (!reclaimed) {
-    // 沒 reclaim 到：可能已經真的送達（status=sent），也可能是另一個並發
-    // 請求正在處理中（status 仍是新鮮的 pending，尚未跨過 stale 門檻）。
-    // 後者的結果此刻未知——若直接回 true，等於樂觀假設對方一定會成功；
-    // 但這個回傳值現在會被 webhook 用來決定要不要讓 ECPay 重送（T88），
-    // 樂觀假設錯了就會把一次真正的寄信失敗回報成功、永遠沒有人再重試。
-    // 查一次目前狀態才誠實：只有確認 sent 才算成功，其餘一律回 false
-    // 讓上游有機會再次確認——reclaim 有去重＋stale 門檻保護，不會因為
-    // 多一次不必要的重送就造成重複寄信。
-    const { data: current } = await serviceRole
-      .from("notification")
-      .select("status")
-      .eq("order_id", orderId)
-      .eq("type", type)
-      .maybeSingle();
-    return current?.status === "sent";
+    // 沒 reclaim 到：可能剛被另一個並發請求搶走、或是新鮮 pending 還在
+    // 處理中，結果此刻未知。再確認一次：只有 sent 才算成功，其餘一律回
+    // false 讓上游有機會再次確認——reclaim 有去重＋stale 門檻保護，多一輪
+    // 不必要的重送不會造成重複寄信（代價只是偶發一輪空轉，接受）。
+    return (await fetchStatus(serviceRole, orderId, type)) === "sent";
   }
   return attemptSend(serviceRole, reclaimed.id, send);
+}
+
+// 查 notification 目前狀態。回 null＝「查詢失敗或查無資料」——conflict 之後
+// 資料列必然存在，所以 null 實務上就是查詢失敗，呼叫端一律當「無法確認送達」
+// 處理（回 false 讓上游重試）。
+async function fetchStatus(
+  serviceRole: ServiceRole,
+  orderId: string,
+  type: string,
+): Promise<string | null> {
+  const { data, error } = await serviceRole
+    .from("notification")
+    .select("status")
+    .eq("order_id", orderId)
+    .eq("type", type)
+    .maybeSingle();
+  if (error) {
+    // §6：「查詢失敗」≠「查無資料」。這裡的失敗會讓上游觸發重送，必須留下
+    // 記錄，否則 DB 故障引發的重送完全無法觀測、也無從與真實寄信失敗區分。
+    console.error("[notification] status query failed", type, error);
+    Sentry.captureMessage("sendOnce: notification status query failed", {
+      level: "warning",
+      extra: { orderId, type, error: error.message },
+    });
+    return null;
+  }
+  return data?.status ?? null;
 }
 
 async function tryReclaim(
@@ -120,7 +172,17 @@ async function tryReclaim(
     .update({ status: "pending", created_at: new Date().toISOString() })
     .eq("order_id", orderId)
     .eq("type", type);
-  const { data } = await withCondition(query).select("id").maybeSingle();
+  const { data, error } = await withCondition(query).select("id").maybeSingle();
+  if (error) {
+    // reclaim 失敗（DB 暫時性錯誤）：當作沒搶到即可（呼叫端會走狀態複查），
+    // 但要記錄，避免 DB 故障與「被並發搶走」混在一起無法追查。
+    console.error("[notification] reclaim update failed", type, error);
+    Sentry.captureMessage("sendOnce: reclaim update failed", {
+      level: "warning",
+      extra: { orderId, type, error: error.message },
+    });
+    return null;
+  }
   return data ?? null;
 }
 
@@ -158,34 +220,59 @@ async function attemptSend(
   } catch (e) {
     console.error("[notification] send failed", e);
     Sentry.captureException(e, { extra: { notificationId } });
-    await serviceRole
+    // 標記 failed 讓之後的 reclaim／每日 sweep 能重試。.eq("status","pending")
+    // 守衛：stale-reclaim 可能產生並發雙寄手，若另一方已寄成標了 sent，這裡
+    // 絕不能把 sent 蓋回 failed（會誤導成沒寄到、招來重複寄送）。
+    const { error: markError } = await serviceRole
       .from("notification")
       .update({ status: "failed" })
-      .eq("id", notificationId);
+      .eq("id", notificationId)
+      .eq("status", "pending");
+    // supabase-js 對 DB 錯誤是 resolve { error } 不 throw：不檢查的話這裡
+    // 靜默失敗，row 停在新鮮 pending，上游重送在 stale 門檻前全數空轉
+    // （reclaim 不到 failed、pending 又不夠老）。記錄之，回傳值不變。
+    if (markError) {
+      console.error("[notification] mark-failed update failed", markError);
+      Sentry.captureMessage("sendOnce: mark-failed update failed", {
+        level: "warning",
+        extra: { notificationId, error: markError.message },
+      });
+    }
     // send() 拋錯：信真的沒送出，回 false 讓上游觸發重送。
     return false;
   }
 
   // send() 已成功：這裡萬一失敗也不能回頭標成 failed（會誤導成「沒寄到」）。
   // 頂多留在 pending——但這代表「send() 成功、只是回填 sent 失敗」跟「process
-  // 被砍斷、send() 根本沒跑完」在資料庫裡是同一種狀態（都是 pending、
-  // sent_at 皆為 null，因為兩者是同一個 UPDATE 語句一起寫入），無法區分。
-  // 超過 STALE_PENDING_MS 後的 reclaim 機制會把這種 pending 當成「卡住」而
-  // 重新寄送，所以此處的失敗理論上仍可能造成一次重複寄信（機率低：需要
-  // send 成功但這個 UPDATE 恰好失敗，且之後真的有請求在 2 分鐘後重新
-  // 觸發同一筆通知）。這是目前設計已知、刻意接受的殘餘風險，優於「永久
-  // 不重試、信件真的漏寄」。
+  // 被砍斷、send() 根本沒跑完」在資料庫裡是同一種狀態，無法區分。超過
+  // STALE_PENDING_MS 後的 reclaim 機制會把這種 pending 當成「卡住」而重新
+  // 寄送，所以此處的失敗理論上仍可能造成一次重複寄信（機率低）。這是目前
+  // 設計已知、刻意接受的殘餘風險，優於「永久不重試、信件真的漏寄」。
   try {
-    await serviceRole
+    const { error: sentError } = await serviceRole
       .from("notification")
       .update({ status: "sent", sent_at: new Date().toISOString() })
       .eq("id", notificationId);
+    if (sentError) {
+      // DB 錯誤是 resolve { error } 不 throw，舊版只靠 catch 攔不到這個
+      // 失敗模式（catch 對它是死碼）——必須明確檢查才有記錄。
+      console.error(
+        "[notification] failed to record sent status (email was delivered)",
+        sentError,
+      );
+      Sentry.captureMessage(
+        "sendOnce: record-sent update failed (email delivered)",
+        {
+          level: "warning",
+          extra: { notificationId, error: sentError.message },
+        },
+      );
+    }
   } catch (e) {
     console.error(
       "[notification] failed to record sent status (email was delivered)",
       e,
     );
-    // 回填 sent 失敗屬次要環節，信已送達 → 仍回 true，不誤判成沒寄到。
   }
 
   // send() 成功（無論回填 sent 是否成功）：信已送達。

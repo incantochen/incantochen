@@ -7,11 +7,15 @@ import {
 } from "@/lib/order/ensure-paid";
 import { queryTradeInfo, RateLimitError } from "@/lib/ecpay/query-trade-info";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
+import { sendOnce } from "@/lib/notification/send-once";
+import { NOTIFICATION_SENDERS } from "@/lib/notification/senders";
+import type { OrderStatus } from "@/lib/order/order-status";
 
 const CANDIDATE_LIMIT = 30;
 const MIN_AGE_MS = 10 * 60 * 1000;
 const RECONCILE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const THROTTLE_MS = 400;
+const SWEEP_LIMIT = 20;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,12 +41,103 @@ async function markReconciled(
   }
 }
 
+// T88 過渡版兜底：每天掃 notification.status='failed' 補寄。ECPay webhook
+// 重送（快路徑）額度有限且可能被各種情況提前終止；有這個 sweep 在，「寄信
+// 失敗」的最壞情況從「永久遺失」降為「延遲至下一個 cron 週期」。重試頻率
+// 天然被 cron 排程（每日一次）限制，故不需要嘗試次數上限——永久性失敗
+//（客人 email 打錯等）會每天重試失敗＋告警一次，連續多日同一筆告警＝該
+// 人工介入（ops-runbook）；失敗分類＋次數上限的完整版需加欄位，登記為
+// 獨立技術債任務。
+async function sweepFailedNotifications(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+) {
+  const { data: failedRows, error } = await serviceRole
+    .from("notification")
+    .select("id, order_id, type")
+    .eq("status", "failed")
+    .order("created_at", { ascending: true })
+    .limit(SWEEP_LIMIT);
+
+  if (error) {
+    console.error("[ecpay-reconcile] failed-notification 查詢失敗", error);
+    Sentry.captureMessage("reconcile: notification sweep query failed", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return;
+  }
+  if (!failedRows || failedRows.length === 0) return;
+
+  // 批次撈訂單狀態做適寄判斷（不依賴 FK embed，兩段查詢即可）。
+  const orderIds = [...new Set(failedRows.map((r) => r.order_id))];
+  const { data: orders, error: ordersError } = await serviceRole
+    .from("orders")
+    .select("id, status")
+    .in("id", orderIds);
+
+  if (ordersError) {
+    console.error("[ecpay-reconcile] sweep 訂單狀態查詢失敗", ordersError);
+    Sentry.captureMessage("reconcile: sweep order-status query failed", {
+      level: "error",
+      extra: { error: ordersError.message },
+    });
+    return;
+  }
+  const statusById = new Map((orders ?? []).map((o) => [o.id, o.status]));
+
+  for (const row of failedRows) {
+    const sender = NOTIFICATION_SENDERS[row.type];
+    const orderStatus = statusById.get(row.order_id);
+    if (
+      !sender ||
+      !orderStatus ||
+      !sender.eligibleStatuses.includes(orderStatus as OrderStatus)
+    ) {
+      // 未登記的通知類型／訂單已取消退款／查無訂單：不重寄。這類 row 會
+      // 一直留在 failed 被每天撈到又跳過，屬可接受的低頻噪音；真要清理走
+      // 人工（ops-runbook）。
+      continue;
+    }
+
+    summary.sweepRetried += 1;
+    // sendOnce 走 conflict → failed reclaim → attemptSend，天然去重且與
+    // webhook 端的並發重試互斥，這裡不需要額外鎖。
+    const ok = await sendOnce(serviceRole, {
+      orderId: row.order_id,
+      type: row.type,
+      send: () => sender.send(row.order_id),
+    });
+    if (ok) {
+      summary.sweepSent += 1;
+    } else {
+      summary.sweepStillFailing += 1;
+      // 每日一筆的「還在失敗」訊號：連續多日出現同一 orderId+type＝多半是
+      // 永久性失敗（email 打錯、網域限制），該人工介入。
+      Sentry.captureMessage("reconcile: notification still failing", {
+        level: "warning",
+        extra: { orderId: row.order_id, type: row.type },
+      });
+    }
+    // 節流：對 Resend 的呼叫比照主迴圈對 ECPay 的禮貌。
+    await sleep(THROTTLE_MS);
+  }
+}
+
 type Summary = {
   checked: number;
   promoted: number;
   mismatches: number;
   failed: number;
   unexpected: number;
+  // 通知信投遞失敗獨立計數，不塞 unexpected——unexpected 已承載查詢例外／
+  // 金額異常等資料面訊號，混裝會讓日報無法分辨「資料異常」與「郵件故障」
+  //（T88 review）。
+  notifyFailed: number;
+  // failed-notification sweep（T88 過渡版兜底）的成果統計。
+  sweepRetried: number;
+  sweepSent: number;
+  sweepStillFailing: number;
   rateLimited: boolean;
 };
 
@@ -58,6 +153,10 @@ export async function GET(request: Request) {
     mismatches: 0,
     failed: 0,
     unexpected: 0,
+    notifyFailed: 0,
+    sweepRetried: 0,
+    sweepSent: 0,
+    sweepStillFailing: 0,
     rateLimited: false,
   };
 
@@ -155,23 +254,11 @@ export async function GET(request: Request) {
               extra: { merchantTradeNo: payment.merchant_trade_no },
             });
           } else {
-            // ensureOrderPaid/ensureNotificationSent 各自冪等，即使這次沒搶到
-            // CAS（webhook 已經處理過）呼叫也安全，用來補做可能半路失敗的通知。
-            await ensureOrderPaid(serviceRole, payment.order_id, "reconcile");
-            const notified = await ensureNotificationSent(
-              serviceRole,
-              payment.order_id,
-            );
-            if (!notified) {
-              // reconcile 是每日兜底，不因單封信投遞失敗中止整批——只告警、
-              // 不 throw。注意：這支 cron 本身**不會**在隔天重試這筆通知——
-              // candidate 查詢條件是 payment.status='pending'（見上方
-              // `.eq("status", "pending")`），這筆此時已是 paid，往後每次
-              // reconcile 都不會再撈到它。實際還能救的路徑只剩 T88 webhook
-              // 端的 ECPay 重送（若後續還有回呼進來）與人工補寄（T90
-              // runbook）；這裡只是記錄訊號，供追蹤 webhook 可靠度。
-              summary.unexpected += 1;
-              Sentry.captureMessage("reconcile: notification delivery failed", {
+            if (promotedRow) {
+              summary.promoted += 1;
+              // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
+              // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
+              Sentry.captureMessage("reconcile: promoted stuck payment", {
                 level: "warning",
                 extra: {
                   orderId: payment.order_id,
@@ -180,12 +267,37 @@ export async function GET(request: Request) {
               });
             }
 
-            if (promotedRow) {
-              summary.promoted += 1;
-              // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
-              // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
-              Sentry.captureMessage("reconcile: promoted stuck payment", {
-                level: "warning",
+            // ensureOrderPaid/ensureNotificationSent 各自冪等，即使這次沒搶到
+            // CAS（webhook 已經處理過）呼叫也安全，用來補做可能半路失敗的通知。
+            // 包 try/catch：兩者的狀態查詢碰到 DB 暫時錯誤會 throw，不可讓
+            // 單筆失敗中止整批（外層 catch 會直接 500，其餘候選當天全數不
+            // 對帳）——記錄後繼續下一筆（T88 review）。
+            try {
+              await ensureOrderPaid(serviceRole, payment.order_id, "reconcile");
+              const notified = await ensureNotificationSent(
+                serviceRole,
+                payment.order_id,
+              );
+              if (!notified) {
+                // 信投遞失敗：只告警不中止。這筆 payment 已是 paid、不會再被
+                // candidate 查詢（status='pending'）撈到，但下方的 failed-
+                // notification sweep 每天會補救，webhook 端的 ECPay 重送（若
+                // 還有回呼）也走 reclaim 補寄。
+                summary.notifyFailed += 1;
+                Sentry.captureMessage(
+                  "reconcile: notification delivery failed",
+                  {
+                    level: "warning",
+                    extra: {
+                      orderId: payment.order_id,
+                      merchantTradeNo: payment.merchant_trade_no,
+                    },
+                  },
+                );
+              }
+            } catch (e) {
+              summary.unexpected += 1;
+              Sentry.captureException(e, {
                 extra: {
                   orderId: payment.order_id,
                   merchantTradeNo: payment.merchant_trade_no,
@@ -234,6 +346,8 @@ export async function GET(request: Request) {
 
       await sleep(THROTTLE_MS);
     }
+
+    await sweepFailedNotifications(serviceRole, summary);
 
     return Response.json(summary);
   } catch (e) {

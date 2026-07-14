@@ -281,10 +281,72 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
 // ensureNotificationSent 需正確聚合兩封信各自的投遞結果，讓 webhook 能據此
 // 判斷是否要對 ECPay 回錯誤觸發重送。
 describe("ensureNotificationSent / notifyOrderPaid：聚合投遞結果（T88）", () => {
-  it("訂單非 paid → 不寄信，直接回傳 true", async () => {
+  it("訂單 pending_payment（付款未成立）→ 不寄信，直接回傳 true", async () => {
     const { serviceRole } = makeServiceRole({
       promote: { data: null, error: null },
       currentOrderStatus: "pending_payment",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(true);
+    expect(sendOnce).not.toHaveBeenCalled();
+  });
+
+  it("訂單已推進到 in_production（PAID_LINEAGE）→ 仍補寄，不因狀態推進切斷失敗信件的重試（T88 review）", async () => {
+    // 情境：paid 時信寄失敗、webhook 回 ERR 排定重送；管理員在下一次重送
+    // 抵達前把訂單推進到製作中。舊版只認 status==='paid' 會在這裡回 true、
+    // ECPay 停止重送，失敗的信永遠沒人補寄。
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "in_production",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(true);
+    expect(sendOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("訂單 shipped（PAID_LINEAGE）→ 仍補寄", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "shipped",
+    });
+
+    await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(sendOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("訂單 cancelled → 不寄信（避免對已取消訂單誤發確認信）、回傳 true", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "cancelled",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(true);
+    expect(sendOnce).not.toHaveBeenCalled();
+  });
+
+  it("訂單 refunded → 不寄信、回傳 true", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "refunded",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(true);
+    expect(sendOnce).not.toHaveBeenCalled();
+  });
+
+  it("查無此單 → 不寄信、回傳 true", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      // currentOrderStatus 不給 → maybeSingle 回 data: null
     });
 
     const result = await ensureNotificationSent(serviceRole, "order-1");

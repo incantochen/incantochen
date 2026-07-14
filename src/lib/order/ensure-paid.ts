@@ -4,6 +4,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { sendOrderConfirmation } from "@/lib/email/order-confirmation";
 import { sendNewOrderNotification } from "@/lib/email/new-order-notification";
 import { sendOnce } from "@/lib/notification/send-once";
+import { PAID_LINEAGE, type OrderStatus } from "@/lib/order/order-status";
 
 // 付款期間 cart 被加入新品項時的精準清理：只刪除訂單裡出現過的 cart_item
 // （product_id + config_snapshot 完全一致），新加入的保留。cart_item 與
@@ -224,9 +225,11 @@ export async function ensureNotificationSent(
   orderId: string,
 ): Promise<boolean> {
   // 不依賴呼叫者是否剛推進成功，重新查一次目前狀態：無論是這次才推進、
-  // 還是先前已經推進但通知沒寄成功，只要訂單現在確實是 paid 就補寄。
-  // 只在 paid 才寄，避免對已取消／退款的訂單誤發「訂單確認」信
-  // （目前系統尚無取消／退款通知信，故此處不需要導去別的通知）。
+  // 還是先前已經推進但通知沒寄成功，只要付款確實成立過就補寄。
+  // 判斷用 PAID_LINEAGE（paid 與其後續狀態）而非只認 paid：訂單可能在
+  // ECPay 下一次重送抵達前就被推進到製作／出貨，只認 paid 會把失敗信件
+  // 的重試靜默切斷（T88 review）。cancelled／refunded／pending_payment
+  //（含查無此單）不寄，避免對已取消／退款的訂單誤發「訂單確認」信。
   const { data: order, error } = await serviceRole
     .from("orders")
     .select("status")
@@ -235,8 +238,10 @@ export async function ensureNotificationSent(
 
   if (error) throw new Error(`ensureNotificationSent failed: ${error.message}`);
 
-  // 非 paid（含查無此單）：沒有要寄的信，視為成功。
-  if (order?.status !== "paid") return true;
+  if (!order || !PAID_LINEAGE.includes(order.status as OrderStatus)) {
+    // 付款未成立或不該寄：沒有要寄的信，視為成功。
+    return true;
+  }
 
   return notifyOrderPaid(serviceRole, orderId);
 }

@@ -87,25 +87,34 @@ where merchant_trade_no = '<19碼tradeno>' and gateway_trade_no is null;
 
 ---
 
-## 4. 通知信卡 `failed`／客人沒收到信（T88 已知缺口）
+## 4. 通知信卡 `failed`／客人沒收到信（T88 已落地自動重試）
 
-**成因**：Resend 寄送失敗時 `notification.status='failed'` 但 webhook 已回 `1|OK`——ECPay 不會重送，**沒有任何機制會自動補寄**（T88 待修）。
+**現行機制（T88，PR #66）**：寄信失敗時 `notification.status='failed'`，系統有兩層自動補救——
+
+1. **快路徑**：webhook 對 ECPay 回 `0|notification delivery failed` 觸發重送，重送時 reclaim 補寄（限 ECPay 重送額度內）。
+2. **兜底**：每日 reconcile cron 的 failed-notification sweep 掃 `status='failed'` 逐筆補寄（訂單已取消／退款不寄）。暫時性故障（Resend 抖動）最慢隔天自癒，**不需人工介入**。
+
+**何時該人工介入**：Sentry 的 `reconcile: notification still failing` 告警**連續 2–3 天出現同一筆 orderId+type**——暫時性故障不會連續失敗三天，基本可斷定是永久性問題（客人 email 打錯、硬退信、T35 前 `onboarding@resend.dev` 只能寄到 Resend 帳號本人信箱的限制）。
 
 **判斷**：
 ```sql
-select n.type, n.status, o.order_no from notification n
+select n.type, n.status, n.created_at, o.order_no, o.status as order_status
+from notification n
 join orders o on o.id = n.order_id
 where n.status = 'failed' order by n.created_at desc;
 ```
+並到 Sentry 看該筆的錯誤內容（Resend 回的 error message 會寫明退信原因）。
 
-**修復（T88 落地前的過渡做法）**：
-1. 到 [Resend Dashboard](https://resend.com) 確認該收件人是否真的沒收到（也可能是進垃圾信）。
-2. 手動補寄：用客人 email 從 Resend 後台或以一般信箱寄出（訂單資訊照 `/admin/orders/[id]` 抄）。
-3. 補寄後把該列標記，避免日後 T88 自動機制重複寄：
+**修復（確認為永久性失敗後）**：
+1. 到 [Resend Dashboard](https://resend.com) 確認退信原因；若是 email 打錯，聯絡客人（訂單有電話）核對。
+2. 手動補寄：用正確 email 從 Resend 後台或以一般信箱寄出（訂單資訊照 `/admin/orders/[id]` 抄）。
+3. 補寄後把該列標記 `sent`，讓每日 sweep 停止重試、告警停止：
    ```sql
-   update notification set status = 'sent' where id = '<該列id>' and status = 'failed';
+   update notification set status = 'sent', sent_at = now() where id = '<該列id>' and status = 'failed';
    ```
-4. `failed` 頻繁出現 → 檢查 `RESEND_API_KEY` 有效性與 Resend 帳號額度，看 Sentry 錯誤內容。
+4. 大量 `failed` 同時出現 → 檢查 `RESEND_API_KEY` 有效性與 Resend 帳號額度；上線前另注意 T35（FROM 網域驗證）是否已完成。
+
+> 失敗分類（暫時／永久）與嘗試次數上限的完整自動化需加欄位，登記於 T122 技術債，營運後視告警噪音決定是否做。
 
 ---
 

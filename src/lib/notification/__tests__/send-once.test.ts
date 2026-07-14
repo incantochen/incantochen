@@ -5,9 +5,16 @@ vi.mock("server-only", () => ({}));
 type NotificationRow = { id: string; status: string; createdAt: number };
 
 const notifications = new Map<string, NotificationRow>();
-let insertMode: "normal" | "throw" | "error" = "normal";
-let updateByIdMode: "normal" | "throw" = "normal";
+// error-once：第一次 insert 回 {error}、之後恢復正常——模擬「claim 時 DB 短暫
+// 故障、best-effort 補寫去重紀錄時已恢復」的暫時性故障情境。
+let insertMode: "normal" | "throw" | "error" | "error-once" = "normal";
+let insertCalls = 0;
+// "error"：resolve {error} 不 throw——真實 supabase-js 對 DB 層失敗（timeout、
+// 連線池耗盡）就是這個行為，throw 只發生在網路層；兩種都要測（T88 review：
+// 舊測試只用 throw 模擬，真實失敗模式反而沒蓋到）。
+let updateByIdMode: "normal" | "throw" | "error" = "normal";
 let reclaimMode: "normal" | "throw" = "normal";
+let selectMode: "normal" | "error" = "normal";
 
 function key(orderId: string, type: string) {
   return `${orderId}:${type}`;
@@ -30,11 +37,18 @@ function makeServiceRole() {
               return chain;
             },
             maybeSingle: () => {
+              if (selectMode === "error") {
+                return Promise.resolve({
+                  data: null,
+                  error: { message: "simulated select failure" },
+                });
+              }
               const row = notifications.get(
                 key(filters.order_id ?? "", filters.type ?? ""),
               );
               return Promise.resolve({
                 data: row ? { status: row.status } : null,
+                error: null,
               });
             },
           };
@@ -46,6 +60,7 @@ function makeServiceRole() {
           type: string;
           status: string;
         }) => {
+          insertCalls += 1;
           if (insertMode === "throw") {
             throw new Error("simulated insert failure");
           }
@@ -53,7 +68,10 @@ function makeServiceRole() {
           if (notifications.has(k)) {
             return Promise.resolve({ error: { code: "23505" } });
           }
-          if (insertMode === "error") {
+          if (
+            insertMode === "error" ||
+            (insertMode === "error-once" && insertCalls === 1)
+          ) {
             return Promise.resolve({ error: { code: "OTHER" } });
           }
           notifications.set(k, {
@@ -107,12 +125,20 @@ function makeServiceRole() {
               },
             }),
             then: (resolve: (v: unknown) => void) => {
-              // 非條件式 update-by-id：update(...).eq('id', id)
+              // update-by-id：update(...).eq('id', id)[.eq('status', s)]
               if (updateByIdMode === "throw") {
                 throw new Error("simulated update failure");
               }
+              if (updateByIdMode === "error") {
+                resolve({ error: { message: "simulated update failure" } });
+                return;
+              }
               for (const row of notifications.values()) {
-                if (row.id === filters.id) Object.assign(row, values);
+                if (row.id !== filters.id) continue;
+                // 尊重鏈上的 status 條件（mark-failed 的 pending 守衛）：
+                // 條件不符＝0 rows affected，不是 error。
+                if (filters.status && row.status !== filters.status) continue;
+                Object.assign(row, values);
               }
               resolve({ error: null });
             },
@@ -127,8 +153,10 @@ function makeServiceRole() {
 beforeEach(() => {
   notifications.clear();
   insertMode = "normal";
+  insertCalls = 0;
   updateByIdMode = "normal";
   reclaimMode = "normal";
+  selectMode = "normal";
 });
 
 import { sendOnce } from "../send-once";
@@ -496,5 +524,102 @@ describe("sendOnce", () => {
 
     expect(send).not.toHaveBeenCalled();
     expect(result).toBe(true);
+  });
+
+  // ── T88 review 補強：supabase-js 對 DB 失敗是 resolve {error} 不 throw，
+  //    以下用 {error} 模擬真實失敗模式（舊測試只用 throw，蓋不到）。
+
+  it("標記 failed 的 UPDATE 回傳 {error}（非 throw）→ 仍回 false、不往外拋", async () => {
+    updateByIdMode = "error";
+    const send = vi.fn().mockRejectedValue(new Error("resend down"));
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeServiceRole() as any,
+      { orderId: "o1", type: "order_confirmation", send },
+    );
+
+    expect(result).toBe(false);
+    // 標記失敗：row 停在 pending（而非 failed），靠 stale 門檻後的 reclaim 補救。
+    expect(notifications.get("o1:order_confirmation")?.status).toBe("pending");
+  });
+
+  it("回填 sent 的 UPDATE 回傳 {error}（非 throw）→ 信已送達，仍回 true", async () => {
+    updateByIdMode = "error";
+    const send = vi.fn().mockResolvedValue(undefined);
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeServiceRole() as any,
+      { orderId: "o1", type: "order_confirmation", send },
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result).toBe(true);
+  });
+
+  it("conflict 後的狀態查詢回傳 {error} → 回 false（查詢失敗 ≠ 未寄出，但不可誤判為已送達）", async () => {
+    const sr = makeServiceRole();
+    notifications.set(key("o1", "order_confirmation"), {
+      id: "n0",
+      status: "sent",
+      createdAt: Date.now(),
+    });
+    selectMode = "error";
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      { orderId: "o1", type: "order_confirmation", send },
+    );
+
+    expect(send).not.toHaveBeenCalled();
+    expect(result).toBe(false);
+  });
+
+  it("並發雙寄手：另一方已標 sent，慢的一方 send 失敗不得把 sent 蓋回 failed（status 守衛）", async () => {
+    const sr = makeServiceRole();
+    // send() 執行中另一個並發寄手完成送達並標了 sent（stale-reclaim 雙寄手
+    // 情境的簡化重演），隨後這一方的 send() 失敗。
+    const send = vi.fn().mockImplementation(async () => {
+      const row = notifications.get(key("o1", "order_confirmation"));
+      if (row) row.status = "sent";
+      throw new Error("resend down");
+    });
+
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      { orderId: "o1", type: "order_confirmation", send },
+    );
+
+    expect(result).toBe(false);
+    // 沒有 .eq("status","pending") 守衛時這裡會被蓋成 failed，招來下一輪
+    // reclaim 重寄第三次。
+    expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
+  });
+
+  it("best-effort 寄成後補寫去重紀錄（DB 已恢復）→ 後續重送不再重寄", async () => {
+    const sr = makeServiceRole();
+    insertMode = "error-once"; // claim 失敗、補寫紀錄時已恢復
+    const send = vi.fn().mockResolvedValue(undefined);
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      { orderId: "o1", type: "order_confirmation", send },
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result).toBe(true);
+    // 去重錨點已補寫：T88 的 ERR 重送再進來（兄弟信失敗觸發）不會重寄這封。
+    expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
+
+    const send2 = vi.fn().mockResolvedValue(undefined);
+    const result2 = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      { orderId: "o1", type: "order_confirmation", send: send2 },
+    );
+    expect(send2).not.toHaveBeenCalled();
+    expect(result2).toBe(true);
   });
 });
