@@ -71,7 +71,8 @@ export async function POST(request: Request) {
 
       if (paidPayment) {
         await ensureOrderPaid(serviceRole, order.id, "webhook");
-        await ensureNotificationSent(serviceRole, order.id);
+        const notified = await ensureNotificationSent(serviceRole, order.id);
+        if (!notified) return ERR("notification delivery failed");
         return OK();
       }
 
@@ -115,7 +116,8 @@ export async function POST(request: Request) {
 
       if (isPaid) {
         await ensureOrderPaid(serviceRole, order.id, "webhook");
-        await ensureNotificationSent(serviceRole, order.id);
+        const notified = await ensureNotificationSent(serviceRole, order.id);
+        if (!notified) return ERR("notification delivery failed");
       }
 
       return OK();
@@ -127,7 +129,11 @@ export async function POST(request: Request) {
     // 再回 1|OK
     if (payment.status === "paid") {
       await ensureOrderPaid(serviceRole, payment.order_id, "webhook");
-      await ensureNotificationSent(serviceRole, payment.order_id);
+      const notified = await ensureNotificationSent(
+        serviceRole,
+        payment.order_id,
+      );
+      if (!notified) return ERR("notification delivery failed");
       return OK();
     }
 
@@ -214,7 +220,11 @@ export async function POST(request: Request) {
     // 才決定是否真的要推進，不需要在這裡先查一次 orders.status。
     if (isPaid) {
       await ensureOrderPaid(serviceRole, payment.order_id, "webhook");
-      await ensureNotificationSent(serviceRole, payment.order_id);
+      const notified = await ensureNotificationSent(
+        serviceRole,
+        payment.order_id,
+      );
+      if (!notified) return ERR("notification delivery failed");
     }
 
     return OK();

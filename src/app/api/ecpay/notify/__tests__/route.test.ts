@@ -32,14 +32,20 @@ vi.mock("@/lib/email/new-order-notification", () => ({
 // sendOnce：T69 的去重/重試邏輯已在 send-once.test.ts 獨立覆蓋，
 // 這裡當依賴邊界整個 mock 掉，pass-through 呼叫 send() 即可，
 // 讓既有的 sendOrderConfirmation/sendNewOrderNotification 斷言不用改。
+// 回傳布林（T88）：預設投遞成功；測試可透過 sendOnceResult 針對特定 type
+// 覆寫成 false，模擬「其中一封信真的沒寄出」以驗證 webhook 回 0|... 觸發重送。
+let sendOnceResult: Record<string, boolean> = {};
 const sendOnce = vi.fn(
-  async (_sr: unknown, p: { send: () => Promise<void> }) => {
+  async (_sr: unknown, p: { type: string; send: () => Promise<void> }) => {
     await p.send();
+    return sendOnceResult[p.type] ?? true;
   },
 );
 vi.mock("@/lib/notification/send-once", () => ({
   sendOnce: (...args: unknown[]) =>
-    sendOnce(...(args as [unknown, { send: () => Promise<void> }])),
+    sendOnce(
+      ...(args as [unknown, { type: string; send: () => Promise<void> }]),
+    ),
 }));
 
 // service role mock：以「呼叫記錄器」記下所有 update/insert，供斷言副作用。
@@ -113,7 +119,10 @@ function makeChain(table: string) {
         if (chain._op === "update") {
           // 條件式 UPDATE 現在鏈 .select().maybeSingle() 檢查更新到幾列；
           // 靠 WHERE 的 status eq 值區分第一段 CAS（pending）與救援（failed）。
-          if (chain._lastEq?.col === "status" && chain._lastEq?.val === "failed") {
+          if (
+            chain._lastEq?.col === "status" &&
+            chain._lastEq?.val === "failed"
+          ) {
             return Promise.resolve({
               data: db.paymentRescueMatches ? { id: "p1" } : null,
               error: null,
@@ -150,7 +159,8 @@ function makeChain(table: string) {
             });
           }
           // orderRaceLost 模擬「這次 UPDATE 送出前，狀態已被別的請求搶先改掉」。
-          if (db.orderRaceLost) return Promise.resolve({ data: null, error: null });
+          if (db.orderRaceLost)
+            return Promise.resolve({ data: null, error: null });
           if (db.orderStatus === "pending_payment") {
             db.orderStatus = "paid"; // 模擬 UPDATE 真的把狀態改掉
             return Promise.resolve({ data: { id: "promoted" }, error: null });
@@ -165,7 +175,8 @@ function makeChain(table: string) {
             error: { message: "simulated select error" },
           });
         }
-        if (db.orderStatus === null) return Promise.resolve({ data: null, error: null });
+        if (db.orderStatus === null)
+          return Promise.resolve({ data: null, error: null });
         return Promise.resolve({
           data: {
             id: db.order?.id ?? "o1",
@@ -180,7 +191,11 @@ function makeChain(table: string) {
     then: (resolve: (v: unknown) => void) => {
       // bug_001：正常路徑的 payment UPDATE（非 select/maybeSingle，走 then）
       // 也要能模擬 { error }，驗證它跟 ensureOrderPaid 一樣有檢查。
-      if (table === "payment" && chain._op === "update" && db.paymentUpdateError) {
+      if (
+        table === "payment" &&
+        chain._op === "update" &&
+        db.paymentUpdateError
+      ) {
         resolve({ error: { message: "simulated payment update error" } });
         return;
       }
@@ -255,6 +270,7 @@ beforeEach(() => {
   sendOrderConfirmation.mockClear();
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
+  sendOnceResult = {};
 });
 
 // ---------------------------------------------------------------------------
@@ -309,6 +325,21 @@ describe("RtnCode=1 且 payment=pending", () => {
     expect(await res.text()).toBe("1|OK");
     expect(insertsTo("order_status_log")).toHaveLength(0);
     expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("通知投遞失敗（sendOnce 回 false）→ 訂單／付款仍推進成功，但回 0|... 觸發 ECPay 重送（T88）", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
+    db.orderStatus = "pending_payment";
+    sendOnceResult = { order_confirmation: false };
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|notification delivery failed");
+    // 訂單與付款已正確推進，回 ERR 只是請 ECPay 重送、不影響已完成的金流狀態。
+    const paymentUpdate = updatesTo("payment")[0]?.values as any;
+    expect(paymentUpdate.status).toBe("paid");
+    const orderUpdate = updatesTo("orders")[0]?.values as any;
+    expect(orderUpdate.status).toBe("paid");
   });
 });
 

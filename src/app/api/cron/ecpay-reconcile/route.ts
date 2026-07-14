@@ -158,7 +158,23 @@ export async function GET(request: Request) {
             // ensureOrderPaid/ensureNotificationSent 各自冪等，即使這次沒搶到
             // CAS（webhook 已經處理過）呼叫也安全，用來補做可能半路失敗的通知。
             await ensureOrderPaid(serviceRole, payment.order_id, "reconcile");
-            await ensureNotificationSent(serviceRole, payment.order_id);
+            const notified = await ensureNotificationSent(
+              serviceRole,
+              payment.order_id,
+            );
+            if (!notified) {
+              // reconcile 是每日兜底，不因單封信投遞失敗中止整批——只告警，
+              // 隔日再試（T88：webhook 路徑會主動觸發 ECPay 重送，這裡只是
+              // 記錄訊號）。
+              summary.unexpected += 1;
+              Sentry.captureMessage("reconcile: notification delivery failed", {
+                level: "warning",
+                extra: {
+                  orderId: payment.order_id,
+                  merchantTradeNo: payment.merchant_trade_no,
+                },
+              });
+            }
 
             if (promotedRow) {
               summary.promoted += 1;

@@ -12,17 +12,23 @@ vi.mock("@/lib/email/new-order-notification", () => ({
   sendNewOrderNotification: (...args: unknown[]) =>
     sendNewOrderNotification(...args),
 }));
+// sendOnce 回傳布林（T88）：預設兩種 type 皆視為投遞成功，測試可透過
+// sendOnceResult 針對特定 type 覆寫成 false，模擬「其中一封信真的沒寄出」。
+let sendOnceResult: Record<string, boolean> = {};
 const sendOnce = vi.fn(
-  async (_sr: unknown, p: { send: () => Promise<void> }) => {
+  async (_sr: unknown, p: { type: string; send: () => Promise<void> }) => {
     await p.send();
+    return sendOnceResult[p.type] ?? true;
   },
 );
 vi.mock("@/lib/notification/send-once", () => ({
   sendOnce: (...args: unknown[]) =>
-    sendOnce(...(args as [unknown, { send: () => Promise<void> }])),
+    sendOnce(
+      ...(args as [unknown, { type: string; send: () => Promise<void> }]),
+    ),
 }));
 
-import { ensureOrderPaid } from "../ensure-paid";
+import { ensureOrderPaid, ensureNotificationSent } from "../ensure-paid";
 
 type PromoteResult = {
   data: { id: string; cart_id: string | null; created_at: string } | null;
@@ -131,13 +137,18 @@ beforeEach(() => {
   sendOrderConfirmation.mockClear();
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
+  sendOnceResult = {};
 });
 
 describe("ensureOrderPaid：T75 付款成功清購物車", () => {
   it("promoted.cart_id 非 null，cart 下單後沒被動過 → 刪除對應 cart", async () => {
     const { serviceRole, cartDeleteCalls } = makeServiceRole({
       promote: {
-        data: { id: "order-1", cart_id: "cart-1", created_at: ORDER_CREATED_AT },
+        data: {
+          id: "order-1",
+          cart_id: "cart-1",
+          created_at: ORDER_CREATED_AT,
+        },
         error: null,
       },
       cartUpdatedAt: CART_UNCHANGED_SINCE,
@@ -163,10 +174,18 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
         cartUpdatedAt: CART_TOUCHED_AFTER,
         orderItems: [{ product_id: "prod-a", config_snapshot: boughtConfig }],
         cartItems: [
-          { id: "ci-bought", product_id: "prod-a", config_snapshot: boughtConfig },
+          {
+            id: "ci-bought",
+            product_id: "prod-a",
+            config_snapshot: boughtConfig,
+          },
           { id: "ci-new", product_id: "prod-b", config_snapshot: {} },
           // 同商品但不同配置：不算買過，必須保留
-          { id: "ci-variant", product_id: "prod-a", config_snapshot: { metal: "silver" } },
+          {
+            id: "ci-variant",
+            product_id: "prod-a",
+            config_snapshot: { metal: "silver" },
+          },
         ],
       },
     );
@@ -190,7 +209,9 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
         },
         cartUpdatedAt: CART_TOUCHED_AFTER,
         orderItems: [{ product_id: "prod-a", config_snapshot: {} }],
-        cartItems: [{ id: "ci-new", product_id: "prod-b", config_snapshot: {} }],
+        cartItems: [
+          { id: "ci-new", product_id: "prod-b", config_snapshot: {} },
+        ],
       },
     );
 
@@ -239,7 +260,11 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
   it("cart delete 回傳 error → 不 throw，函式正常結束（清車失敗不擋付款確認流程）", async () => {
     const { serviceRole, cartDeleteCalls } = makeServiceRole({
       promote: {
-        data: { id: "order-1", cart_id: "cart-1", created_at: ORDER_CREATED_AT },
+        data: {
+          id: "order-1",
+          cart_id: "cart-1",
+          created_at: ORDER_CREATED_AT,
+        },
         error: null,
       },
       cartDeleteError: { message: "db down" },
@@ -249,5 +274,73 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       ensureOrderPaid(serviceRole, "order-1", "webhook"),
     ).resolves.toBeUndefined();
     expect(cartDeleteCalls).toEqual(["cart-1"]);
+  });
+});
+
+// T88：sendOnce 從「絕不往外拋例外」改成「回傳布林」後，notifyOrderPaid／
+// ensureNotificationSent 需正確聚合兩封信各自的投遞結果，讓 webhook 能據此
+// 判斷是否要對 ECPay 回錯誤觸發重送。
+describe("ensureNotificationSent / notifyOrderPaid：聚合投遞結果（T88）", () => {
+  it("訂單非 paid → 不寄信，直接回傳 true", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "pending_payment",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(true);
+    expect(sendOnce).not.toHaveBeenCalled();
+  });
+
+  it("訂單 paid、兩封皆投遞成功 → 回傳 true", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "paid",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(true);
+    expect(sendOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("訂單 paid、其中一封（order_confirmation）投遞失敗 → 回傳 false", async () => {
+    sendOnceResult = { order_confirmation: false };
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "paid",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(false);
+  });
+
+  it("訂單 paid、其中一封（new_order_notification）投遞失敗 → 回傳 false", async () => {
+    sendOnceResult = { new_order_notification: false };
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "paid",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(false);
+  });
+
+  it("訂單 paid、兩封皆投遞失敗 → 回傳 false", async () => {
+    sendOnceResult = {
+      order_confirmation: false,
+      new_order_notification: false,
+    };
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "paid",
+    });
+
+    const result = await ensureNotificationSent(serviceRole, "order-1");
+
+    expect(result).toBe(false);
   });
 });

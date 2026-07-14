@@ -19,22 +19,31 @@ const STALE_PENDING_MS = 2 * 60 * 1000;
 // 冪等短路擋在最前面、不會再進到這裡，所以這支函式本身必須保證絕對不往外
 // 拋例外——內部任何一步（DB 讀寫、送信）失敗都只能記 log、絕不能讓例外
 // 傳出去影響 webhook 的回應，否則會造成通知永久遺失且無法重試。
+//
+// 回傳 boolean 而非 throw（T88）：`false` 只代表「真的嘗試寄信但 send() 拋錯
+// （信沒送出）」，在意的呼叫端（webhook）可據此對 ECPay 回錯誤以觸發重送，
+// 重送時上面的 reclaim 機制就會補寄。其餘一律 `true`（已送出／重複已寄／
+// 無事可做）。仍不往外拋例外，維持出貨 best-effort 呼叫端的契約。
 export async function sendOnce(
   serviceRole: ServiceRole,
   params: { orderId: string; type: string; send: () => Promise<void> },
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await sendOnceInner(serviceRole, params);
+    return await sendOnceInner(serviceRole, params);
   } catch (e) {
     console.error("[notification] sendOnce 發生未預期例外", params.type, e);
-    Sentry.captureException(e, { extra: { orderId: params.orderId, type: params.type } });
+    Sentry.captureException(e, {
+      extra: { orderId: params.orderId, type: params.type },
+    });
+    // 非預期例外：無法確認是否送達，偏向回 false 讓上游重送重試。
+    return false;
   }
 }
 
 async function sendOnceInner(
   serviceRole: ServiceRole,
   params: { orderId: string; type: string; send: () => Promise<void> },
-): Promise<void> {
+): Promise<boolean> {
   const { orderId, type, send } = params;
   const id = randomUUID();
 
@@ -46,10 +55,13 @@ async function sendOnceInner(
     // 無法建立去重紀錄（DB 暫時性故障）：此時訂單多半已標記 paid，
     // 之後的 webhook 重送會被冪等短路擋掉、永遠不會再呼叫這裡。
     // 寧可 best-effort 直接寄一次（極端情況下可能重複），也不要讓信永久消失。
-    await send().catch((e) => {
-      console.error("[notification] best-effort send failed", type, e);
-    });
-    return;
+    // 送出 → true；send() 拋錯（信沒送出）→ false 讓上游重送重試。
+    return send()
+      .then(() => true)
+      .catch((e) => {
+        console.error("[notification] best-effort send failed", type, e);
+        return false;
+      });
   }
 
   // conflict：已有紀錄。用條件式 UPDATE 原子性地把 failed 轉回 pending 才重試，
@@ -72,7 +84,8 @@ async function sendOnceInner(
     );
   }
 
-  if (!reclaimed) return;
+  // 沒 reclaim 到（已寄或另一並發請求正在處理）：無事可做，視為成功。
+  if (!reclaimed) return true;
   return attemptSend(serviceRole, reclaimed.id, send);
 }
 
@@ -124,7 +137,7 @@ async function attemptSend(
   serviceRole: ServiceRole,
   notificationId: string,
   send: () => Promise<void>,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await send();
   } catch (e) {
@@ -134,7 +147,8 @@ async function attemptSend(
       .from("notification")
       .update({ status: "failed" })
       .eq("id", notificationId);
-    return;
+    // send() 拋錯：信真的沒送出，回 false 讓上游觸發重送。
+    return false;
   }
 
   // send() 已成功：這裡萬一失敗也不能回頭標成 failed（會誤導成「沒寄到」）。
@@ -156,5 +170,9 @@ async function attemptSend(
       "[notification] failed to record sent status (email was delivered)",
       e,
     );
+    // 回填 sent 失敗屬次要環節，信已送達 → 仍回 true，不誤判成沒寄到。
   }
+
+  // send() 成功（無論回填 sent 是否成功）：信已送達。
+  return true;
 }

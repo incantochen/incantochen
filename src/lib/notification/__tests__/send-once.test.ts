@@ -114,17 +114,21 @@ beforeEach(() => {
 import { sendOnce } from "../send-once";
 
 describe("sendOnce", () => {
-  it("首次寄送：insert pending → send 成功 → 更新為 sent", async () => {
+  it("首次寄送：insert pending → send 成功 → 更新為 sent → 回傳 true", async () => {
     const send = vi.fn().mockResolvedValue(undefined);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(makeServiceRole() as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send,
-    });
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeServiceRole() as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      },
+    );
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
+    expect(result).toBe(true);
   });
 
   it("已成功寄過（status=sent）→ 撞 23505 → 不重寄", async () => {
@@ -140,38 +144,50 @@ describe("sendOnce", () => {
     );
 
     const send2 = vi.fn().mockResolvedValue(undefined);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(sr as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send: send2,
-    });
+    const result2 = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send: send2,
+      },
+    );
 
     expect(send2).not.toHaveBeenCalled();
+    expect(result2).toBe(true);
   });
 
-  it("寄送失敗 → status=failed；重送（撞 23505）會重試", async () => {
+  it("寄送失敗 → status=failed、回傳 false；重送（撞 23505）會重試並回傳 true", async () => {
     const sr = makeServiceRole();
     const failing = vi.fn().mockRejectedValue(new Error("resend down"));
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(sr as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send: failing,
-    });
+    const result1 = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send: failing,
+      },
+    );
 
     expect(notifications.get("o1:order_confirmation")?.status).toBe("failed");
+    expect(result1).toBe(false);
 
     const retrySend = vi.fn().mockResolvedValue(undefined);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(sr as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send: retrySend,
-    });
+    const result2 = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send: retrySend,
+      },
+    );
 
     expect(retrySend).toHaveBeenCalledTimes(1);
     expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
+    expect(result2).toBe(true);
   });
 
   it("不同 type 各自獨立去重", async () => {
@@ -197,48 +213,77 @@ describe("sendOnce", () => {
     expect(send2).toHaveBeenCalledTimes(1);
   });
 
-  it("claim insert 拋例外 → best-effort 直接寄送，不因記錄不了而漏寄", async () => {
+  it("claim insert 拋例外 → best-effort 直接寄送、成功回傳 true，不因記錄不了而漏寄", async () => {
     insertMode = "throw";
     const send = vi.fn().mockResolvedValue(undefined);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(makeServiceRole() as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send,
-    });
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeServiceRole() as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      },
+    );
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(notifications.has("o1:order_confirmation")).toBe(false);
+    expect(result).toBe(true);
   });
 
-  it("claim insert 回傳非 23505 錯誤 → best-effort 直接寄送", async () => {
+  it("claim insert 回傳非 23505 錯誤 → best-effort 直接寄送、成功回傳 true", async () => {
     insertMode = "error";
     const send = vi.fn().mockResolvedValue(undefined);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(makeServiceRole() as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send,
-    });
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeServiceRole() as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      },
+    );
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(notifications.has("o1:order_confirmation")).toBe(false);
+    expect(result).toBe(true);
   });
 
-  it("send 成功但標記 sent 失敗 → 不可回頭標成 failed（避免誤導成沒寄到）", async () => {
+  it("claim insert 拋例外 + best-effort send 也失敗 → 回傳 false", async () => {
+    insertMode = "throw";
+    const send = vi.fn().mockRejectedValue(new Error("resend down"));
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeServiceRole() as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      },
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result).toBe(false);
+  });
+
+  it("send 成功但標記 sent 失敗 → 不可回頭標成 failed（避免誤導成沒寄到）、仍回傳 true", async () => {
     updateByIdMode = "throw";
     const send = vi.fn().mockResolvedValue(undefined);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(makeServiceRole() as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send,
-    });
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeServiceRole() as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      },
+    );
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(notifications.get("o1:order_confirmation")?.status).not.toBe(
       "failed",
     );
+    expect(result).toBe(true);
   });
 
   it("並發：atomic reclaim 防止兩個請求同時看到 failed 而重複寄信", async () => {
@@ -285,7 +330,7 @@ describe("sendOnce", () => {
     expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
   });
 
-  it("reclaim UPDATE 本身拋例外 → sendOnce 整體不往外拋，只記 log（review round 2）", async () => {
+  it("reclaim UPDATE 本身拋例外 → sendOnce 整體不往外拋、回傳 false，只記 log（review round 2）", async () => {
     const sr = makeServiceRole();
     notifications.set(key("o1", "order_confirmation"), {
       id: "n0",
@@ -303,7 +348,7 @@ describe("sendOnce", () => {
         type: "order_confirmation",
         send,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
 
     expect(send).not.toHaveBeenCalled();
   });

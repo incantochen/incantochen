@@ -26,7 +26,10 @@ async function removePurchasedItemsFromCart(
 
   if (orderItemsRes.error || cartItemsRes.error) {
     const error = orderItemsRes.error ?? cartItemsRes.error;
-    console.error("[ensureOrderPaid] purchased-item cleanup query failed", error);
+    console.error(
+      "[ensureOrderPaid] purchased-item cleanup query failed",
+      error,
+    );
     Sentry.captureMessage("ensureOrderPaid: purchased-item cleanup failed", {
       level: "error",
       extra: { orderId, cartId, error: error?.message },
@@ -52,7 +55,10 @@ async function removePurchasedItemsFromCart(
     .delete()
     .in("id", idsToRemove);
   if (removeError) {
-    console.error("[ensureOrderPaid] purchased-item delete failed", removeError);
+    console.error(
+      "[ensureOrderPaid] purchased-item delete failed",
+      removeError,
+    );
     Sentry.captureMessage("ensureOrderPaid: purchased-item delete failed", {
       level: "error",
       extra: { orderId, cartId, error: removeError.message },
@@ -63,9 +69,11 @@ async function removePurchasedItemsFromCart(
 async function notifyOrderPaid(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
-) {
+): Promise<boolean> {
   // sendOnce 保證不往外拋例外，兩通知彼此獨立，可安全平行處理。
-  await Promise.all([
+  // 兩封皆確認送達（true）才回 true；任一封 send() 失敗（false）即回 false，
+  // 讓上游（webhook）觸發 ECPay 重送，重送時 reclaim 機制會補寄失敗那封（T88）。
+  const [confirmationOk, notificationOk] = await Promise.all([
     sendOnce(serviceRole, {
       orderId,
       type: "order_confirmation",
@@ -77,6 +85,7 @@ async function notifyOrderPaid(
       send: () => sendNewOrderNotification(orderId),
     }),
   ]);
+  return confirmationOk && notificationOk;
 }
 
 // source 標示這次推進是被誰觸發（"webhook" 或 T89 的 "reconcile"），寫進
@@ -206,10 +215,14 @@ export async function ensureOrderPaid(
   }
 }
 
+// 回傳 boolean（T88）：true = 通知已送達或無事可寄；false = 訂單為 paid 但
+// 至少一封信真的沒寄出。呼叫端（webhook）可據此對 ECPay 回錯誤觸發重送，
+// 讓下次重送走 reclaim 補寄。狀態查詢的 { error } 仍照舊 throw（次要 DB 故障
+// 由 webhook 最外層 catch 成 ERR，行為與現況一致）。
 export async function ensureNotificationSent(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
-) {
+): Promise<boolean> {
   // 不依賴呼叫者是否剛推進成功，重新查一次目前狀態：無論是這次才推進、
   // 還是先前已經推進但通知沒寄成功，只要訂單現在確實是 paid 就補寄。
   // 只在 paid 才寄，避免對已取消／退款的訂單誤發「訂單確認」信
@@ -222,7 +235,8 @@ export async function ensureNotificationSent(
 
   if (error) throw new Error(`ensureNotificationSent failed: ${error.message}`);
 
-  if (order?.status === "paid") {
-    await notifyOrderPaid(serviceRole, orderId);
-  }
+  // 非 paid（含查無此單）：沒有要寄的信，視為成功。
+  if (order?.status !== "paid") return true;
+
+  return notifyOrderPaid(serviceRole, orderId);
 }

@@ -33,9 +33,12 @@ vi.mock("@/lib/ecpay/query-trade-info", () => ({
 
 // ensureOrderPaid / ensureNotificationSent 的行為已在
 // notify/__tests__/route.test.ts 完整覆蓋；這裡當依賴邊界整個 mock 掉。
+// ensureNotificationSent 預設回傳 true（T88：投遞成功／無事可寄），個別測試
+// 可用 mockResolvedValueOnce(false) 覆寫，驗證投遞失敗時 reconcile 只告警、
+// 不中止批次、不回 500。
 const { ensureOrderPaid, ensureNotificationSent } = vi.hoisted(() => ({
   ensureOrderPaid: vi.fn().mockResolvedValue(undefined),
-  ensureNotificationSent: vi.fn().mockResolvedValue(undefined),
+  ensureNotificationSent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/order/ensure-paid", () => ({
   ensureOrderPaid: (...args: unknown[]) => ensureOrderPaid(...args),
@@ -227,6 +230,26 @@ describe("單筆候選：TradeStatus=1", () => {
       (r) => (r.values as any)?.last_reconciled_at,
     );
     expect(reconciledWrites.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("通知投遞失敗（ensureNotificationSent 回 false）→ 只記 warning、unexpected 計數 +1，不中止批次、不回 500（T88）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+    ensureNotificationSent.mockResolvedValueOnce(false);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.promoted).toBe(1);
+    expect(body.unexpected).toBe(1);
   });
 
   it("並發：webhook 搶先推進（CAS 未命中）→ 不計入 promoted、不發『搶救成功』告警，但仍補做 ensureOrderPaid/ensureNotificationSent", async () => {
