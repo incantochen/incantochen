@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomInt } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { verifyCartPrices, type VerifiedItem } from "@/lib/quote/verify-prices";
@@ -54,7 +55,7 @@ export function generateOrderNo(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // avoid confusable chars
   let suffix = "";
   for (let i = 0; i < 6; i++) {
-    suffix += chars[Math.floor(Math.random() * chars.length)];
+    suffix += chars[randomInt(0, chars.length)];
   }
   return `INC-${date}-${suffix}`;
 }

@@ -15,6 +15,7 @@ import {
   createOrderFromCart,
   resolvePendingOrderForCart,
 } from "@/lib/order/create-order-from-cart";
+import { orderAccessCookieOptions } from "@/lib/order/order-access-token";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCheckoutGuestRateLimit } from "@/lib/rate-limit";
 
@@ -97,6 +98,7 @@ export async function createOrder(
     return { ok: false, error: pending.error };
   }
   if (pending.kind === "reuse") {
+    cookieStore.set(orderAccessCookieOptions(pending.orderNo));
     redirect(`/checkout/pay?order=${pending.orderNo}`);
   }
 
@@ -180,5 +182,6 @@ export async function createOrder(
   }
 
   // ⑨ Redirect to payment page
+  cookieStore.set(orderAccessCookieOptions(result.orderNo));
   redirect(`/checkout/pay?order=${result.orderNo}`);
 }

@@ -1,28 +1,41 @@
-import { redirect } from "next/navigation"
-import Link from "next/link"
-import { createServiceRoleClient } from "@/lib/supabase/service-role"
+import { redirect } from "next/navigation";
+import { headers } from "next/headers";
+import Link from "next/link";
+import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { getClientIp } from "@/lib/get-client-ip";
+import { checkOrderPageViewRateLimit } from "@/lib/rate-limit";
 
 export default async function CheckoutFailedPage({
   searchParams,
 }: {
-  searchParams: Promise<{ order?: string }>
+  searchParams: Promise<{ order?: string }>;
 }) {
-  const { order: orderNo } = await searchParams
+  const { order: orderNo } = await searchParams;
 
-  if (!orderNo) redirect("/")
+  if (!orderNo) redirect("/");
 
-  const serviceRole = createServiceRoleClient()
+  const headersList = await headers();
+  const ip = getClientIp(headersList);
+  if (!(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return (
+      <main className="min-h-screen bg-paper flex items-center justify-center px-4">
+        <p className="text-sm text-ash">請求太頻繁，請稍後再試</p>
+      </main>
+    );
+  }
+
+  const serviceRole = createServiceRoleClient();
   const { data: order } = await serviceRole
     .from("orders")
     .select("order_no, status")
     .eq("order_no", orderNo)
-    .maybeSingle()
+    .maybeSingle();
 
-  if (!order) redirect("/")
+  if (!order) redirect("/");
 
   // 若付款已成功（webhook 先到），直接帶去成功頁
   if (order.status === "paid") {
-    redirect(`/checkout/success?order=${orderNo}`)
+    redirect(`/checkout/success?order=${orderNo}`);
   }
 
   return (
@@ -74,5 +87,5 @@ export default async function CheckoutFailedPage({
         </div>
       </div>
     </main>
-  )
+  );
 }

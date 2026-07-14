@@ -1,9 +1,20 @@
 import { redirect } from "next/navigation";
+import { cookies, headers } from "next/headers";
 import * as Sentry from "@sentry/nextjs";
+import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildAioParams } from "@/lib/ecpay/aio-payment";
 import { generateMerchantTradeNo } from "@/lib/ecpay/merchant-trade-no";
 import { serverEnv } from "@/lib/env.server";
+import { getClientIp } from "@/lib/get-client-ip";
+import {
+  checkOrderPageViewRateLimit,
+  checkOrderPayCreateRateLimit,
+} from "@/lib/rate-limit";
+import {
+  ORDER_ACCESS_COOKIE,
+  isValidOrderAccessCookie,
+} from "@/lib/order/order-access-token";
 import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit";
 
 // T74：pending payment 超過此時限視為放棄，換發新交易序號（而非無限期復用
@@ -50,7 +61,10 @@ async function createPendingPayment(
     .lt("created_at", inserted.created_at);
 
   if (sweepQueryError) {
-    console.error("[checkout/pay] stale payment sweep query failed", sweepQueryError);
+    console.error(
+      "[checkout/pay] stale payment sweep query failed",
+      sweepQueryError,
+    );
     Sentry.captureMessage("checkout/pay: stale payment sweep query failed", {
       level: "warning",
       extra: { orderId, error: sweepQueryError.message },
@@ -88,6 +102,16 @@ export default async function CheckoutPayPage({
     redirect("/checkout");
   }
 
+  const headersList = await headers();
+  const ip = getClientIp(headersList);
+  if (!(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return (
+      <main className="min-h-screen bg-paper flex items-center justify-center px-4">
+        <p className="text-sm text-ash">請求太頻繁，請稍後再試</p>
+      </main>
+    );
+  }
+
   const serviceRole = createServiceRoleClient();
 
   const { data: order } = await serviceRole
@@ -98,6 +122,35 @@ export default async function CheckoutPayPage({
 
   if (!order) {
     redirect("/checkout");
+  }
+
+  // T73：cookie 存在但簽章對不上這筆 order_no（且不是本人登入帳號的
+  // 訂單）——代表這個瀏覽器剛結帳過別筆訂單，卻來戳這筆。這是唯一能安全
+  // 判定「不該讓它繼續付款」的訊號，擋在讀 order_item／建立 payment、甚至
+  // 組出可能含收件資訊的 ECPay 表單之前。cookie 缺席時維持現況放行——
+  // T111 後台代客建單的付款連結在客人裝置上本來就沒有這把 cookie。
+  const cookieToken = (await cookies()).get(ORDER_ACCESS_COOKIE)?.value;
+  const {
+    data: { user },
+  } = await (await createClient()).auth.getUser();
+  const ownerBySession = !!user && user.id === order.member_id;
+  const ownerByCookie = isValidOrderAccessCookie(cookieToken, order.order_no);
+  const cookiePresentButWrong =
+    cookieToken !== undefined && !ownerByCookie && !ownerBySession;
+
+  if (cookiePresentButWrong) {
+    return (
+      <main className="min-h-screen bg-paper flex items-center justify-center px-4">
+        <div className="max-w-md w-full text-center">
+          <h1 className="font-head text-2xl text-ink mb-2">
+            無法在此瀏覽器繼續付款
+          </h1>
+          <p className="text-sm text-ash mb-8">
+            這個瀏覽器目前繫結另一筆訂單，請由原本收到的付款連結重新進入
+          </p>
+        </div>
+      </main>
+    );
   }
 
   // 已付款 → 直接進成功頁（避免重送 ECPay）
@@ -173,6 +226,14 @@ export default async function CheckoutPayPage({
     }
     if (paidPayment) {
       redirect(`/checkout/success?order=${orderNo}`);
+    }
+
+    if (!(await checkOrderPayCreateRateLimit(ip, orderNo))) {
+      return (
+        <main className="min-h-screen bg-paper flex items-center justify-center px-4">
+          <p className="text-sm text-ash">請求太頻繁，請稍後再試</p>
+        </main>
+      );
     }
 
     merchantTradeNo = await createPendingPayment(

@@ -86,3 +86,55 @@ export async function checkCheckoutGuestRateLimit(
   const results = await Promise.all(checks);
   return results.every((r) => r.success);
 }
+
+// T73：/checkout/success、/checkout/pay、/checkout/failed 只憑 URL 上的
+// order_no 查訂單，縱深防禦用限流擋暴力枚舉。門檻要容納
+// order-status-check.tsx 的合法 poll 迴圈（每 3 秒 refresh、最長 90 秒 ≈
+// 30 次請求）。
+const orderPageViewIpRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(60, "5 m"),
+  prefix: "ratelimit:order-page-view-ip",
+});
+
+const orderPageViewOrderRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(60, "5 m"),
+  prefix: "ratelimit:order-page-view-order",
+});
+
+export async function checkOrderPageViewRateLimit(
+  ip: string | null,
+  orderNo: string,
+): Promise<boolean> {
+  const checks = [orderPageViewOrderRatelimit.limit(orderNo)];
+  if (ip) checks.push(orderPageViewIpRatelimit.limit(ip));
+
+  const results = await Promise.all(checks);
+  return results.every((r) => r.success);
+}
+
+// pay 頁建立 payment（createPendingPayment）的第二層防護，門檻抓緊——這個
+// 動作不像單純看頁面，一般客人一次結帳只會觸發個位數次。
+const orderPayCreateIpRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(10, "5 m"),
+  prefix: "ratelimit:order-pay-create-ip",
+});
+
+const orderPayCreateOrderRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(10, "5 m"),
+  prefix: "ratelimit:order-pay-create-order",
+});
+
+export async function checkOrderPayCreateRateLimit(
+  ip: string | null,
+  orderNo: string,
+): Promise<boolean> {
+  const checks = [orderPayCreateOrderRatelimit.limit(orderNo)];
+  if (ip) checks.push(orderPayCreateIpRatelimit.limit(ip));
+
+  const results = await Promise.all(checks);
+  return results.every((r) => r.success);
+}
