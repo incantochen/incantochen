@@ -9,6 +9,7 @@ const redirect = vi.fn<(url: string) => never>(() => {
   throw REDIRECT;
 });
 let cookieJar: Record<string, string> = {};
+const setCookies: Array<{ name: string; value: string }> = [];
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => redirect(url),
 }));
@@ -16,9 +17,22 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({
     get: (name: string) =>
       cookieJar[name] !== undefined ? { value: cookieJar[name] } : undefined,
+    set: (options: { name: string; value: string }) => {
+      setCookies.push(options);
+    },
   }),
   headers: async () => ({
     get: () => null,
+  }),
+}));
+
+// T73：真正的 order-access-token 依賴 env.server（未在本測試 mock），這裡只
+// 驗證 checkout/actions.ts 有在 redirect 前呼叫它、不驗證簽章本身（見
+// lib/order/__tests__/order-access-token.test.ts）。
+vi.mock("@/lib/order/order-access-token", () => ({
+  orderAccessCookieOptions: (orderNo: string) => ({
+    name: "order_access_token",
+    value: `signed:${orderNo}`,
   }),
 }));
 
@@ -131,6 +145,7 @@ const FORM = {
 
 beforeEach(() => {
   recorded.length = 0;
+  setCookies.length = 0;
   cookieJar = { guest_token: "guest-abc" };
   state.cart = { id: "cart-1", updated_at: "2026-07-10T00:00:00+00:00" };
   state.cartItems = [
@@ -203,6 +218,10 @@ describe("pending 訂單 dedup（T75，須在會員解析之前）", () => {
     expect(redirect).toHaveBeenCalledWith("/checkout/pay?order=INC-EXISTING-1");
     expect(findOrCreateMember).not.toHaveBeenCalled();
     expect(createOrderFromCart).not.toHaveBeenCalled();
+    expect(setCookies).toContainEqual({
+      name: "order_access_token",
+      value: "signed:INC-EXISTING-1",
+    });
   });
 
   it("F1 回歸鎖：email 命中既有會員、但同 cart 有未變更的 pending 訂單 → 直接導付款頁，不回 requiresLogin", async () => {
@@ -250,6 +269,10 @@ describe("委派給 createOrderFromCart", () => {
       },
     );
     expect(redirect).toHaveBeenCalledWith("/checkout/pay?order=INC-TEST-1");
+    expect(setCookies).toContainEqual({
+      name: "order_access_token",
+      value: "signed:INC-TEST-1",
+    });
   });
 
   it("失敗（例如 priceUpdated）→ 原樣回傳，不 redirect", async () => {

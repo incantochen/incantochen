@@ -1,28 +1,75 @@
-import { redirect } from "next/navigation"
-import Link from "next/link"
-import { createServiceRoleClient } from "@/lib/supabase/service-role"
-import { OrderStatusCheck } from "./order-status-check"
+import { redirect } from "next/navigation";
+import { cookies, headers } from "next/headers";
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { getClientIp } from "@/lib/get-client-ip";
+import { checkOrderPageViewRateLimit } from "@/lib/rate-limit";
+import {
+  ORDER_ACCESS_COOKIE,
+  resolveOrderOwnership,
+} from "@/lib/order/order-access-token";
+import { RateLimitedNotice } from "../rate-limited-notice";
+import { OrderStatusCheck } from "./order-status-check";
 
 export default async function CheckoutSuccessPage({
   searchParams,
 }: {
-  searchParams: Promise<{ order?: string }>
+  searchParams: Promise<{ order?: string }>;
 }) {
-  const { order: orderNo } = await searchParams
+  const { order: orderNo } = await searchParams;
 
-  if (!orderNo) redirect("/")
+  if (!orderNo) redirect("/");
 
-  const serviceRole = createServiceRoleClient()
-  const { data: order } = await serviceRole
-    .from("orders")
-    .select("order_no, status, total_amount, recipient_name, member:member_id(email)")
-    .eq("order_no", orderNo)
-    .maybeSingle()
+  const headersList = await headers();
+  const ip = getClientIp(headersList);
+  const serviceRole = createServiceRoleClient();
 
-  if (!order) redirect("/")
+  // 三個互不依賴的 I/O 平行送出（Postgres 查訂單／讀 cookie／Supabase Auth
+  // session）。限流改到解析擁有權「之後」只對非擁有者施加（見下方 #3），
+  // 故不再放進這批平行查詢。
+  const [orderResult, cookieStore, userResult] = await Promise.all([
+    serviceRole
+      .from("orders")
+      .select(
+        "order_no, status, total_amount, member_id, member:member_id(email)",
+      )
+      .eq("order_no", orderNo)
+      .maybeSingle(),
+    cookies(),
+    createClient().then((c) => c.auth.getUser()),
+  ]);
 
-  const memberData = order.member
-  const email = Array.isArray(memberData) ? memberData[0]?.email : memberData?.email
+  const { data: order } = orderResult;
+  if (!order) redirect("/");
+
+  // T73：非擁有者（cookie 缺席／不符，且未以自己的帳號登入）不顯示 email，
+  // 避免 URL 上的 order_no 被枚舉時外洩其他客人的個資。缺席不 redirect——
+  // T111 後台代客建單的付款連結在客人裝置上本來就沒有這把 cookie。
+  const cookieToken = cookieStore.get(ORDER_ACCESS_COOKIE)?.value;
+  const {
+    data: { user },
+  } = userResult;
+  const { ownerBySession, ownerByCookie } = resolveOrderOwnership(
+    cookieToken,
+    order,
+    user,
+  );
+  const isOwner = ownerBySession || ownerByCookie;
+
+  // T73 code-review #3：限流只對非擁有者施加——擁有者（有效 cookie／登入
+  // session）永不被限流，避免 90 秒 poll 迴圈自我限流、或攻擊者拿 order_no
+  // 打爆 per-order 桶把真正擁有者鎖在成功頁外。
+  if (!isOwner && !(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return <RateLimitedNotice />;
+  }
+
+  const memberData = order.member;
+  const email = isOwner
+    ? Array.isArray(memberData)
+      ? memberData[0]?.email
+      : memberData?.email
+    : undefined;
 
   if (order.status === "paid") {
     return (
@@ -91,7 +138,7 @@ export default async function CheckoutSuccessPage({
           </Link>
         </div>
       </main>
-    )
+    );
   }
 
   if (order.status === "pending_payment") {
@@ -115,9 +162,7 @@ export default async function CheckoutSuccessPage({
           </div>
 
           <h1 className="font-head text-2xl text-ink mb-2">確認付款中</h1>
-          <p className="text-sm text-ash mb-6">
-            系統正在確認您的付款，請稍候…
-          </p>
+          <p className="text-sm text-ash mb-6">系統正在確認您的付款，請稍候…</p>
 
           <div className="mb-6 rounded-lg border border-border bg-cloud px-6 py-4">
             <p className="text-[11px] tracking-[0.16em] text-ash uppercase mb-0.5">
@@ -138,8 +183,8 @@ export default async function CheckoutSuccessPage({
           </Link>
         </div>
       </main>
-    )
+    );
   }
 
-  redirect("/")
+  redirect("/");
 }

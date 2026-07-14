@@ -1,28 +1,65 @@
-import { redirect } from "next/navigation"
-import Link from "next/link"
-import { createServiceRoleClient } from "@/lib/supabase/service-role"
+import { redirect } from "next/navigation";
+import { cookies, headers } from "next/headers";
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { getClientIp } from "@/lib/get-client-ip";
+import { checkOrderPageViewRateLimit } from "@/lib/rate-limit";
+import {
+  ORDER_ACCESS_COOKIE,
+  resolveOrderOwnership,
+} from "@/lib/order/order-access-token";
+import { RateLimitedNotice } from "../rate-limited-notice";
 
 export default async function CheckoutFailedPage({
   searchParams,
 }: {
-  searchParams: Promise<{ order?: string }>
+  searchParams: Promise<{ order?: string }>;
 }) {
-  const { order: orderNo } = await searchParams
+  const { order: orderNo } = await searchParams;
 
-  if (!orderNo) redirect("/")
+  if (!orderNo) redirect("/");
 
-  const serviceRole = createServiceRoleClient()
-  const { data: order } = await serviceRole
-    .from("orders")
-    .select("order_no, status")
-    .eq("order_no", orderNo)
-    .maybeSingle()
+  const headersList = await headers();
+  const ip = getClientIp(headersList);
+  const serviceRole = createServiceRoleClient();
 
-  if (!order) redirect("/")
+  // 三個互不依賴的 I/O 平行送出（Postgres 查訂單／讀 cookie／Supabase Auth
+  // session）。限流改到解析擁有權「之後」只對非擁有者施加（見下方 #3）。
+  const [orderResult, cookieStore, userResult] = await Promise.all([
+    serviceRole
+      .from("orders")
+      .select("order_no, status, member_id")
+      .eq("order_no", orderNo)
+      .maybeSingle(),
+    cookies(),
+    createClient().then((c) => c.auth.getUser()),
+  ]);
+
+  const { data: order } = orderResult;
+
+  if (!order) redirect("/");
 
   // 若付款已成功（webhook 先到），直接帶去成功頁
   if (order.status === "paid") {
-    redirect(`/checkout/success?order=${orderNo}`)
+    redirect(`/checkout/success?order=${orderNo}`);
+  }
+
+  // T73 code-review #3：限流只對非擁有者施加（與 success／pay 頁一致），
+  // 避免攻擊者拿 order_no 打爆 per-order 桶把真正擁有者鎖在失敗頁外。
+  const cookieToken = cookieStore.get(ORDER_ACCESS_COOKIE)?.value;
+  const {
+    data: { user },
+  } = userResult;
+  const { ownerBySession, ownerByCookie } = resolveOrderOwnership(
+    cookieToken,
+    order,
+    user,
+  );
+  const isOwner = ownerBySession || ownerByCookie;
+
+  if (!isOwner && !(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return <RateLimitedNotice />;
   }
 
   return (
@@ -74,5 +111,5 @@ export default async function CheckoutFailedPage({
         </div>
       </div>
     </main>
-  )
+  );
 }

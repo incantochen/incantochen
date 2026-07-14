@@ -12,6 +12,7 @@ type ServerEnv = {
   RESEND_API_KEY: string;
   ADMIN_EMAIL: string;
   CRON_SECRET: string;
+  ORDER_ACCESS_TOKEN_SECRET: string;
 };
 
 function required(key: keyof ServerEnv): string {
@@ -34,4 +35,5 @@ export const serverEnv: ServerEnv = {
   RESEND_API_KEY: required("RESEND_API_KEY"),
   ADMIN_EMAIL: required("ADMIN_EMAIL"),
   CRON_SECRET: required("CRON_SECRET"),
+  ORDER_ACCESS_TOKEN_SECRET: required("ORDER_ACCESS_TOKEN_SECRET"),
 };

@@ -20,6 +20,11 @@ type CreateAdminOrderResult =
   | { ok: true; orderNo: string; paymentLink: string }
   | { ok: false; error: string; priceUpdated?: true };
 
+// T73：這裡刻意**不**呼叫 orderAccessCookieOptions() 幫這台 admin 裝置設
+// order_access_token cookie——付款連結是給客人在自己的裝置上開的（T111
+// 跨裝置設計），admin 這台機器設了 cookie 也毫無用處，反而可能被誤解成
+// 「admin 幫自己的瀏覽器取得了這筆訂單的存取權」。客人裝置本來就沒有這把
+// cookie，/checkout/pay 的擁有權檢查在 cookie 缺席時維持現況放行，不受影響。
 function buildPaymentLink(orderNo: string): string {
   const paymentUrl = new URL("/checkout/pay", serverEnv.NEXT_PUBLIC_SITE_URL);
   paymentUrl.searchParams.set("order", orderNo);

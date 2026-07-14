@@ -29,6 +29,7 @@ vi.mock("@/lib/order/state-machine", () => ({
 
 import {
   createOrderFromCart,
+  generateOrderNo,
   resolvePendingOrderForCart,
 } from "../create-order-from-cart";
 
@@ -564,5 +565,21 @@ describe("交易化與清車（T76／T75）", () => {
       product_name_snapshot: "祖母綠戒指",
       unit_price_snapshot: 25000,
     });
+  });
+});
+
+describe("generateOrderNo（crypto 強度亂數，T73）", () => {
+  it("格式為 INC-YYYYMMDD-XXXXXX，字元集限定不易混淆字元", () => {
+    const orderNo = generateOrderNo();
+    expect(orderNo).toMatch(
+      /^INC-\d{8}-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/,
+    );
+  });
+
+  it("不呼叫 Math.random（改用 crypto.randomInt）", () => {
+    const randomSpy = vi.spyOn(Math, "random");
+    generateOrderNo();
+    expect(randomSpy).not.toHaveBeenCalled();
+    randomSpy.mockRestore();
   });
 });

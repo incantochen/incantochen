@@ -1,9 +1,21 @@
 import { redirect } from "next/navigation";
+import { cookies, headers } from "next/headers";
 import * as Sentry from "@sentry/nextjs";
+import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildAioParams } from "@/lib/ecpay/aio-payment";
 import { generateMerchantTradeNo } from "@/lib/ecpay/merchant-trade-no";
 import { serverEnv } from "@/lib/env.server";
+import { getClientIp } from "@/lib/get-client-ip";
+import {
+  checkOrderPageViewRateLimit,
+  checkOrderPayCreateRateLimit,
+} from "@/lib/rate-limit";
+import {
+  ORDER_ACCESS_COOKIE,
+  resolveOrderOwnership,
+} from "@/lib/order/order-access-token";
+import { RateLimitedNotice } from "../rate-limited-notice";
 import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit";
 
 // T74：pending payment 超過此時限視為放棄，換發新交易序號（而非無限期復用
@@ -50,7 +62,10 @@ async function createPendingPayment(
     .lt("created_at", inserted.created_at);
 
   if (sweepQueryError) {
-    console.error("[checkout/pay] stale payment sweep query failed", sweepQueryError);
+    console.error(
+      "[checkout/pay] stale payment sweep query failed",
+      sweepQueryError,
+    );
     Sentry.captureMessage("checkout/pay: stale payment sweep query failed", {
       level: "warning",
       extra: { orderId, error: sweepQueryError.message },
@@ -88,25 +103,72 @@ export default async function CheckoutPayPage({
     redirect("/checkout");
   }
 
+  const headersList = await headers();
+  const ip = getClientIp(headersList);
   const serviceRole = createServiceRoleClient();
 
-  const { data: order } = await serviceRole
-    .from("orders")
-    .select("*")
-    .eq("order_no", orderNo)
-    .maybeSingle();
+  // 三個互不依賴的 I/O 平行送出（Postgres 查訂單／讀 cookie／Supabase Auth
+  // session）。限流改到解析擁有權「之後」只對非擁有者施加（見下方 #3），
+  // 故不再放進這批平行查詢。
+  const [orderResult, cookieStore, userResult] = await Promise.all([
+    serviceRole.from("orders").select("*").eq("order_no", orderNo).maybeSingle(),
+    cookies(),
+    createClient().then((c) => c.auth.getUser()),
+  ]);
+
+  const { data: order } = orderResult;
 
   if (!order) {
     redirect("/checkout");
   }
 
-  // 已付款 → 直接進成功頁（避免重送 ECPay）
+  // 已付款／非待付款 → 導頁優先於下面的擁有權檢查：這兩個分支不揭露新
+  // 資訊、也不建立新 payment，必須維持既有行為不被打斷——同一瀏覽器結帳
+  // 過別筆訂單、cookie 已改綁到那一筆時，回訪這筆「已經付完款」的舊連結
+  // 仍要能順利導去成功頁，不能卡在「無法在此瀏覽器繼續付款」的死路。
   if (order.status === "paid") {
     redirect(`/checkout/success?order=${orderNo}`);
   }
 
   if (order.status !== "pending_payment") {
     redirect("/");
+  }
+
+  // T73：cookie 存在但簽章對不上這筆 order_no（且不是本人登入帳號的
+  // 訂單）——代表這個瀏覽器剛結帳過別筆訂單，卻來戳這筆待付款訂單。這是
+  // 唯一能安全判定「不該讓它繼續付款」的訊號，擋在讀 order_item／建立
+  // payment、甚至組出可能含收件資訊的 ECPay 表單之前。cookie 缺席時維持
+  // 現況放行——T111 後台代客建單的付款連結在客人裝置上本來就沒有這把
+  // cookie。
+  const cookieToken = cookieStore.get(ORDER_ACCESS_COOKIE)?.value;
+  const {
+    data: { user },
+  } = userResult;
+  const { ownerBySession, ownerByCookie, cookiePresentButWrong } =
+    resolveOrderOwnership(cookieToken, order, user);
+  const isOwner = ownerBySession || ownerByCookie;
+
+  if (cookiePresentButWrong) {
+    return (
+      <main className="min-h-screen bg-paper flex items-center justify-center px-4">
+        <div className="max-w-md w-full text-center">
+          <h1 className="font-head text-2xl text-ink mb-2">
+            無法在此瀏覽器繼續付款
+          </h1>
+          <p className="text-sm text-ash mb-8">
+            這個瀏覽器目前繫結另一筆訂單。若這是要給您的付款連結，請改用無痕視窗，或換一個瀏覽器開啟。
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  // T73 code-review #3：限流只對「非擁有者」施加——擁有者（有效 cookie／
+  // 登入 session）永不被限流，避免 ①success 頁 90 秒 poll 迴圈把擁有者自己
+  // 鎖掉 ②攻擊者拿到 order_no 後打爆 per-order 桶把真正擁有者鎖在付款頁外。
+  // 枚舉者一律非擁有者，仍受 IP＋order_no 雙維度限制，防枚舉不變。
+  if (!isOwner && !(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return <RateLimitedNotice />;
   }
 
   // 冪等：復用現有 pending payment（頁面重整不重建），
@@ -138,6 +200,14 @@ export default async function CheckoutPayPage({
   if (existingPending && isPaymentFresh(existingPending.created_at)) {
     merchantTradeNo = existingPending.merchant_trade_no;
   } else {
+    // T73 code-review #2：pay-create 限流必須擋在任何 payment 寫入「之前」。
+    // 原本擺在下方作廢舊 pending row 之後，被限流時舊 row 已標 failed、新
+    // row 又沒建，訂單一度零筆有效 payment。移到 else 分支最前面確保限流時
+    // 完全不動 payment 狀態。
+    if (!(await checkOrderPayCreateRateLimit(ip, orderNo))) {
+      return <RateLimitedNotice />;
+    }
+
     if (existingPending) {
       // 條件式 UPDATE：WHERE 帶 status="pending" 防跟 webhook 競態——如果客人
       // 剛好在這筆「被判定放棄」的舊交易序號上完成付款，webhook 會搶先把這筆
