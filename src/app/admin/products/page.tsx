@@ -114,12 +114,20 @@ export default async function AdminProductsPage({
                 <td className="px-4 py-3 text-right">{product.imageCount}</td>
                 <td className="px-4 py-3 text-gray-500">{formatDateTime(product.updated_at)}</td>
                 <td className="px-4 py-3">
-                  <Link
-                    href={`/admin/products/${product.id}/images`}
-                    className="text-blue-600 hover:underline"
-                  >
-                    圖片管理
-                  </Link>
+                  <div className="flex gap-3">
+                    <Link
+                      href={`/admin/products/${product.id}/options`}
+                      className="text-blue-600 hover:underline"
+                    >
+                      選項設定
+                    </Link>
+                    <Link
+                      href={`/admin/products/${product.id}/images`}
+                      className="text-blue-600 hover:underline"
+                    >
+                      圖片管理
+                    </Link>
+                  </div>
                 </td>
               </tr>
             ))}

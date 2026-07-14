@@ -110,8 +110,9 @@ export async function updateProduct(
   const supabase = createServiceRoleClient()
 
   // 品類一旦有配置器選項（product_option）掛在上面，任意切換品類會讓既有
-  // 選項與新品類的 applies_to 白名單脫鉤（T12/T13 上線前完全沒有後台工具能
-  // 修這個落差，也沒有 DB 層的約束擋這件事），故先擋下再談。
+  // 選項與新品類的 applies_to 白名單脫鉤，且沒有 DB 層約束擋這件事，故先擋
+  // 下。T13 後台「選項設定」頁已可管理這些對應——要換品類請先於該頁移除所有
+  // 選項對應再回來改，維持鎖定行為不變（避免無聲留下脫鉤資料）。
   if (parsed.data.category !== guard.values.category) {
     const { count, error: countError } = await supabase
       .from("product_option")
