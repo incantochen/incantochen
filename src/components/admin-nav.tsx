@@ -13,6 +13,7 @@ export function AdminNav() {
   const pathname = usePathname();
   const isOrdersActive = pathname.startsWith("/admin/orders");
   const isProductsActive = pathname.startsWith("/admin/products");
+  const isOptionsActive = pathname.startsWith("/admin/options");
 
   return (
     <nav className="flex flex-col gap-1">
@@ -21,6 +22,9 @@ export function AdminNav() {
       </Link>
       <Link href="/admin/products" className={linkClass(isProductsActive)}>
         商品管理
+      </Link>
+      <Link href="/admin/options" className={linkClass(isOptionsActive)}>
+        選項管理
       </Link>
       <form action={signOut} className="mt-4 px-3">
         <button

@@ -1,9 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useTransition } from "react";
-import type { AdminActionResult } from "@/lib/admin/action-result";
-import { AdminNotifyBanner, useAdminNotify } from "@/components/admin-notify";
+import { useState } from "react";
+import { AdminNotifyBanner, useAdminAction } from "@/components/admin-notify";
 import {
   ALLOWED_IMAGE_MIME_TYPES,
   validateImageFile,
@@ -23,33 +22,9 @@ export function ImageManager({
   productId: string;
   images: ImageItem[];
 }) {
-  const [isPending, startTransition] = useTransition();
-  const { message, notify } = useAdminNotify();
+  // 「呼叫 action → !ok 顯示錯誤 → 成功顯示訊息/後續」骨架收在共用 hook（T12 抽出）
+  const { isPending, message, notify, run: runAction } = useAdminAction();
   const [altDrafts, setAltDrafts] = useState<Record<string, string>>({});
-
-  // 四個操作共用同一套「呼叫 action → !ok 顯示錯誤 → 成功顯示訊息/後續」骨架
-  function runAction(
-    action: () => Promise<AdminActionResult>,
-    options: {
-      successMsg?: string;
-      fallbackError: string;
-      onSuccess?: () => void;
-    },
-  ) {
-    startTransition(async () => {
-      try {
-        const result = await action();
-        if (!result.ok) {
-          notify(result.error, true);
-          return;
-        }
-        if (options.successMsg) notify(options.successMsg);
-        options.onSuccess?.();
-      } catch (e) {
-        notify(e instanceof Error ? e.message : options.fallbackError, true);
-      }
-    });
-  }
 
   function handleUpload(file: File) {
     // client 端先驗給即時回饋；server 端（action＋bucket 設定）仍會再驗

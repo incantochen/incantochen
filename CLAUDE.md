@@ -42,7 +42,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0／M1 ✅ 全數完成（T17／T48／T55／T56 暫緩）→ **M2 進行中**（完成／待修清單見 `docs/tasks.csv`）→ M3 → M4 → M5。**開發流程全貌見 [`docs/dev-process.md`](docs/dev-process.md)；人工救援程序見 [`docs/ops-runbook.md`](docs/ops-runbook.md)；上線必要子集（🚀 分級）見 [`docs/launch-scope.md`](docs/launch-scope.md)。**
+- **目前階段**：M-1／M0／M1 ✅ 全數完成（T48 暫緩；商品圖策略已拍板 C-1〔2026-07-14〕：T55／T56 取消，改 T116 AI 批次生成全矩陣＋T17 組合鍵查圖）→ **M2 進行中**（完成／待修清單見 `docs/tasks.csv`）→ M3 → M4 → M5。**開發流程全貌見 [`docs/dev-process.md`](docs/dev-process.md)；人工救援程序見 [`docs/ops-runbook.md`](docs/ops-runbook.md)；上線必要子集（🚀 分級）見 [`docs/launch-scope.md`](docs/launch-scope.md)。**
 
 ---
 

@@ -24,6 +24,7 @@ type CreateOrderResult = {
   error: string;
   priceUpdated?: true;
   requiresLogin?: true;
+  showCartLink?: true;
 };
 
 // T71：訪客 email 命中既有會員或建號時撞號，兩處回傳同一段文字與結果物件，

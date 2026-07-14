@@ -50,19 +50,42 @@ export async function addToCart(
     return { ok: false, error: "商品不存在或已下架" };
   }
 
+  // !inner 理由同 PDP 查詢：RLS 濾掉的隱藏選項要整列消失，不能變 null
   const { data: productOptions } = await supabase
     .from("product_option")
     .select(
       `
       id, required,
-      option_type:option_type_id ( code, name ),
-      product_option_value ( id, price_delta, option_value:option_value_id ( code, label ) )
+      option_type:option_type_id!inner ( code, name ),
+      product_option_value ( id, price_delta, option_value:option_value_id!inner ( code, label ) )
     `,
     )
     .eq("product_id", productId);
 
-  if (!productOptions || productOptions.length === 0) {
+  if (!productOptions) {
     return { ok: false, error: "商品選項設定有誤" };
+  }
+
+  // T12：!inner 會讓「選項類型全部隱藏」跟「商品從未設定選項」在上面的查詢
+  // 結果長得一樣（都是空陣列），但前者是正常的後台操作（管理員隱藏一個非
+  // 必選選項），不該擋購買。只有在真的「從未設定任何選項」時才視為資料
+  // 設定錯誤——用不受 !inner 過濾的 head-count 區分，只在空陣列時才多查
+  // 一次（正常商品的熱路徑不受影響）。必選完整性仍由下面逐項檢查與
+  // verify-prices.ts 的伺服器端白名單兜底，不受此處放行影響。
+  if (productOptions.length === 0) {
+    const { count, error: countError } = await supabase
+      .from("product_option")
+      .select("id", { count: "exact", head: true })
+      .eq("product_id", productId);
+    if (countError) {
+      return { ok: false, error: "商品選項設定有誤" };
+    }
+    if (count && count > 0) {
+      // 有 product_option 列，只是全被隱藏——視為「目前無可選配項目」，
+      // 以下迴圈自然跳過（沒有東西可迭代），繼續走基本價購買
+    } else {
+      return { ok: false, error: "商品選項設定有誤" };
+    }
   }
 
   const selections: {
