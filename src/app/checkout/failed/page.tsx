@@ -1,9 +1,14 @@
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkOrderPageViewRateLimit } from "@/lib/rate-limit";
+import {
+  ORDER_ACCESS_COOKIE,
+  resolveOrderOwnership,
+} from "@/lib/order/order-access-token";
 import { RateLimitedNotice } from "../rate-limited-notice";
 
 export default async function CheckoutFailedPage({
@@ -19,17 +24,17 @@ export default async function CheckoutFailedPage({
   const ip = getClientIp(headersList);
   const serviceRole = createServiceRoleClient();
 
-  // 兩個互不依賴的 I/O 平行送出，限流未過時查詢結果作廢即可。
-  const [rateLimitOk, orderResult] = await Promise.all([
-    checkOrderPageViewRateLimit(ip, orderNo),
+  // 三個互不依賴的 I/O 平行送出（Postgres 查訂單／讀 cookie／Supabase Auth
+  // session）。限流改到解析擁有權「之後」只對非擁有者施加（見下方 #3）。
+  const [orderResult, cookieStore, userResult] = await Promise.all([
     serviceRole
       .from("orders")
-      .select("order_no, status")
+      .select("order_no, status, member_id")
       .eq("order_no", orderNo)
       .maybeSingle(),
+    cookies(),
+    createClient().then((c) => c.auth.getUser()),
   ]);
-
-  if (!rateLimitOk) return <RateLimitedNotice />;
 
   const { data: order } = orderResult;
 
@@ -38,6 +43,23 @@ export default async function CheckoutFailedPage({
   // 若付款已成功（webhook 先到），直接帶去成功頁
   if (order.status === "paid") {
     redirect(`/checkout/success?order=${orderNo}`);
+  }
+
+  // T73 code-review #3：限流只對非擁有者施加（與 success／pay 頁一致），
+  // 避免攻擊者拿 order_no 打爆 per-order 桶把真正擁有者鎖在失敗頁外。
+  const cookieToken = cookieStore.get(ORDER_ACCESS_COOKIE)?.value;
+  const {
+    data: { user },
+  } = userResult;
+  const { ownerBySession, ownerByCookie } = resolveOrderOwnership(
+    cookieToken,
+    order,
+    user,
+  );
+  const isOwner = ownerBySession || ownerByCookie;
+
+  if (!isOwner && !(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return <RateLimitedNotice />;
   }
 
   return (

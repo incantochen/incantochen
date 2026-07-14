@@ -25,25 +25,20 @@ export default async function CheckoutSuccessPage({
   const ip = getClientIp(headersList);
   const serviceRole = createServiceRoleClient();
 
-  // 四個互不依賴的 I/O 平行送出（Redis 限流／Postgres 查訂單／讀 cookie／
-  // Supabase Auth session）——限流未過時查詢結果作廢即可，換取一般情況下
-  // 少一趟 round trip。
-  const [rateLimitOk, orderResult, cookieStore, userResult] = await Promise.all(
-    [
-      checkOrderPageViewRateLimit(ip, orderNo),
-      serviceRole
-        .from("orders")
-        .select(
-          "order_no, status, total_amount, member_id, member:member_id(email)",
-        )
-        .eq("order_no", orderNo)
-        .maybeSingle(),
-      cookies(),
-      createClient().then((c) => c.auth.getUser()),
-    ],
-  );
-
-  if (!rateLimitOk) return <RateLimitedNotice />;
+  // 三個互不依賴的 I/O 平行送出（Postgres 查訂單／讀 cookie／Supabase Auth
+  // session）。限流改到解析擁有權「之後」只對非擁有者施加（見下方 #3），
+  // 故不再放進這批平行查詢。
+  const [orderResult, cookieStore, userResult] = await Promise.all([
+    serviceRole
+      .from("orders")
+      .select(
+        "order_no, status, total_amount, member_id, member:member_id(email)",
+      )
+      .eq("order_no", orderNo)
+      .maybeSingle(),
+    cookies(),
+    createClient().then((c) => c.auth.getUser()),
+  ]);
 
   const { data: order } = orderResult;
   if (!order) redirect("/");
@@ -61,6 +56,13 @@ export default async function CheckoutSuccessPage({
     user,
   );
   const isOwner = ownerBySession || ownerByCookie;
+
+  // T73 code-review #3：限流只對非擁有者施加——擁有者（有效 cookie／登入
+  // session）永不被限流，避免 90 秒 poll 迴圈自我限流、或攻擊者拿 order_no
+  // 打爆 per-order 桶把真正擁有者鎖在成功頁外。
+  if (!isOwner && !(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return <RateLimitedNotice />;
+  }
 
   const memberData = order.member;
   const email = isOwner

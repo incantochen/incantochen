@@ -107,24 +107,14 @@ export default async function CheckoutPayPage({
   const ip = getClientIp(headersList);
   const serviceRole = createServiceRoleClient();
 
-  // 四個互不依賴的 I/O 平行送出（Redis 限流／Postgres 查訂單／讀 cookie／
-  // Supabase Auth session）——這個高延遲敏感頁面本來就有平行查詢的慣例
-  // （見下方 order_item／payment 查詢），限流未過或查無訂單時查詢結果作廢
-  // 即可，換取一般情況下少等幾趟 round trip。
-  const [rateLimitOk, orderResult, cookieStore, userResult] = await Promise.all(
-    [
-      checkOrderPageViewRateLimit(ip, orderNo),
-      serviceRole
-        .from("orders")
-        .select("*")
-        .eq("order_no", orderNo)
-        .maybeSingle(),
-      cookies(),
-      createClient().then((c) => c.auth.getUser()),
-    ],
-  );
-
-  if (!rateLimitOk) return <RateLimitedNotice />;
+  // 三個互不依賴的 I/O 平行送出（Postgres 查訂單／讀 cookie／Supabase Auth
+  // session）。限流改到解析擁有權「之後」只對非擁有者施加（見下方 #3），
+  // 故不再放進這批平行查詢。
+  const [orderResult, cookieStore, userResult] = await Promise.all([
+    serviceRole.from("orders").select("*").eq("order_no", orderNo).maybeSingle(),
+    cookies(),
+    createClient().then((c) => c.auth.getUser()),
+  ]);
 
   const { data: order } = orderResult;
 
@@ -154,11 +144,9 @@ export default async function CheckoutPayPage({
   const {
     data: { user },
   } = userResult;
-  const { cookiePresentButWrong } = resolveOrderOwnership(
-    cookieToken,
-    order,
-    user,
-  );
+  const { ownerBySession, ownerByCookie, cookiePresentButWrong } =
+    resolveOrderOwnership(cookieToken, order, user);
+  const isOwner = ownerBySession || ownerByCookie;
 
   if (cookiePresentButWrong) {
     return (
@@ -168,11 +156,19 @@ export default async function CheckoutPayPage({
             無法在此瀏覽器繼續付款
           </h1>
           <p className="text-sm text-ash mb-8">
-            這個瀏覽器目前繫結另一筆訂單，請由原本收到的付款連結重新進入
+            這個瀏覽器目前繫結另一筆訂單。若這是要給您的付款連結，請改用無痕視窗，或換一個瀏覽器開啟。
           </p>
         </div>
       </main>
     );
+  }
+
+  // T73 code-review #3：限流只對「非擁有者」施加——擁有者（有效 cookie／
+  // 登入 session）永不被限流，避免 ①success 頁 90 秒 poll 迴圈把擁有者自己
+  // 鎖掉 ②攻擊者拿到 order_no 後打爆 per-order 桶把真正擁有者鎖在付款頁外。
+  // 枚舉者一律非擁有者，仍受 IP＋order_no 雙維度限制，防枚舉不變。
+  if (!isOwner && !(await checkOrderPageViewRateLimit(ip, orderNo))) {
+    return <RateLimitedNotice />;
   }
 
   // 冪等：復用現有 pending payment（頁面重整不重建），
@@ -204,6 +200,14 @@ export default async function CheckoutPayPage({
   if (existingPending && isPaymentFresh(existingPending.created_at)) {
     merchantTradeNo = existingPending.merchant_trade_no;
   } else {
+    // T73 code-review #2：pay-create 限流必須擋在任何 payment 寫入「之前」。
+    // 原本擺在下方作廢舊 pending row 之後，被限流時舊 row 已標 failed、新
+    // row 又沒建，訂單一度零筆有效 payment。移到 else 分支最前面確保限流時
+    // 完全不動 payment 狀態。
+    if (!(await checkOrderPayCreateRateLimit(ip, orderNo))) {
+      return <RateLimitedNotice />;
+    }
+
     if (existingPending) {
       // 條件式 UPDATE：WHERE 帶 status="pending" 防跟 webhook 競態——如果客人
       // 剛好在這筆「被判定放棄」的舊交易序號上完成付款，webhook 會搶先把這筆
@@ -239,10 +243,6 @@ export default async function CheckoutPayPage({
     }
     if (paidPayment) {
       redirect(`/checkout/success?order=${orderNo}`);
-    }
-
-    if (!(await checkOrderPayCreateRateLimit(ip, orderNo))) {
-      return <RateLimitedNotice />;
     }
 
     merchantTradeNo = await createPendingPayment(

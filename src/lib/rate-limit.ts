@@ -1,5 +1,6 @@
 import "server-only";
 
+import * as Sentry from "@sentry/nextjs";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { serverEnv } from "@/lib/env.server";
@@ -87,6 +88,26 @@ export async function checkCheckoutGuestRateLimit(
   return results.every((r) => r.success);
 }
 
+// T73 code-review #1：付款結果三頁把限流放進 Promise.all，一旦 Upstash Redis
+// 逾時／中斷，.limit() 會 throw、冒泡成 500——付款完成後的 success 頁與 pay
+// 頁在 Redis 故障時整段掛掉（改版前這幾頁只依賴 Postgres）。這裡對每個
+// .limit() 做 fail-open 包裝：Redis 例外時放行並記 Sentry，付款可用性優先於
+// Redis 故障那短暫窗口的枚舉防護（比照 OTP 流程 IP null 時跳過限流的降級）。
+async function safeLimit(
+  limiter: Ratelimit,
+  identifier: string,
+): Promise<boolean> {
+  try {
+    const { success } = await limiter.limit(identifier);
+    return success;
+  } catch (e) {
+    Sentry.captureException(e, {
+      tags: { area: "rate-limit", failMode: "fail-open" },
+    });
+    return true;
+  }
+}
+
 // T73：/checkout/success、/checkout/pay、/checkout/failed 只憑 URL 上的
 // order_no 查訂單，縱深防禦用限流擋暴力枚舉。門檻要容納
 // order-status-check.tsx 的合法 poll 迴圈（每 3 秒 refresh、最長 90 秒 ≈
@@ -107,11 +128,11 @@ export async function checkOrderPageViewRateLimit(
   ip: string | null,
   orderNo: string,
 ): Promise<boolean> {
-  const checks = [orderPageViewOrderRatelimit.limit(orderNo)];
-  if (ip) checks.push(orderPageViewIpRatelimit.limit(ip));
+  const checks = [safeLimit(orderPageViewOrderRatelimit, orderNo)];
+  if (ip) checks.push(safeLimit(orderPageViewIpRatelimit, ip));
 
   const results = await Promise.all(checks);
-  return results.every((r) => r.success);
+  return results.every((ok) => ok);
 }
 
 // pay 頁建立 payment（createPendingPayment）的第二層防護，門檻抓緊——這個
@@ -132,9 +153,9 @@ export async function checkOrderPayCreateRateLimit(
   ip: string | null,
   orderNo: string,
 ): Promise<boolean> {
-  const checks = [orderPayCreateOrderRatelimit.limit(orderNo)];
-  if (ip) checks.push(orderPayCreateIpRatelimit.limit(ip));
+  const checks = [safeLimit(orderPayCreateOrderRatelimit, orderNo)];
+  if (ip) checks.push(safeLimit(orderPayCreateIpRatelimit, ip));
 
   const results = await Promise.all(checks);
-  return results.every((r) => r.success);
+  return results.every((ok) => ok);
 }
