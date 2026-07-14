@@ -62,7 +62,7 @@
 
 ## F-006 [P2] T73 存取控制根因未涵蓋 `checkout/pay`、`checkout/failed` 兩頁（憑 order_no 讀單＋建 payment row）
 
-- 狀態：已併入T73（使用者 2026-07-03 確認，T73 任務與 issue #15 已註記範圍擴至三頁）
+- 狀態：已修復（PR #64，2026-07-14）——擁有權綁定已套用 success/pay/failed 三頁，pay 頁對非本人訂單擋在建 payment 之前；order_no 改 crypto.randomInt。隨 T73 結案。
 - 位置：`src/app/checkout/pay/page.tsx:21-25`（憑 `order_no` service-role 讀單，無 session／擁有權綁定）＋ `:66-72`（為該單 insert 一列 pending `payment`）；`src/app/checkout/failed/page.tsx:15-19`（憑 `order_no` 讀 `order_no`/`status`）
 - 失敗情境：T73 已列管「成功頁憑 order_no 揭露個資＋order_no 用 `Math.random` 可猜」，但其任務描述僅點名「**成功頁**綁 session／短效 cookie」。同一根因在 pay／failed 兩頁**未被涵蓋**：①`checkout/pay` 對任一可猜到的 `order_no` 直接以 service role 讀單，並把 `ItemName`（商品名＋數量）、`TotalAmount` 寫進可見的隱藏表單欄位（訂單明細外洩），且**會為別人的訂單 insert 一列 pending `payment`**（可被灌垃圾 payment row、或由第三方替他人發起付款）；②`checkout/failed` 憑 order_no 揭露 order_no＋status。三頁共用同一 order_no 即權限的缺口，若 T73 修法只補成功頁，pay／failed 仍開放——與 F-001／T72（修 escape 漏掉第三支寄信程式）完全同型的「同根因多點、修法只覆蓋一點」問題。
 - 修法：把 T73 的存取控制修法（成功頁綁 session／短效 cookie／guest_token 或 member 歸屬）**一併套用到 `checkout/pay` 與 `checkout/failed`**，並在 pay 頁對「非本人訂單」拒絕讀取與 payment 建立。建議與 T73 同批修復並在 T73 任務／issue 註記「範圍含 pay／failed／success 三頁」。改 order_no 為 crypto 亂數（T73 已含）能降低猜測面，但**不可取代**擁有權綁定。
@@ -206,7 +206,7 @@
 
 ## F-023 [P2] T111 代客建單付款連結把 order_no 定性為刻意散佈的持有型憑證：與 T73 計畫中「pay 頁綁擁有權」的修法直接衝突，並抬高弱亂數 order_no 的枚舉風險
 
-- 狀態：待確認
+- 狀態：已修復（PR #64，2026-07-14）——T73 修法正是照本項指出的方向落地：pay 頁**不**硬綁擁有權，改為「cookie 缺席即放行（保住 T111 冷連結／跨裝置付款）＋cookie 存在但不符才擋＋GET 加限流」；order_no 已換 crypto.randomInt。此 T73↔T111 行為連鎖耦合已在 PR #64 一併消化。隨 T73 結案。
 - 位置：`src/app/admin/orders/checkout/actions.ts:23-27`（`buildPaymentLink` 把 `order_no` 塞進 `/checkout/pay?order=<orderNo>` 交給客人自行完成付款）；`src/lib/order/create-order-from-cart.ts:51-60`（`generateOrderNo` 仍用 `Math.random()`——32 字元去混淆字母表取 6 碼＝約 32^6≈1.07e9 空間、非密碼學強度）；`src/app/checkout/pay/page.tsx:93-101`（憑 `order_no` service-role 讀單、無 session／擁有權綁定，且該 GET 路由無限流）＋`:117-134`（外露 `ItemName`＝品名＋數量與 `TotalAmount`）＋`:178-183`（為該單 insert 一列 pending `payment`）
 - 失敗情境：T111（PR #57）代客建單的收款設計是「建 `pending_payment` 訂單→產生付款連結 `/checkout/pay?order=<order_no>` 交給客人自行刷卡」。這讓 `order_no` **從隱含的識別碼變成刻意對外散佈的持有型憑證**（admin 透過 email／LINE／簡訊明文傳給客人），而 `/checkout/pay` 對任何持有該 order_no 的人開放：讀出品名＋數量＋總金額、並替該單建立 ECPay 付款表單與 pending `payment` row。由此衍生兩個具體問題——①**與 T73 修法直接衝突（行為連鎖）**：T73（P1，未開始）現行描述明訂「擁有權綁定須一併套用 success／pay／failed 三頁」；但代客建單的客人點的是**冷連結**，瀏覽器既無 admin 那張 cart 的 `guest_token`、也可能未登入——若 T73 照字面把 `/checkout/pay` 綁 session／guest 擁有權，**代客建單付款連結會直接失效**（客人無法付款），甚至客人自助結帳後把付款連結換到另一台裝置／瀏覽器開啟也會被擋。故 T73 的「三頁一律綁擁有權」對 pay 頁不成立，需改以「不可猜的憑證＋限流」取代。②**枚舉風險被抬高**：order_no 現在是憑證卻仍用 `Math.random()` 產生、pay 頁又無限流，攻擊者枚舉 `INC-<今日>-XXXXXX` 命中某張 `pending_payment` 訂單即可看到其品項與金額、並觸發 payment row 建立（雖 1.07e9／日＋72h 逾期窗口使大規模枚舉不切實際，但設計上已把 order_no 當憑證用卻無密碼學強度與速率保護）。與 T73／F-006 同根本區域（order_no 即權限＋弱亂數），但本項是 **T111 上線後才出現的新維度**：它把「pay 頁能否綁擁有權」從安全強化翻轉成功能前提，必須反映進 T73 的修法設計。
 - 修法：**針對 `/checkout/pay` 專頁**，不採 T73 對 success 頁的「綁 session／guest 擁有權」路線（會破壞付款連結），改為：①`generateOrderNo` 換 `crypto.getRandomValues`（T73 已含此子項，本項把它的優先級與理由補強——order_no 已是對外散佈憑證）；②對 GET `/checkout/pay` 加速率限制（沿用 `src/lib/rate-limit.ts` Upstash 基礎設施，以 IP 為 key），壓制枚舉；③（可選、更穩健）為付款連結引入與 order_no 解耦的獨立高熵簽章 token 參數，pay 頁驗 token 而非只認 order_no。success／failed 頁的擁有權綁定仍照 T73 原案。**建議在 T73 任務描述與 issue #15 補註「pay 頁因 T111 付款連結為冷連結，改走『crypto order_no＋限流』而非擁有權綁定，success／failed 維持綁定」，並在 T73 與 T111 的依賴欄互相註明此耦合**（reporting.md 批次耦合「行為連鎖」型）。
