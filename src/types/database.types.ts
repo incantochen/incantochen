@@ -797,6 +797,14 @@ export type Database = {
         Args: { p_product_id: string; p_storage_path: string };
         Returns: string;
       };
+      insert_product_option: {
+        Args: {
+          p_option_type_id: string;
+          p_product_id: string;
+          p_required: boolean;
+        };
+        Returns: string;
+      };
       move_option_value: {
         Args: { p_direction: string; p_option_value_id: string };
         Returns: string;
@@ -804,6 +812,14 @@ export type Database = {
       move_product_image: {
         Args: { p_direction: string; p_image_id: string };
         Returns: string;
+      };
+      move_product_option: {
+        Args: { p_direction: string; p_product_option_id: string };
+        Returns: string;
+      };
+      set_default_product_option_value: {
+        Args: { p_pov_id: string };
+        Returns: number;
       };
     };
     Enums: {

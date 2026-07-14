@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { notFound } from "next/navigation"
 import { requireAdmin } from "@/lib/auth/require-admin"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
@@ -45,9 +46,23 @@ export default async function EditProductPage({
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-gray-900">編輯商品</h1>
-        <span className="text-sm text-gray-500">
-          最後更新：{formatDateTime(product.updated_at)}
-        </span>
+        <div className="flex items-center gap-4">
+          <Link
+            href={`/admin/products/${product.id}/options`}
+            className="text-sm text-blue-600 hover:underline"
+          >
+            選項設定
+          </Link>
+          <Link
+            href={`/admin/products/${product.id}/images`}
+            className="text-sm text-blue-600 hover:underline"
+          >
+            圖片管理
+          </Link>
+          <span className="text-sm text-gray-500">
+            最後更新：{formatDateTime(product.updated_at)}
+          </span>
+        </div>
       </div>
       {saved === "1" && (
         <SavedBanner
