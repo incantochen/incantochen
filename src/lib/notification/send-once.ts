@@ -84,8 +84,23 @@ async function sendOnceInner(
     );
   }
 
-  // 沒 reclaim 到（已寄或另一並發請求正在處理）：無事可做，視為成功。
-  if (!reclaimed) return true;
+  if (!reclaimed) {
+    // 沒 reclaim 到：可能已經真的送達（status=sent），也可能是另一個並發
+    // 請求正在處理中（status 仍是新鮮的 pending，尚未跨過 stale 門檻）。
+    // 後者的結果此刻未知——若直接回 true，等於樂觀假設對方一定會成功；
+    // 但這個回傳值現在會被 webhook 用來決定要不要讓 ECPay 重送（T88），
+    // 樂觀假設錯了就會把一次真正的寄信失敗回報成功、永遠沒有人再重試。
+    // 查一次目前狀態才誠實：只有確認 sent 才算成功，其餘一律回 false
+    // 讓上游有機會再次確認——reclaim 有去重＋stale 門檻保護，不會因為
+    // 多一次不必要的重送就造成重複寄信。
+    const { data: current } = await serviceRole
+      .from("notification")
+      .select("status")
+      .eq("order_id", orderId)
+      .eq("type", type)
+      .maybeSingle();
+    return current?.status === "sent";
+  }
   return attemptSend(serviceRole, reclaimed.id, send);
 }
 

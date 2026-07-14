@@ -163,9 +163,13 @@ export async function GET(request: Request) {
               payment.order_id,
             );
             if (!notified) {
-              // reconcile 是每日兜底，不因單封信投遞失敗中止整批——只告警，
-              // 隔日再試（T88：webhook 路徑會主動觸發 ECPay 重送，這裡只是
-              // 記錄訊號）。
+              // reconcile 是每日兜底，不因單封信投遞失敗中止整批——只告警、
+              // 不 throw。注意：這支 cron 本身**不會**在隔天重試這筆通知——
+              // candidate 查詢條件是 payment.status='pending'（見上方
+              // `.eq("status", "pending")`），這筆此時已是 paid，往後每次
+              // reconcile 都不會再撈到它。實際還能救的路徑只剩 T88 webhook
+              // 端的 ECPay 重送（若後續還有回呼進來）與人工補寄（T90
+              // runbook）；這裡只是記錄訊號，供追蹤 webhook 可靠度。
               summary.unexpected += 1;
               Sentry.captureMessage("reconcile: notification delivery failed", {
                 level: "warning",

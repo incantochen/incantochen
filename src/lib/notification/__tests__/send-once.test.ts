@@ -20,6 +20,26 @@ function makeServiceRole() {
         throw new Error(`unexpected table: ${table}`);
       }
       return {
+        // 純讀查詢：select('status').eq('order_id',x).eq('type',y).maybeSingle()
+        // 用來在「沒 reclaim 到」時確認目前是否已經 sent。
+        select: () => {
+          const filters: Record<string, string> = {};
+          const chain = {
+            eq: (col: string, val: string) => {
+              filters[col] = val;
+              return chain;
+            },
+            maybeSingle: () => {
+              const row = notifications.get(
+                key(filters.order_id ?? "", filters.type ?? ""),
+              );
+              return Promise.resolve({
+                data: row ? { status: row.status } : null,
+              });
+            },
+          };
+          return chain;
+        },
         insert: (values: {
           id: string;
           order_id: string;
@@ -313,15 +333,22 @@ describe("sendOnce", () => {
     // （status 已經被搶先改成 pending），但尚未完成 send()。
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(sr as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send: secondSend,
-    });
+    const secondResult = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send: secondSend,
+      },
+    );
 
     // 第二個請求應該看到 status=pending（不是 failed），不會重寄。
     expect(secondSend).not.toHaveBeenCalled();
+    // 此時第一個請求尚未完成 send()，無法確認是否送達，誠實回 false
+    // （而非樂觀假設對方一定會成功）——這個回傳值會被 webhook 用來決定
+    // 是否讓 ECPay 重送，樂觀回 true 會讓真正的寄信失敗永遠無法被重試。
+    expect(secondResult).toBe(false);
 
     resolveFirstSend();
     await firstCall;
@@ -400,17 +427,22 @@ describe("sendOnce", () => {
     // 不再早於 stale 門檻），但尚未完成 send()。
     for (let i = 0; i < 5; i++) await Promise.resolve();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(sr as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send: secondSend,
-    });
+    const secondResult = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send: secondSend,
+      },
+    );
 
     // 第二個請求的 stale-pending 條件應該因為 created_at 已被第一個請求
     // 推進而不再符合，不會重寄。若沒有這次修法（reclaim 沒有一併更新
     // created_at），第二個請求會用同一個舊 createdAt 再次判定為卡住而重寄。
     expect(secondSend).not.toHaveBeenCalled();
+    // 第一個請求尚未完成 send()，無法確認是否送達，誠實回 false。
+    expect(secondResult).toBe(false);
 
     resolveFirstSend();
     await firstCall;
@@ -419,7 +451,7 @@ describe("sendOnce", () => {
     expect(notifications.get("o1:order_confirmation")?.status).toBe("sent");
   });
 
-  it("pending 剛建立不久（可能真的還在處理中）→ 不會被誤撿去重寄", async () => {
+  it("pending 剛建立不久（可能真的還在處理中）→ 不會被誤撿去重寄、回傳 false（無法確認送達）", async () => {
     const sr = makeServiceRole();
     notifications.set(key("o1", "order_confirmation"), {
       id: "n0",
@@ -428,14 +460,41 @@ describe("sendOnce", () => {
     });
 
     const send = vi.fn().mockResolvedValue(undefined);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await sendOnce(sr as any, {
-      orderId: "o1",
-      type: "order_confirmation",
-      send,
-    });
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      },
+    );
 
     expect(send).not.toHaveBeenCalled();
     expect(notifications.get("o1:order_confirmation")?.status).toBe("pending");
+    expect(result).toBe(false);
+  });
+
+  it("沒 reclaim 到、但目前狀態其實已經是 sent（另一並發請求已完成送達）→ 回傳 true", async () => {
+    const sr = makeServiceRole();
+    notifications.set(key("o1", "order_confirmation"), {
+      id: "n0",
+      status: "sent",
+      createdAt: Date.now(),
+    });
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const result = await sendOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sr as any,
+      {
+        orderId: "o1",
+        type: "order_confirmation",
+        send,
+      },
+    );
+
+    expect(send).not.toHaveBeenCalled();
+    expect(result).toBe(true);
   });
 });
