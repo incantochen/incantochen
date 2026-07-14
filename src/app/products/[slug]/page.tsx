@@ -1,12 +1,12 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Gem } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { CATEGORY_LABELS } from "@/lib/product/category-labels";
 import {
   ProductConfigurator,
   type ConfiguratorOption,
 } from "@/components/product-configurator";
+import { Breadcrumb } from "@/components/breadcrumb";
+import { PlaceholderImage } from "@/components/placeholder-image";
 
 const GALLERY_CAPTIONS = ["正面", "側面", "配戴情境", "生活情境"];
 
@@ -70,30 +70,22 @@ export default async function ProductDetailPage({
 
   return (
     <div className="mx-auto max-w-[1240px] px-6 py-8">
-      <nav className="text-xs tracking-[0.1em] text-ash uppercase">
-        <Link href="/" className="hover:text-primary">
-          首頁
-        </Link>
-        {" / "}
-        <Link
-          href={`/collections/${product.category}`}
-          className="hover:text-primary"
-        >
-          {categoryLabel}
-        </Link>
-        {" / "}
-        <span>{product.name}</span>
-      </nav>
+      <Breadcrumb
+        items={[
+          { label: "首頁", href: "/" },
+          { label: categoryLabel, href: `/collections/${product.category}` },
+          { label: product.name },
+        ]}
+      />
 
       <div className="mt-8 grid grid-cols-1 items-start gap-12 lg:grid-cols-[1.05fr_0.95fr]">
         {/* Gallery */}
         <div className="lg:sticky lg:top-24">
-          <div className="relative flex aspect-square items-center justify-center rounded-lg border border-border bg-cloud">
-            <Gem className="size-12 text-ash/60" strokeWidth={1.2} />
-            <span className="absolute bottom-2 left-0 right-0 text-center text-[10.5px] tracking-[0.14em] text-ash uppercase">
-              選配後合成主圖（依選項即時更新）
-            </span>
-          </div>
+          <PlaceholderImage
+            className="aspect-square rounded-lg border border-border"
+            iconSize="size-12"
+            caption="選配後合成主圖（依選項即時更新）"
+          />
           <div className="mt-2.5 grid grid-cols-4 gap-2.5">
             {GALLERY_CAPTIONS.map((caption) => (
               <div

@@ -2,9 +2,9 @@
 
 import { useState, useTransition } from "react"
 import Link from "next/link"
-import { Gem } from "lucide-react"
 import { updateCartItemQuantity, removeCartItem } from "@/app/cart/actions"
 import type { CartItemView } from "@/lib/cart/read-cart"
+import { PlaceholderImage } from "@/components/placeholder-image"
 
 export function CartItemRow({ item }: { item: CartItemView }) {
   const [quantity, setQuantity] = useState(item.quantity)
@@ -36,9 +36,7 @@ export function CartItemRow({ item }: { item: CartItemView }) {
 
   return (
     <div className="grid grid-cols-[90px_1fr_auto] items-center gap-4 border-b border-border py-5">
-      <div className="flex h-[90px] w-[90px] items-center justify-center rounded-lg border border-border bg-cloud">
-        <Gem className="size-8 text-ash/60" strokeWidth={1.2} />
-      </div>
+      <PlaceholderImage className="h-[90px] w-[90px] rounded-lg border border-border" iconSize="size-8" />
       <div>
         <div className="text-[10.5px] tracking-[0.16em] text-ash uppercase">
           {item.selectionsSummary}
