@@ -7,8 +7,9 @@ import { getClientIp } from "@/lib/get-client-ip";
 import { checkOrderPageViewRateLimit } from "@/lib/rate-limit";
 import {
   ORDER_ACCESS_COOKIE,
-  isValidOrderAccessCookie,
+  resolveOrderOwnership,
 } from "@/lib/order/order-access-token";
+import { RateLimitedNotice } from "../rate-limited-notice";
 import { OrderStatusCheck } from "./order-status-check";
 
 export default async function CheckoutSuccessPage({
@@ -22,35 +23,44 @@ export default async function CheckoutSuccessPage({
 
   const headersList = await headers();
   const ip = getClientIp(headersList);
-  if (!(await checkOrderPageViewRateLimit(ip, orderNo))) {
-    return (
-      <main className="min-h-screen bg-paper flex items-center justify-center px-4">
-        <p className="text-sm text-ash">請求太頻繁，請稍後再試</p>
-      </main>
-    );
-  }
-
   const serviceRole = createServiceRoleClient();
-  const { data: order } = await serviceRole
-    .from("orders")
-    .select(
-      "order_no, status, total_amount, member_id, member:member_id(email)",
-    )
-    .eq("order_no", orderNo)
-    .maybeSingle();
 
+  // 四個互不依賴的 I/O 平行送出（Redis 限流／Postgres 查訂單／讀 cookie／
+  // Supabase Auth session）——限流未過時查詢結果作廢即可，換取一般情況下
+  // 少一趟 round trip。
+  const [rateLimitOk, orderResult, cookieStore, userResult] = await Promise.all(
+    [
+      checkOrderPageViewRateLimit(ip, orderNo),
+      serviceRole
+        .from("orders")
+        .select(
+          "order_no, status, total_amount, member_id, member:member_id(email)",
+        )
+        .eq("order_no", orderNo)
+        .maybeSingle(),
+      cookies(),
+      createClient().then((c) => c.auth.getUser()),
+    ],
+  );
+
+  if (!rateLimitOk) return <RateLimitedNotice />;
+
+  const { data: order } = orderResult;
   if (!order) redirect("/");
 
   // T73：非擁有者（cookie 缺席／不符，且未以自己的帳號登入）不顯示 email，
   // 避免 URL 上的 order_no 被枚舉時外洩其他客人的個資。缺席不 redirect——
   // T111 後台代客建單的付款連結在客人裝置上本來就沒有這把 cookie。
-  const cookieToken = (await cookies()).get(ORDER_ACCESS_COOKIE)?.value;
+  const cookieToken = cookieStore.get(ORDER_ACCESS_COOKIE)?.value;
   const {
     data: { user },
-  } = await (await createClient()).auth.getUser();
-  const isOwner =
-    (!!user && user.id === order.member_id) ||
-    isValidOrderAccessCookie(cookieToken, order.order_no);
+  } = userResult;
+  const { ownerBySession, ownerByCookie } = resolveOrderOwnership(
+    cookieToken,
+    order,
+    user,
+  );
+  const isOwner = ownerBySession || ownerByCookie;
 
   const memberData = order.member;
   const email = isOwner

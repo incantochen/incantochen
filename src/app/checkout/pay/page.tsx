@@ -13,8 +13,9 @@ import {
 } from "@/lib/rate-limit";
 import {
   ORDER_ACCESS_COOKIE,
-  isValidOrderAccessCookie,
+  resolveOrderOwnership,
 } from "@/lib/order/order-access-token";
+import { RateLimitedNotice } from "../rate-limited-notice";
 import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit";
 
 // T74：pending payment 超過此時限視為放棄，換發新交易序號（而非無限期復用
@@ -104,39 +105,60 @@ export default async function CheckoutPayPage({
 
   const headersList = await headers();
   const ip = getClientIp(headersList);
-  if (!(await checkOrderPageViewRateLimit(ip, orderNo))) {
-    return (
-      <main className="min-h-screen bg-paper flex items-center justify-center px-4">
-        <p className="text-sm text-ash">請求太頻繁，請稍後再試</p>
-      </main>
-    );
-  }
-
   const serviceRole = createServiceRoleClient();
 
-  const { data: order } = await serviceRole
-    .from("orders")
-    .select("*")
-    .eq("order_no", orderNo)
-    .maybeSingle();
+  // 四個互不依賴的 I/O 平行送出（Redis 限流／Postgres 查訂單／讀 cookie／
+  // Supabase Auth session）——這個高延遲敏感頁面本來就有平行查詢的慣例
+  // （見下方 order_item／payment 查詢），限流未過或查無訂單時查詢結果作廢
+  // 即可，換取一般情況下少等幾趟 round trip。
+  const [rateLimitOk, orderResult, cookieStore, userResult] = await Promise.all(
+    [
+      checkOrderPageViewRateLimit(ip, orderNo),
+      serviceRole
+        .from("orders")
+        .select("*")
+        .eq("order_no", orderNo)
+        .maybeSingle(),
+      cookies(),
+      createClient().then((c) => c.auth.getUser()),
+    ],
+  );
+
+  if (!rateLimitOk) return <RateLimitedNotice />;
+
+  const { data: order } = orderResult;
 
   if (!order) {
     redirect("/checkout");
   }
 
+  // 已付款／非待付款 → 導頁優先於下面的擁有權檢查：這兩個分支不揭露新
+  // 資訊、也不建立新 payment，必須維持既有行為不被打斷——同一瀏覽器結帳
+  // 過別筆訂單、cookie 已改綁到那一筆時，回訪這筆「已經付完款」的舊連結
+  // 仍要能順利導去成功頁，不能卡在「無法在此瀏覽器繼續付款」的死路。
+  if (order.status === "paid") {
+    redirect(`/checkout/success?order=${orderNo}`);
+  }
+
+  if (order.status !== "pending_payment") {
+    redirect("/");
+  }
+
   // T73：cookie 存在但簽章對不上這筆 order_no（且不是本人登入帳號的
-  // 訂單）——代表這個瀏覽器剛結帳過別筆訂單，卻來戳這筆。這是唯一能安全
-  // 判定「不該讓它繼續付款」的訊號，擋在讀 order_item／建立 payment、甚至
-  // 組出可能含收件資訊的 ECPay 表單之前。cookie 缺席時維持現況放行——
-  // T111 後台代客建單的付款連結在客人裝置上本來就沒有這把 cookie。
-  const cookieToken = (await cookies()).get(ORDER_ACCESS_COOKIE)?.value;
+  // 訂單）——代表這個瀏覽器剛結帳過別筆訂單，卻來戳這筆待付款訂單。這是
+  // 唯一能安全判定「不該讓它繼續付款」的訊號，擋在讀 order_item／建立
+  // payment、甚至組出可能含收件資訊的 ECPay 表單之前。cookie 缺席時維持
+  // 現況放行——T111 後台代客建單的付款連結在客人裝置上本來就沒有這把
+  // cookie。
+  const cookieToken = cookieStore.get(ORDER_ACCESS_COOKIE)?.value;
   const {
     data: { user },
-  } = await (await createClient()).auth.getUser();
-  const ownerBySession = !!user && user.id === order.member_id;
-  const ownerByCookie = isValidOrderAccessCookie(cookieToken, order.order_no);
-  const cookiePresentButWrong =
-    cookieToken !== undefined && !ownerByCookie && !ownerBySession;
+  } = userResult;
+  const { cookiePresentButWrong } = resolveOrderOwnership(
+    cookieToken,
+    order,
+    user,
+  );
 
   if (cookiePresentButWrong) {
     return (
@@ -151,15 +173,6 @@ export default async function CheckoutPayPage({
         </div>
       </main>
     );
-  }
-
-  // 已付款 → 直接進成功頁（避免重送 ECPay）
-  if (order.status === "paid") {
-    redirect(`/checkout/success?order=${orderNo}`);
-  }
-
-  if (order.status !== "pending_payment") {
-    redirect("/");
   }
 
   // 冪等：復用現有 pending payment（頁面重整不重建），
@@ -229,11 +242,7 @@ export default async function CheckoutPayPage({
     }
 
     if (!(await checkOrderPayCreateRateLimit(ip, orderNo))) {
-      return (
-        <main className="min-h-screen bg-paper flex items-center justify-center px-4">
-          <p className="text-sm text-ash">請求太頻繁，請稍後再試</p>
-        </main>
-      );
+      return <RateLimitedNotice />;
     }
 
     merchantTradeNo = await createPendingPayment(

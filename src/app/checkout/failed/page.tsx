@@ -4,6 +4,7 @@ import Link from "next/link";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkOrderPageViewRateLimit } from "@/lib/rate-limit";
+import { RateLimitedNotice } from "../rate-limited-notice";
 
 export default async function CheckoutFailedPage({
   searchParams,
@@ -16,20 +17,21 @@ export default async function CheckoutFailedPage({
 
   const headersList = await headers();
   const ip = getClientIp(headersList);
-  if (!(await checkOrderPageViewRateLimit(ip, orderNo))) {
-    return (
-      <main className="min-h-screen bg-paper flex items-center justify-center px-4">
-        <p className="text-sm text-ash">請求太頻繁，請稍後再試</p>
-      </main>
-    );
-  }
-
   const serviceRole = createServiceRoleClient();
-  const { data: order } = await serviceRole
-    .from("orders")
-    .select("order_no, status")
-    .eq("order_no", orderNo)
-    .maybeSingle();
+
+  // 兩個互不依賴的 I/O 平行送出，限流未過時查詢結果作廢即可。
+  const [rateLimitOk, orderResult] = await Promise.all([
+    checkOrderPageViewRateLimit(ip, orderNo),
+    serviceRole
+      .from("orders")
+      .select("order_no, status")
+      .eq("order_no", orderNo)
+      .maybeSingle(),
+  ]);
+
+  if (!rateLimitOk) return <RateLimitedNotice />;
+
+  const { data: order } = orderResult;
 
   if (!order) redirect("/");
 

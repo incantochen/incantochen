@@ -11,16 +11,21 @@ export const ORDER_ACCESS_COOKIE = "order_access_token";
 
 const ORDER_ACCESS_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 2; // 2 小時
 
-function sign(orderNo: string): string {
+// 簽章涵蓋 orderNo 與核發時間，效期由伺服器端驗證強制執行——單靠 cookie
+// 的 maxAge（client-side 屬性）的話，token 字串一旦外流（log／MITM／共用
+// 電腦殘留），拿去手動組 Cookie header 重放會永遠有效，因為驗證端從未檢查
+// 核發時間。
+function sign(orderNo: string, issuedAt: number): string {
   return createHmac("sha256", serverEnv.ORDER_ACCESS_TOKEN_SECRET)
-    .update(orderNo)
+    .update(`${orderNo}:${issuedAt}`)
     .digest("base64url");
 }
 
 export function orderAccessCookieOptions(orderNo: string) {
+  const issuedAt = Date.now();
   return {
     name: ORDER_ACCESS_COOKIE,
-    value: sign(orderNo),
+    value: `${issuedAt}.${sign(orderNo, issuedAt)}`,
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax" as const,
@@ -36,8 +41,41 @@ export function isValidOrderAccessCookie(
   orderNo: string,
 ): boolean {
   if (!cookieValue) return false;
-  const expected = Buffer.from(sign(orderNo));
-  const actual = Buffer.from(cookieValue);
+  const separatorIndex = cookieValue.indexOf(".");
+  if (separatorIndex === -1) return false;
+
+  const issuedAt = Number(cookieValue.slice(0, separatorIndex));
+  // §6：numeric 比對前先 Number()＋Number.isFinite() 防 NaN——偽造或截斷的
+  // cookie 值不能讓 NaN 比較悄悄通過。
+  if (!Number.isFinite(issuedAt)) return false;
+  if (Date.now() - issuedAt > ORDER_ACCESS_COOKIE_MAX_AGE_SECONDS * 1000) {
+    return false;
+  }
+
+  const signature = cookieValue.slice(separatorIndex + 1);
+  const expected = Buffer.from(sign(orderNo, issuedAt));
+  const actual = Buffer.from(signature);
   if (expected.length !== actual.length) return false;
   return timingSafeEqual(expected, actual);
+}
+
+export type OrderOwnership = {
+  ownerBySession: boolean;
+  ownerByCookie: boolean;
+  // cookie 存在但簽章跟這筆 order_no 不符（且不是本人登入帳號的訂單）——
+  // 代表這個瀏覽器剛結帳過別筆訂單，卻來戳這筆。唯一能安全判定「不該讓它
+  // 繼續」的訊號；cookie 缺席時一律 false（T111 情境無法判斷，不擋）。
+  cookiePresentButWrong: boolean;
+};
+
+export function resolveOrderOwnership(
+  cookieToken: string | undefined,
+  order: { order_no: string; member_id: string | null },
+  user: { id: string } | null,
+): OrderOwnership {
+  const ownerBySession = !!user && user.id === order.member_id;
+  const ownerByCookie = isValidOrderAccessCookie(cookieToken, order.order_no);
+  const cookiePresentButWrong =
+    cookieToken !== undefined && !ownerByCookie && !ownerBySession;
+  return { ownerBySession, ownerByCookie, cookiePresentButWrong };
 }
