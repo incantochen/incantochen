@@ -18,10 +18,13 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 const uploadOptionValueImageFile = vi.fn();
-const deleteImageFiles = vi.fn();
+const deleteImageFiles = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/lib/storage/product-images", () => ({
   uploadOptionValueImage: (...a: unknown[]) => uploadOptionValueImageFile(...a),
-  deleteImageFiles: (...a: unknown[]) => deleteImageFiles(...a),
+  // bestEffortDeleteImages 的真實實作只吞錯誤、不往外拋；測試只關心
+  // 「呼叫了哪些路徑」，用同一支 fn 記錄即可比照原本 deleteImageFiles 斷言
+  bestEffortDeleteImages: (paths: string[]) =>
+    deleteImageFiles(paths).catch(() => undefined),
 }));
 
 const TYPE_ID = "11111111-1111-4111-8111-111111111111";
@@ -74,6 +77,31 @@ const recorded: {
   is: [string, unknown][];
 }[] = [];
 const rpcCalls: { fn: string; args: any }[] = [];
+
+// CAS update 的 .select(cols) 兩種呼叫形狀都要撐：舊路徑（setOptionTypeActive
+// 等）接 .maybeSingle()；新的 CAS 路徑（updateOptionType/updateOptionValue）
+// 直接 await 陣列。回傳一個「本身可 await、也可再呼叫 .maybeSingle()」的物件，
+// 比照真實 supabase-js query builder 的 thenable 形狀。
+function makeUpdateSelectResult(
+  getResult: () => { id?: string; option_type_id?: string } | null,
+  getError: () => MockError,
+) {
+  const arrayResult = () => {
+    const result = getResult();
+    const error = getError();
+    return Promise.resolve({
+      data: error || !result ? [] : [result],
+      error,
+    });
+  };
+  const p: any = arrayResult();
+  p.maybeSingle = () => {
+    const result = getResult();
+    const error = getError();
+    return Promise.resolve({ data: error ? null : result, error });
+  };
+  return p;
+}
 
 function insertedValues(table: string) {
   return recorded.filter((r) => r.op === "insert" && r.table === table);
@@ -141,13 +169,7 @@ vi.mock("@/lib/supabase/service-role", () => ({
                 entry.eqs.push([col, val]);
                 return chain;
               },
-              select: () => ({
-                maybeSingle: () =>
-                  Promise.resolve({
-                    data: state.typeUpdateError ? null : state.typeUpdateResult,
-                    error: state.typeUpdateError,
-                  }),
-              }),
+              select: () => makeUpdateSelectResult(() => state.typeUpdateResult, () => state.typeUpdateError),
             };
             return chain;
           },
@@ -197,24 +219,21 @@ vi.mock("@/lib/supabase/service-role", () => ({
               entry.is.push([col, val]);
               return chain;
             },
-            select: () => ({
-              maybeSingle: () =>
-                Promise.resolve(
-                  isImageUpdate
-                    ? {
+            select: () =>
+              isImageUpdate
+                ? {
+                    maybeSingle: () =>
+                      Promise.resolve({
                         data: state.valueImageUpdateError
                           ? null
                           : state.valueImageUpdateResult,
                         error: state.valueImageUpdateError,
-                      }
-                    : {
-                        data: state.valueUpdateError
-                          ? null
-                          : state.valueUpdateResult,
-                        error: state.valueUpdateError,
-                      },
-                ),
-            }),
+                      }),
+                  }
+                : makeUpdateSelectResult(
+                    () => state.valueUpdateResult,
+                    () => state.valueUpdateError,
+                  ),
           };
           return chain;
         },
@@ -289,7 +308,7 @@ beforeEach(() => {
   rpcCalls.length = 0;
   revalidatePath.mockClear();
   uploadOptionValueImageFile.mockReset();
-  deleteImageFiles.mockReset();
+  deleteImageFiles.mockReset().mockResolvedValue(undefined);
   state.typeInsertError = null;
   state.typeInsertedId = "new-type-id";
   state.typeUpdateResult = { id: TYPE_ID };
@@ -352,29 +371,34 @@ describe("createOptionType", () => {
 });
 
 describe("updateOptionType", () => {
-  it("update payload 不含 code（建立後鎖定）", async () => {
-    const result = await updateOptionType(TYPE_ID, {
-      name: "新名稱",
-      applies_to: "ring",
-      input_type: "select",
-      // @ts-expect-error 模擬惡意多傳 code
-      code: "hacked_code",
-    });
+  it("update payload 不含 code（建立後鎖定），CAS 帶 updated_at 條件", async () => {
+    const result = await updateOptionType(
+      TYPE_ID,
+      {
+        name: "新名稱",
+        applies_to: "ring",
+        input_type: "select",
+        // @ts-expect-error 模擬惡意多傳 code
+        code: "hacked_code",
+      },
+      { updatedAt: "2026-01-01T00:00:00Z" },
+    );
     expect(result.ok).toBe(true);
     const update = updates("option_type")[0];
     expect(update?.values).not.toHaveProperty("code");
     expect(update?.values).toMatchObject({ name: "新名稱" });
+    expect(update?.eqs).toContainEqual(["updated_at", "2026-01-01T00:00:00Z"]);
   });
 
-  it("找不到列時回友善訊息", async () => {
+  it("0 列命中（並發異動或已刪除）回同一句並發訊息", async () => {
     state.typeUpdateResult = null;
-    const result = await updateOptionType(TYPE_ID, {
-      name: "新名稱",
-      applies_to: "ring",
-      input_type: "select",
-    });
+    const result = await updateOptionType(
+      TYPE_ID,
+      { name: "新名稱", applies_to: "ring", input_type: "select" },
+      { updatedAt: "2026-01-01T00:00:00Z" },
+    );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("找不到");
+    if (!result.ok) expect(result.error).toContain("已被其他管理員異動");
   });
 });
 
@@ -468,22 +492,39 @@ describe("createOptionValue", () => {
 });
 
 describe("updateOptionValue", () => {
-  it("update payload 不含 code", async () => {
-    const result = await updateOptionValue(VALUE_ID, {
-      label: "新名稱",
-      swatch_hex: null,
-      // @ts-expect-error 模擬惡意多傳 code
-      code: "hacked",
-    });
+  it("update payload 不含 code，CAS 帶 updated_at 條件", async () => {
+    const result = await updateOptionValue(
+      VALUE_ID,
+      {
+        label: "新名稱",
+        swatch_hex: null,
+        // @ts-expect-error 模擬惡意多傳 code
+        code: "hacked",
+      },
+      { updatedAt: "2026-01-01T00:00:00Z" },
+    );
     expect(result.ok).toBe(true);
-    expect(updates("option_value")[0]?.values).not.toHaveProperty("code");
+    const update = updates("option_value")[0];
+    expect(update?.values).not.toHaveProperty("code");
+    expect(update?.eqs).toContainEqual(["updated_at", "2026-01-01T00:00:00Z"]);
+  });
+
+  it("0 列命中（並發異動或已刪除）回同一句並發訊息", async () => {
+    state.valueUpdateResult = null;
+    const result = await updateOptionValue(
+      VALUE_ID,
+      { label: "新名稱", swatch_hex: null },
+      { updatedAt: "2026-01-01T00:00:00Z" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("已被其他管理員異動");
   });
 });
 
 describe("moveOptionValue", () => {
-  it("走 move_option_value RPC 並帶對參數，revalidate 用 DB 的 option_type_id", async () => {
+  it("走 move_option_value RPC 並帶對參數，revalidate 用呼叫端傳入的 optionTypeId（不再另外查 DB）", async () => {
     state.rpcResult = "moved";
-    const result = await moveOptionValue(VALUE_ID, "down");
+    const result = await moveOptionValue(VALUE_ID, TYPE_ID, "down");
     expect(result.ok).toBe(true);
     expect(rpcCalls[0]).toEqual({
       fn: "move_option_value",
@@ -494,15 +535,21 @@ describe("moveOptionValue", () => {
 
   it("not_found 回友善訊息", async () => {
     state.rpcResult = "not_found";
-    const result = await moveOptionValue(VALUE_ID, "up");
+    const result = await moveOptionValue(VALUE_ID, TYPE_ID, "up");
     expect(result.ok).toBe(false);
   });
 
   it("edge 視為成功且仍 revalidate（畫面可能是舊的）", async () => {
     state.rpcResult = "edge";
-    const result = await moveOptionValue(VALUE_ID, "up");
+    const result = await moveOptionValue(VALUE_ID, TYPE_ID, "up");
     expect(result.ok).toBe(true);
     expect(revalidatePath).toHaveBeenCalledWith(`/admin/options/${TYPE_ID}`);
+  });
+
+  it("非法 optionTypeId（非 uuid）不打 DB", async () => {
+    const result = await moveOptionValue(VALUE_ID, "not-a-uuid", "up");
+    expect(result.ok).toBe(false);
+    expect(rpcCalls).toHaveLength(0);
   });
 });
 

@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import * as Sentry from "@sentry/nextjs";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
@@ -23,7 +22,7 @@ import {
 } from "@/lib/option/schema";
 import {
   uploadOptionValueImage as uploadOptionValueImageFile,
-  deleteImageFiles,
+  bestEffortDeleteImages,
 } from "@/lib/storage/product-images";
 
 export type OptionTypeActionResult = AdminFormActionResult<
@@ -34,6 +33,10 @@ export type OptionValueActionResult = AdminFormActionResult<
 >;
 
 const RACE_MESSAGE = `此項目已被其他管理員異動${REFRESH_TO_RETRY_SUFFIX}`;
+// 兩處各自命中（預查、以及預查與刪除之間的 race window 被 DB RESTRICT 擋下）
+// 都要回同一句，比照 RACE_MESSAGE 抽成常數避免手改一處另一處沒跟上
+const TYPE_IN_USE_MESSAGE = "此選項類型已有商品使用，無法刪除；請改為隱藏";
+const VALUE_IN_USE_MESSAGE = "此選項值已有商品使用，無法刪除；請改為隱藏";
 
 function revalidateOptionsPages(typeId?: string) {
   revalidatePath("/admin/options");
@@ -52,19 +55,6 @@ function buildCodeConflictResult(conflictName: string | null): {
     ? `此代碼已被「${conflictName}」使用，請換一個`
     : "此代碼已被使用，請換一個";
   return { ok: false, error: message, fieldErrors: { code: message } };
-}
-
-// Storage 刪檔的 best-effort 收尾：DB 為準，刪檔失敗僅記錄不擋使用者
-async function bestEffortDeleteImages(
-  paths: string[],
-  extra: Record<string, string>,
-) {
-  try {
-    await deleteImageFiles(paths);
-  } catch (e) {
-    console.error("刪除選項圖檔失敗", e);
-    Sentry.captureException(e, { extra: { ...extra, paths } });
-  }
 }
 
 // =============================================================================
@@ -113,6 +103,7 @@ export async function createOptionType(
 export async function updateOptionType(
   id: string,
   values: OptionTypeUpdateValues,
+  guard: { updatedAt: string },
 ): Promise<OptionTypeActionResult> {
   await requireAdmin();
 
@@ -132,18 +123,21 @@ export async function updateOptionType(
   }
 
   const supabase = createServiceRoleClient();
+  // 條件式 UPDATE 樂觀鎖（CLAUDE.md §6；比照 products 的 updateProduct）：
+  // 兩個管理員同時打開同一頁各改不同欄位時，後送出的一方若 updated_at 已
+  // 不是自己載入當下讀到的值，直接擋下而非整份覆蓋對方剛存的變更
   const { data: updated, error } = await supabase
     .from("option_type")
     .update(parsed.data)
     .eq("id", idParsed.data)
-    .select("id")
-    .maybeSingle();
+    .eq("updated_at", guard.updatedAt)
+    .select("id");
 
   if (error) {
     return { ok: false, error: "更新選項類型失敗，請稍後再試" };
   }
-  if (!updated) {
-    return { ok: false, error: "找不到選項類型，可能已被刪除" };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: RACE_MESSAGE };
   }
 
   revalidateOptionsPages(idParsed.data);
@@ -190,28 +184,30 @@ export async function deleteOptionType(id: string): Promise<AdminActionResult> {
 
   const supabase = createServiceRoleClient();
 
-  // 使用中不可刪（product_option.option_type_id 為 RESTRICT）：預查給友善訊息
-  const { count, error: countError } = await supabase
-    .from("product_option")
-    .select("id", { count: "exact", head: true })
-    .eq("option_type_id", parsed.data);
+  // 使用中不可刪（product_option.option_type_id 為 RESTRICT）：預查給友善訊息。
+  // 與下面的圖檔路徑清單互不依賴，平行送出省一趟往返
+  const [
+    { count, error: countError },
+    { data: valuesWithImage, error: imageListError },
+  ] = await Promise.all([
+    supabase
+      .from("product_option")
+      .select("id", { count: "exact", head: true })
+      .eq("option_type_id", parsed.data),
+    // 值 CASCADE 刪除但 Storage 選項圖不會跟著刪（0013 附註同型問題）：
+    // 先收集圖檔路徑，刪除成功後批次清檔
+    supabase
+      .from("option_value")
+      .select("image_path")
+      .eq("option_type_id", parsed.data)
+      .not("image_path", "is", null),
+  ]);
   if (countError) {
     return { ok: false, error: "檢查選項類型使用狀態失敗，請稍後再試" };
   }
   if (count && count > 0) {
-    return {
-      ok: false,
-      error: "此選項類型已有商品使用，無法刪除；請改為隱藏",
-    };
+    return { ok: false, error: TYPE_IN_USE_MESSAGE };
   }
-
-  // 值 CASCADE 刪除但 Storage 選項圖不會跟著刪（0013 附註同型問題）：
-  // 先收集圖檔路徑，刪除成功後批次清檔
-  const { data: valuesWithImage, error: imageListError } = await supabase
-    .from("option_value")
-    .select("image_path")
-    .eq("option_type_id", parsed.data)
-    .not("image_path", "is", null);
   if (imageListError) {
     return { ok: false, error: "檢查選項圖檔失敗，請稍後再試" };
   }
@@ -225,10 +221,7 @@ export async function deleteOptionType(id: string): Promise<AdminActionResult> {
     // 預查與刪除之間的 race window（別的分頁剛把 type 掛上商品）：
     // DB RESTRICT 擋下時回同一句友善訊息，不讓 500 冒出去
     if (deleteError.code === "23503") {
-      return {
-        ok: false,
-        error: "此選項類型已有商品使用，無法刪除；請改為隱藏",
-      };
+      return { ok: false, error: TYPE_IN_USE_MESSAGE };
     }
     return { ok: false, error: "刪除選項類型失敗，請稍後再試" };
   }
@@ -308,6 +301,7 @@ export async function createOptionValue(
 export async function updateOptionValue(
   id: string,
   values: OptionValueUpdateValues,
+  guard: { updatedAt: string },
 ): Promise<OptionValueActionResult> {
   await requireAdmin();
 
@@ -329,21 +323,22 @@ export async function updateOptionValue(
   }
 
   const supabase = createServiceRoleClient();
+  // 條件式 UPDATE 樂觀鎖（同 updateOptionType 理由）
   const { data: updated, error } = await supabase
     .from("option_value")
     .update(parsed.data)
     .eq("id", idParsed.data)
-    .select("option_type_id")
-    .maybeSingle();
+    .eq("updated_at", guard.updatedAt)
+    .select("option_type_id");
 
   if (error) {
     return { ok: false, error: "更新選項值失敗，請稍後再試" };
   }
-  if (!updated) {
-    return { ok: false, error: "找不到選項值，可能已被刪除" };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: RACE_MESSAGE };
   }
 
-  revalidateOptionsPages(updated.option_type_id);
+  revalidateOptionsPages(updated[0]!.option_type_id);
   return { ok: true, id: idParsed.data };
 }
 
@@ -379,16 +374,18 @@ export async function setOptionValueActive(
 
 const moveSchema = z.object({
   valueId: z.string().uuid(),
+  optionTypeId: z.string().uuid(),
   direction: z.enum(["up", "down"]),
 });
 
 export async function moveOptionValue(
   valueId: string,
+  optionTypeId: string,
   direction: "up" | "down",
 ): Promise<AdminActionResult> {
   await requireAdmin();
 
-  const parsed = moveSchema.safeParse({ valueId, direction });
+  const parsed = moveSchema.safeParse({ valueId, optionTypeId, direction });
   if (!parsed.success) {
     return { ok: false, error: "參數格式不正確" };
   }
@@ -413,17 +410,11 @@ export async function moveOptionValue(
     return { ok: false, error: "找不到選項值，可能已被刪除" };
   }
 
-  // revalidate 路徑用 DB 裡的 option_type_id，不信任 client 傳來的 typeId；
-  // 'edge' 也 revalidate——按了「下移」卻已在最後，通常代表畫面是舊的
-  //（別的管理員剛動過排序），重整列表讓使用者看到現況
-  const { data: row, error: rowError } = await supabase
-    .from("option_value")
-    .select("option_type_id")
-    .eq("id", parsed.data.valueId)
-    .maybeSingle();
-  if (!rowError && row) {
-    revalidatePath(`/admin/options/${row.option_type_id}`);
-  }
+  // revalidate 路徑用呼叫端傳入的 optionTypeId（同頁面既有的值，view 本來就
+  // 只能看到自己這頁的 type）——比照 T11 moveImage 的做法，省一趟往返查詢，
+  // 也不會因為補查失敗／race 而靜默漏 revalidate；'edge' 也 revalidate——
+  // 按了方向鍵卻已在最前／最後，通常代表畫面是舊的（別的管理員剛動過排序）
+  revalidatePath(`/admin/options/${parsed.data.optionTypeId}`);
   return { ok: true };
 }
 
@@ -448,10 +439,7 @@ export async function deleteOptionValue(
     return { ok: false, error: "檢查選項值使用狀態失敗，請稍後再試" };
   }
   if (count && count > 0) {
-    return {
-      ok: false,
-      error: "此選項值已有商品使用，無法刪除；請改為隱藏",
-    };
+    return { ok: false, error: VALUE_IN_USE_MESSAGE };
   }
 
   const { data: deleted, error } = await supabase
@@ -464,10 +452,7 @@ export async function deleteOptionValue(
   if (error) {
     // 預查與刪除之間的 race window：DB RESTRICT 兜底
     if (error.code === "23503") {
-      return {
-        ok: false,
-        error: "此選項值已有商品使用，無法刪除；請改為隱藏",
-      };
+      return { ok: false, error: VALUE_IN_USE_MESSAGE };
     }
     return { ok: false, error: "刪除選項值失敗，請稍後再試" };
   }

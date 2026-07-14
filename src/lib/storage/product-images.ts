@@ -1,4 +1,5 @@
 import "server-only";
+import * as Sentry from "@sentry/nextjs";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { env } from "@/lib/env";
 import {
@@ -93,13 +94,20 @@ export async function deleteImageFiles(paths: string[]): Promise<void> {
 }
 
 export async function deleteImageFile(path: string): Promise<void> {
-  const supabase = createServiceRoleClient();
-  const { error } = await supabase.storage
-    .from(PRODUCT_IMAGES_BUCKET)
-    .remove([path]);
+  return deleteImageFiles([path]);
+}
 
-  if (error) {
-    throw new Error(`刪除 Storage 圖片失敗：${error.message}`);
+// Storage 刪檔的 best-effort 收尾單一出處：DB 為準，刪檔失敗僅記錄不擋使用者
+// （原本商品圖／選項圖各自 inline 一份，容易漂移；兩個 admin 呼叫端共用此函式）
+export async function bestEffortDeleteImages(
+  paths: string[],
+  extra: Record<string, string>,
+): Promise<void> {
+  try {
+    await deleteImageFiles(paths);
+  } catch (e) {
+    console.error("刪除 Storage 圖片失敗", e);
+    Sentry.captureException(e, { extra: { ...extra, paths } });
   }
 }
 

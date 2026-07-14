@@ -13,7 +13,16 @@ import { z } from "zod";
 
 export type CreateOrderFromCartResult =
   | { ok: true; orderNo: string }
-  | { ok: false; error: string; priceUpdated?: true };
+  | {
+      ok: false;
+      error: string;
+      priceUpdated?: true;
+      // T12：verifyCartPrices 拋出的錯誤全是「購物車內容本身有問題」（商品
+      // 已下架、選項已被後台隱藏、必選規格缺選擇……），客人能做的自救動作
+      // 都一樣——回購物車移除或調整該項目，故統一標記，供結帳頁顯示明確
+      // 的返回連結，不再只是一段無法互動的錯誤文字
+      showCartLink?: true;
+    };
 
 type ServiceRole = ReturnType<typeof createServiceRoleClient>;
 
@@ -174,7 +183,7 @@ export async function createOrderFromCart(
   } catch (e) {
     const msg =
       e instanceof Error ? e.message : "商品資訊有誤，請重新確認後再試";
-    return { ok: false, error: msg };
+    return { ok: false, error: msg, showCartLink: true };
   }
 
   // 若任何品項金額有變動：更新 cart 快照、提示使用者確認新金額後再送出

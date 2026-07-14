@@ -1,14 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import * as Sentry from "@sentry/nextjs";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import type { AdminActionResult } from "@/lib/admin/action-result";
 import {
   uploadProductImage,
-  deleteImageFile,
+  bestEffortDeleteImages,
 } from "@/lib/storage/product-images";
 
 const uploadSchema = z.object({
@@ -87,13 +86,8 @@ export async function uploadImage(
   });
 
   if (insertError) {
-    // 回滾已上傳的檔案，避免孤兒檔；回滾失敗僅記錄，不再往外拋
-    try {
-      await deleteImageFile(storagePath);
-    } catch (e) {
-      console.error("回滾 Storage 圖片失敗", e);
-      Sentry.captureException(e, { extra: { storagePath, productId } });
-    }
+    // 回滾已上傳的檔案，避免孤兒檔
+    await bestEffortDeleteImages([storagePath], { productId });
     return { ok: false, error: "圖片建檔失敗，請稍後再試" };
   }
 
@@ -125,14 +119,9 @@ export async function deleteImage(imageId: string): Promise<AdminActionResult> {
   }
 
   // DB 為準：Storage 刪檔失敗僅記錄，不擋使用者
-  try {
-    await deleteImageFile(deleted.storage_path);
-  } catch (e) {
-    console.error("刪除 Storage 圖片失敗", e);
-    Sentry.captureException(e, {
-      extra: { storagePath: deleted.storage_path, imageId: parsed.data },
-    });
-  }
+  await bestEffortDeleteImages([deleted.storage_path], {
+    imageId: parsed.data,
+  });
 
   revalidateImageCountPages(deleted.product_id);
   return { ok: true };

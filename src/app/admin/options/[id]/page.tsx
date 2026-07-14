@@ -23,12 +23,13 @@ export default async function AdminOptionTypePage({
   const [
     { data: optionType, error: typeError },
     { count: usageCount, error: usageError },
+    { count: requiredUsageCount, error: requiredUsageError },
   ] = await Promise.all([
     supabase
       .from("option_type")
       .select(
         `id, code, name, applies_to, input_type, is_active, updated_at,
-           option_value(id, code, label, swatch_hex, image_path, is_active, sort_order)`,
+           option_value(id, code, label, swatch_hex, image_path, is_active, sort_order, updated_at)`,
       )
       .eq("id", id)
       .order("sort_order", { ascending: true, referencedTable: "option_value" })
@@ -38,6 +39,14 @@ export default async function AdminOptionTypePage({
       .from("product_option")
       .select("id", { count: "exact", head: true })
       .eq("option_type_id", id),
+    // T12 code-review：至少有一個商品把此類型設為必選時，隱藏「最後一個
+    // 顯示中的值」會讓那些商品的必選項目變成永遠選不到——UI 需要這個旗標
+    // 才能在快清空時加強警告文字
+    supabase
+      .from("product_option")
+      .select("id", { count: "exact", head: true })
+      .eq("option_type_id", id)
+      .eq("required", true),
   ]);
 
   if (typeError) {
@@ -45,6 +54,9 @@ export default async function AdminOptionTypePage({
   }
   if (usageError) {
     throw new Error(`載入選項類型使用狀態失敗：${usageError.message}`);
+  }
+  if (requiredUsageError) {
+    throw new Error(`載入選項類型必選使用狀態失敗：${requiredUsageError.message}`);
   }
   if (!optionType) notFound();
 
@@ -70,6 +82,7 @@ export default async function AdminOptionTypePage({
     swatchHex: v.swatch_hex,
     imageUrl: v.image_path ? getImagePublicUrl(v.image_path) : null,
     isActive: v.is_active,
+    updatedAt: v.updated_at,
   }));
 
   return (
@@ -102,6 +115,7 @@ export default async function AdminOptionTypePage({
         values={values}
         usedValueIds={usedValueIds}
         typeInUse={(usageCount ?? 0) > 0}
+        typeRequiredByAnyProduct={(requiredUsageCount ?? 0) > 0}
       />
     </div>
   );

@@ -150,7 +150,9 @@ export async function verifyCartPrices(
     );
     for (const rt of requiredTypes) {
       if (!selectedTypeCodes.has(rt.code)) {
-        throw new Error(`商品必選項目「${rt.name}」缺少選擇，無法建立訂單`);
+        throw new Error(
+          `商品「${rawName}」的必選項目「${rt.name}」缺少選擇，無法建立訂單，請至購物車移除或重新選擇此商品`,
+        );
       }
     }
 
@@ -167,11 +169,15 @@ export async function verifyCartPrices(
       const typeMap = priceMap.get(sel.option_type_code);
       if (!typeMap) {
         // sel.label 是客人看得懂的名稱；不外露內部 code
-        throw new Error(`選項「${sel.label}」不在此商品白名單，無法建立訂單`);
+        throw new Error(
+          `商品「${rawName}」的選項「${sel.label}」不在此商品白名單，無法建立訂單，請至購物車移除或重新選擇此商品`,
+        );
       }
       const entry = typeMap.get(sel.option_value_code);
       if (entry === undefined) {
-        throw new Error(`選項「${sel.label}」不在此商品白名單，無法建立訂單`);
+        throw new Error(
+          `商品「${rawName}」的選項「${sel.label}」不在此商品白名單，無法建立訂單，請至購物車移除或重新選擇此商品`,
+        );
       }
       verifiedUnitPrice += entry.priceDelta;
       verifiedSelections.push({
