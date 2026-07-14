@@ -33,14 +33,44 @@ vi.mock("@/lib/ecpay/query-trade-info", () => ({
 
 // ensureOrderPaid / ensureNotificationSent 的行為已在
 // notify/__tests__/route.test.ts 完整覆蓋；這裡當依賴邊界整個 mock 掉。
+// ensureNotificationSent 預設回傳 true（T88：投遞成功／無事可寄），個別測試
+// 可用 mockResolvedValueOnce(false) 覆寫，驗證投遞失敗時 reconcile 只告警、
+// 不中止批次、不回 500。
 const { ensureOrderPaid, ensureNotificationSent } = vi.hoisted(() => ({
   ensureOrderPaid: vi.fn().mockResolvedValue(undefined),
-  ensureNotificationSent: vi.fn().mockResolvedValue(undefined),
+  ensureNotificationSent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/order/ensure-paid", () => ({
   ensureOrderPaid: (...args: unknown[]) => ensureOrderPaid(...args),
   ensureNotificationSent: (...args: unknown[]) =>
     ensureNotificationSent(...args),
+}));
+
+// sendOnce 的行為已在 send-once.test.ts 完整覆蓋；sweep 這裡只驗證 route 的
+// 決策（撈哪些、跳過哪些、計數與告警），依賴邊界整個 mock 掉。
+const { sendOnce } = vi.hoisted(() => ({
+  sendOnce: vi.fn().mockResolvedValue(true),
+}));
+vi.mock("@/lib/notification/send-once", () => ({
+  sendOnce: (...args: unknown[]) => sendOnce(...args),
+}));
+
+// senders 對照表 mock 掉，避免測試載入真實 email 模組（Resend 依賴）。
+vi.mock("@/lib/notification/senders", () => ({
+  NOTIFICATION_SENDERS: {
+    order_confirmation: {
+      send: vi.fn(),
+      eligibleStatuses: ["paid", "in_production", "shipped", "completed"],
+    },
+    new_order_notification: {
+      send: vi.fn(),
+      eligibleStatuses: ["paid", "in_production", "shipped", "completed"],
+    },
+    order_shipped: {
+      send: vi.fn(),
+      eligibleStatuses: ["shipped", "completed"],
+    },
+  },
 }));
 
 type PaymentRow = {
@@ -62,14 +92,34 @@ let lastReconciledError: string | null = null;
 // 句點／逗號等保留字元須用雙引號包住，否則解析會跑掉——sandbox 端到端驗證
 // 實測到這個 bug，這裡的 mock 之前完全忽略引數、測不出這種格式錯誤）。
 let lastOrFilter: string | undefined;
+// sweep 用：notification 表的 failed 紀錄與 orders 表的狀態查詢結果。
+let failedNotifications: { id: string; order_id: string; type: string }[] = [];
+let sweepOrders: { id: string; status: string }[] = [];
 
 function makeServiceRole() {
   return {
     from: (table: string) => {
-      if (table !== "payment") throw new Error(`unexpected table: ${table}`);
-      return makeChain();
+      if (table === "payment") return makeChain();
+      if (table === "notification") return makeSweepChain(failedNotifications);
+      if (table === "orders") return makeSweepChain(sweepOrders);
+      throw new Error(`unexpected table: ${table}`);
     },
   };
+}
+
+// sweep 的兩段查詢都是純 select，chain 到底 resolve 固定資料即可。
+function makeSweepChain(rows: unknown[]) {
+  const chain: any = {
+    select: () => chain,
+    eq: () => chain,
+    in: () => chain,
+    order: () => chain,
+    limit: () => chain,
+    then: (resolve: (v: unknown) => void) => {
+      resolve({ data: rows, error: null });
+    },
+  };
+  return chain;
 }
 
 function makeChain() {
@@ -147,9 +197,18 @@ beforeEach(() => {
   casLossIds = new Set();
   lastReconciledError = null;
   lastOrFilter = undefined;
+  failedNotifications = [];
+  sweepOrders = [];
   queryTradeInfo.mockReset();
-  ensureOrderPaid.mockClear();
-  ensureNotificationSent.mockClear();
+  // mockReset 而非 mockClear：mockClear 不會清掉前一個測試殘留、未被消耗的
+  // mockResolvedValueOnce 佇列，會外洩到下一個測試造成順序相依的 flaky。
+  // reset 後重新掛預設值。
+  ensureOrderPaid.mockReset();
+  ensureOrderPaid.mockResolvedValue(undefined);
+  ensureNotificationSent.mockReset();
+  ensureNotificationSent.mockResolvedValue(true);
+  sendOnce.mockReset();
+  sendOnce.mockResolvedValue(true);
 });
 
 describe("候選查詢的 .or() 過濾字串格式", () => {
@@ -186,6 +245,10 @@ describe("認證", () => {
       mismatches: 0,
       failed: 0,
       unexpected: 0,
+      notifyFailed: 0,
+      sweepRetried: 0,
+      sweepSent: 0,
+      sweepStillFailing: 0,
       rateLimited: false,
     });
   });
@@ -227,6 +290,55 @@ describe("單筆候選：TradeStatus=1", () => {
       (r) => (r.values as any)?.last_reconciled_at,
     );
     expect(reconciledWrites.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("通知投遞失敗（ensureNotificationSent 回 false）→ notifyFailed 計數 +1（獨立於 unexpected），不中止批次、不回 500（T88）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+    ensureNotificationSent.mockResolvedValueOnce(false);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.promoted).toBe(1);
+    // 投遞失敗走獨立的 notifyFailed 桶，不塞 unexpected——日報才能分辨
+    // 「資料異常」與「郵件故障」。
+    expect(body.notifyFailed).toBe(1);
+    expect(body.unexpected).toBe(0);
+  });
+
+  it("ensureNotificationSent 拋例外（DB 暫時錯誤）→ 該筆記 unexpected，不中止批次、其餘候選照常處理（T88 review）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+      { id: "p2", order_id: "o2", merchant_trade_no: "M2", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+    ensureNotificationSent.mockRejectedValueOnce(
+      new Error("ensureNotificationSent failed: simulated"),
+    );
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    // 舊版把 ensure 呼叫放在 per-candidate try/catch 之外，單筆 throw 會
+    // 直接 500、剩餘候選整天不對帳；現在必須記錄後繼續。
+    expect(res.status).toBe(200);
+    expect(body.checked).toBe(2);
+    expect(body.unexpected).toBe(1);
+    expect(ensureOrderPaid).toHaveBeenCalledTimes(2);
   });
 
   it("並發：webhook 搶先推進（CAS 未命中）→ 不計入 promoted、不發『搶救成功』告警，但仍補做 ensureOrderPaid/ensureNotificationSent", async () => {
@@ -408,5 +520,118 @@ describe("queryTradeInfo 拋例外", () => {
       "o2",
       "reconcile",
     );
+  });
+});
+
+describe("failed-notification sweep（T88 過渡版兜底）", () => {
+  it("failed 紀錄且訂單狀態適寄 → 呼叫 sendOnce 補寄，計 sweepRetried/sweepSent", async () => {
+    failedNotifications = [
+      { id: "n1", order_id: "o1", type: "order_confirmation" },
+    ];
+    sweepOrders = [{ id: "o1", status: "paid" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(sendOnce).toHaveBeenCalledTimes(1);
+    expect(sendOnce).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ orderId: "o1", type: "order_confirmation" }),
+    );
+    expect(body.sweepRetried).toBe(1);
+    expect(body.sweepSent).toBe(1);
+    expect(body.sweepStillFailing).toBe(0);
+  });
+
+  it("訂單已推進到 in_production 仍補寄（PAID_LINEAGE，不因狀態推進切斷重試）", async () => {
+    failedNotifications = [
+      { id: "n1", order_id: "o1", type: "order_confirmation" },
+    ];
+    sweepOrders = [{ id: "o1", status: "in_production" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(sendOnce).toHaveBeenCalledTimes(1);
+    expect(body.sweepSent).toBe(1);
+  });
+
+  it("補寄仍失敗（sendOnce 回 false）→ 計 sweepStillFailing、留待明天重試", async () => {
+    failedNotifications = [
+      { id: "n1", order_id: "o1", type: "order_confirmation" },
+    ];
+    sweepOrders = [{ id: "o1", status: "paid" }];
+    sendOnce.mockResolvedValueOnce(false);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.sweepRetried).toBe(1);
+    expect(body.sweepSent).toBe(0);
+    expect(body.sweepStillFailing).toBe(1);
+  });
+
+  it("訂單已取消 → 不補寄（避免對 cancelled 訂單誤發確認信）", async () => {
+    failedNotifications = [
+      { id: "n1", order_id: "o1", type: "order_confirmation" },
+    ];
+    sweepOrders = [{ id: "o1", status: "cancelled" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(sendOnce).not.toHaveBeenCalled();
+    expect(body.sweepRetried).toBe(0);
+  });
+
+  it("未登記的通知類型 → 跳過不補寄", async () => {
+    failedNotifications = [{ id: "n1", order_id: "o1", type: "unknown_type" }];
+    sweepOrders = [{ id: "o1", status: "paid" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(sendOnce).not.toHaveBeenCalled();
+    expect(body.sweepRetried).toBe(0);
+  });
+
+  it("order_shipped 依自己的適寄狀態（shipped/completed）判斷", async () => {
+    failedNotifications = [
+      { id: "n1", order_id: "o1", type: "order_shipped" },
+      { id: "n2", order_id: "o2", type: "order_shipped" },
+    ];
+    sweepOrders = [
+      { id: "o1", status: "shipped" },
+      { id: "o2", status: "paid" }, // 還沒出貨：不該寄出貨通知
+    ];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(sendOnce).toHaveBeenCalledTimes(1);
+    expect(sendOnce).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ orderId: "o1", type: "order_shipped" }),
+    );
+    expect(body.sweepRetried).toBe(1);
+  });
+
+  it("主迴圈 rate limited 中止後，sweep 仍照常執行（兩者互不依賴）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(new RateLimitError("403"));
+    failedNotifications = [
+      { id: "n1", order_id: "o2", type: "order_confirmation" },
+    ];
+    sweepOrders = [{ id: "o2", status: "paid" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.rateLimited).toBe(true);
+    expect(body.sweepSent).toBe(1);
   });
 });

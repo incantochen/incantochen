@@ -75,8 +75,9 @@ export async function shipOrder(
 
   // 出貨這件事本身已經成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證
   // 絕不往外拋例外（不擋出貨操作），且用 notification(order_id, type) 的
-  // unique 約束去重——雙擊出貨按鈕不會重複寄信。
-  await sendOnce(supabase, {
+  // unique 約束去重——雙擊出貨按鈕不會重複寄信。寄失敗以 warning 讓操作者
+  // 知情（T88：不再靜默丟棄結果），每日 reconcile sweep 會自動補寄。
+  const notified = await sendOnce(supabase, {
     orderId,
     type: "order_shipped",
     send: () => sendOrderShippedNotification(orderId),
@@ -84,6 +85,12 @@ export async function shipOrder(
 
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
+  if (!notified) {
+    return {
+      ok: true,
+      warning: "出貨已完成，但通知信寄送失敗——系統每日會自動重試補寄",
+    };
+  }
   return { ok: true };
 }
 
