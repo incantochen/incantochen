@@ -16,6 +16,7 @@ import {
   resolveOrderOwnership,
 } from "@/lib/order/order-access-token";
 import { RateLimitedNotice } from "../rate-limited-notice";
+import { SystemBusyNotice } from "../system-busy-notice";
 import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit";
 
 // T74：pending payment 超過此時限視為放棄，換發新交易序號（而非無限期復用
@@ -116,7 +117,13 @@ export default async function CheckoutPayPage({
     createClient().then((c) => c.auth.getUser()),
   ]);
 
-  const { data: order } = orderResult;
+  const { data: order, error: orderError } = orderResult;
+
+  // T95（F-008）：查詢失敗 ≠ 查無資料——DB 暫時性故障（timeout／連線池
+  // 耗盡）不可誤判成「沒這張訂單」把付款中的客人踢回結帳頁。
+  if (orderError) {
+    return <SystemBusyNotice />;
+  }
 
   if (!order) {
     redirect("/checkout");
@@ -176,7 +183,10 @@ export default async function CheckoutPayPage({
   // 但 pending 超過 STALE_PAYMENT_MS 視為放棄（T74）：舊 row 標記 failed，換發新序號。
   // 兩個查詢互不依賴（都只靠 order.id），平行送出減少這個高延遲敏感頁面
   // 多等一趟 round trip 的時間。
-  const [{ data: orderItems }, { data: existingPending }] = await Promise.all([
+  const [
+    { data: orderItems, error: orderItemsError },
+    { data: existingPending, error: existingPendingError },
+  ] = await Promise.all([
     serviceRole
       .from("order_item")
       .select("quantity, product_name_snapshot, product:product_id ( name )")
@@ -190,6 +200,12 @@ export default async function CheckoutPayPage({
       .limit(1)
       .maybeSingle(),
   ]);
+
+  // T95（F-008）：兩個查詢任一 {error} 都停下——existingPending 讀取失敗若
+  // 照走 else 分支，會在「其實已有新鮮 pending payment」時多發一筆交易序號。
+  if (orderItemsError || existingPendingError) {
+    return <SystemBusyNotice />;
+  }
 
   if (!orderItems || orderItems.length === 0) {
     redirect("/checkout");

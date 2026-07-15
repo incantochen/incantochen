@@ -53,12 +53,18 @@ export async function verifyCartPrices(
     const config = parsed.data;
 
     // Re-fetch current base_price + name; reject if product is inactive/missing
-    const { data: product } = await serviceRole
+    const { data: product, error: productError } = await serviceRole
       .from("product")
       .select("base_price, name")
       .eq("id", config.product_id)
       .eq("status", "active")
       .maybeSingle();
+
+    // T95（F-008）：查詢失敗 ≠ 查無資料——DB 暫時性故障不可誤報成
+    // 「商品已下架」（客人會以為再也買不到，其實重試就好）。
+    if (productError) {
+      throw new Error(`系統忙碌，請稍後再試`);
+    }
 
     if (!product) {
       throw new Error(`商品已下架或不存在，無法建立訂單`);
@@ -82,16 +88,22 @@ export async function verifyCartPrices(
 
     // Re-fetch option whitelist (same join as addToCart) — add label so we can
     // rebuild a self-consistent configSnapshot with current DB data
-    const { data: productOptions } = await serviceRole
-      .from("product_option")
-      .select(
-        `
+    const { data: productOptions, error: productOptionsError } =
+      await serviceRole
+        .from("product_option")
+        .select(
+          `
         required,
         option_type:option_type_id ( code, name, is_active ),
         product_option_value ( price_delta, option_value:option_value_id ( code, label, is_active ) )
       `,
-      )
-      .eq("product_id", config.product_id);
+        )
+        .eq("product_id", config.product_id);
+
+    // T95（F-008）：同上，DB 故障與「查無選項」分開報。
+    if (productOptionsError) {
+      throw new Error(`系統忙碌，請稍後再試`);
+    }
 
     if (!productOptions) {
       throw new Error(`無法取得商品選項，請稍後再試`);
