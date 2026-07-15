@@ -32,7 +32,7 @@ export default async function CheckoutSuccessPage({
     serviceRole
       .from("orders")
       .select(
-        "order_no, status, total_amount, member_id, member:member_id(email)",
+        "order_no, status, total_amount, member_id, invoice_no, invoice_status, invoice_meta, member:member_id(email)",
       )
       .eq("order_no", orderNo)
       .maybeSingle(),
@@ -70,6 +70,17 @@ export default async function CheckoutSuccessPage({
       ? memberData[0]?.email
       : memberData?.email
     : undefined;
+
+  // T42：發票號碼＋隨機碼（對獎用）——已開立才顯示；發票在付款後由 webhook
+  // 的 after() 非同步開立，客人剛跳轉到成功頁時可能還沒好，晚幾秒重新整理
+  // 就會出現（成功頁本身無自動輪詢，屬可接受的最終一致）。僅擁有者可見，
+  // 比照 email 的 T73 遮罩原則。
+  const invoiceRandomNumber = isOwner
+    ? ((order.invoice_meta as { random_number?: string } | null)
+        ?.random_number ?? null)
+    : null;
+  const showInvoice =
+    isOwner && order.invoice_status === "issued" && !!order.invoice_no;
 
   if (order.status === "paid") {
     return (
@@ -114,6 +125,21 @@ export default async function CheckoutSuccessPage({
                 NT${order.total_amount.toLocaleString()}
               </p>
             </div>
+            {showInvoice && (
+              <div>
+                <p className="text-[11px] tracking-[0.16em] text-ash uppercase mb-0.5">
+                  電子發票
+                </p>
+                <p className="font-mono text-base font-medium text-ink">
+                  {order.invoice_no}
+                  {invoiceRandomNumber && (
+                    <span className="ml-2 text-sm text-ash">
+                      隨機碼 {invoiceRandomNumber}
+                    </span>
+                  )}
+                </p>
+              </div>
+            )}
             {email && (
               <div>
                 <p className="text-[11px] tracking-[0.16em] text-ash uppercase mb-0.5">

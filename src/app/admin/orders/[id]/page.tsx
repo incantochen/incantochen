@@ -12,6 +12,7 @@ import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
 import { OrderActions } from "./order-actions";
 import { CustomerInfo } from "./customer-info";
 import { SupportRequests } from "./support-requests";
+import { InvoiceSection } from "./invoice-section";
 import { AdminPill } from "@/components/admin-pill";
 
 export default async function AdminOrderDetailPage({
@@ -255,6 +256,22 @@ export default async function AdminOrderDetailPage({
                 <p className="text-sm text-gray-400">尚無付款記錄</p>
               )}
             </section>
+
+            {/* 電子發票 */}
+            <InvoiceSection
+              orderId={order.id}
+              orderStatus={order.status}
+              invoiceStatus={order.invoice_status}
+              invoiceNo={order.invoice_no}
+              randomNumber={
+                (order.invoice_meta as { random_number?: string } | null)
+                  ?.random_number ?? null
+              }
+              invoiceDate={
+                (order.invoice_meta as { invoice_date?: string } | null)
+                  ?.invoice_date ?? null
+              }
+            />
 
             {/* 狀態時間軸 */}
             <section className="bg-white rounded-lg border border-gray-200 p-5">

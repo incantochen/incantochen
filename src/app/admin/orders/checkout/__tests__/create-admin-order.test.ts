@@ -93,6 +93,7 @@ const FORM = {
   zipCode: "106",
   shippingAddress: "台北市大安區測試路 1 號",
   customConsent: true as const,
+  invoiceTarget: "personal" as const,
 };
 
 beforeEach(() => {

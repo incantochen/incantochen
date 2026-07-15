@@ -62,6 +62,16 @@ vi.mock("@/lib/order/create-order-from-cart", () => ({
     resolvePendingOrderForCart(...a),
 }));
 
+// T42：actions.ts 引入 ECPay 統編／載具驗證（其模組鏈需要發票 env）——
+// 這份測試聚焦 createOrder 自身流程，驗證行為另有 validate.test.ts；
+// 預設放行，個別測試可覆寫 blocked
+const checkCompanyIdentifier = vi.fn().mockResolvedValue({ blocked: false });
+const checkBarcode = vi.fn().mockResolvedValue({ blocked: false });
+vi.mock("@/lib/ecpay/invoice/validate", () => ({
+  checkCompanyIdentifier: (...a: unknown[]) => checkCompanyIdentifier(...a),
+  checkBarcode: (...a: unknown[]) => checkBarcode(...a),
+}));
+
 // service role：table 路由＋操作記錄器
 type Recorded = { table: string; values: any };
 const recorded: Recorded[] = [];
@@ -114,6 +124,11 @@ function makeServiceRole() {
           recorded.push({ table, values });
           return Promise.resolve({ error: null });
         },
+        // T42 reuse 路徑會 update orders.invoice_meta；記錄後可繼續鏈 .eq()
+        update: (values: any) => {
+          recorded.push({ table, values });
+          return chain;
+        },
         then: (resolve: (v: unknown) => void) =>
           resolve({
             data: table === "cart_item" ? state.cartItems : null,
@@ -141,6 +156,7 @@ const FORM = {
   zipCode: "106",
   shippingAddress: "台北市大安區測試路 1 號",
   customConsent: true as const,
+  invoiceTarget: "personal" as const,
 };
 
 beforeEach(() => {
@@ -167,6 +183,8 @@ beforeEach(() => {
   createOrderFromCart.mockResolvedValue({ ok: true, orderNo: "INC-TEST-1" });
   resolvePendingOrderForCart.mockReset();
   resolvePendingOrderForCart.mockResolvedValue({ kind: "proceed" });
+  checkCompanyIdentifier.mockClear();
+  checkBarcode.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -250,6 +268,64 @@ describe("pending 訂單 dedup（T75，須在會員解析之前）", () => {
     expect(findOrCreateMember).not.toHaveBeenCalled();
     expect(createOrderFromCart).not.toHaveBeenCalled();
   });
+
+  it("T42：reuse 路徑仍以本次發票去向更新 invoice_meta（改選統編重送不被舊值沿用）", async () => {
+    resolvePendingOrderForCart.mockResolvedValue({
+      kind: "reuse",
+      orderNo: "INC-EXISTING-1",
+    });
+
+    await expect(
+      createOrder({ ...FORM, invoiceTarget: "company", taxId: "12345678" }),
+    ).rejects.toBe(REDIRECT);
+
+    expect(recorded).toContainEqual({
+      table: "orders",
+      values: {
+        invoice_meta: { target: "company", customer_identifier: "12345678" },
+      },
+    });
+  });
+});
+
+describe("T42：發票去向 ECPay 驗證（建單前擋明確無效值）", () => {
+  it("統編驗證 blocked → 回錯誤、不建單", async () => {
+    checkCompanyIdentifier.mockResolvedValueOnce({
+      blocked: true,
+      error: "統一編號格式錯誤，請確認後重新輸入",
+    });
+
+    const result = await createOrder({
+      ...FORM,
+      invoiceTarget: "company",
+      taxId: "12345678",
+    });
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("統一編號") });
+    expect(createOrderFromCart).not.toHaveBeenCalled();
+  });
+
+  it("手機條碼驗證 blocked → 回錯誤、不建單", async () => {
+    checkBarcode.mockResolvedValueOnce({
+      blocked: true,
+      error: "手機條碼格式正確但查無歸戶紀錄，請確認後重新輸入",
+    });
+
+    const result = await createOrder({
+      ...FORM,
+      invoiceTarget: "mobile_barcode",
+      carrierBarcode: "/ABC1234",
+    });
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("手機條碼") });
+    expect(createOrderFromCart).not.toHaveBeenCalled();
+  });
+
+  it("personal 不打任何驗證 API", async () => {
+    await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
+    expect(checkCompanyIdentifier).not.toHaveBeenCalled();
+    expect(checkBarcode).not.toHaveBeenCalled();
+  });
 });
 
 describe("委派給 createOrderFromCart", () => {
@@ -267,6 +343,7 @@ describe("委派給 createOrderFromCart", () => {
         zipCode: FORM.zipCode,
         shippingAddress: FORM.shippingAddress,
       },
+      { target: "personal" },
     );
     expect(redirect).toHaveBeenCalledWith("/checkout/pay?order=INC-TEST-1");
     expect(setCookies).toContainEqual({
@@ -359,6 +436,7 @@ describe("結帳即會員", () => {
       expect.anything(),
       "member-new",
       expect.anything(),
+      { target: "personal" },
     );
   });
 
@@ -389,6 +467,7 @@ describe("結帳即會員", () => {
       expect.anything(),
       "member-logged-in",
       expect.anything(),
+      { target: "personal" },
     );
   });
 });

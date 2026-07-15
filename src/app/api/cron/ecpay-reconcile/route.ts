@@ -5,6 +5,7 @@ import {
   ensureOrderPaid,
   ensureNotificationSent,
 } from "@/lib/order/ensure-paid";
+import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 import { queryTradeInfo, RateLimitError } from "@/lib/ecpay/query-trade-info";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 
@@ -44,7 +45,57 @@ type Summary = {
   failed: number;
   unexpected: number;
   rateLimited: boolean;
+  invoicesSwept: number;
+  invoicesIssued: number;
+  invoicesFailed: number;
 };
+
+const INVOICE_SWEEP_LIMIT = 20;
+
+// T42：「已付款未開票」每日 sweep（藍圖 07-invoice.md §6 明訂的核對項）——
+// webhook 那次開立失敗（ECPay 暫時性故障、after() 執行環境被提早回收等）的
+// 自動補開防線；issueInvoiceForOrder 冪等（issued 短路＋GetIssue 判別），
+// 與 webhook／後台補開共用同一支，重跑安全。
+async function sweepUninvoicedPaidOrders(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+) {
+  const { data: uninvoiced, error } = await serviceRole
+    .from("orders")
+    .select("id")
+    .eq("status", "paid")
+    .eq("invoice_status", "none")
+    .order("created_at", { ascending: true })
+    .limit(INVOICE_SWEEP_LIMIT);
+
+  if (error) {
+    Sentry.captureMessage("reconcile: 未開票訂單查詢失敗", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return;
+  }
+
+  for (const order of uninvoiced ?? []) {
+    summary.invoicesSwept += 1;
+    const result = await issueInvoiceForOrder(serviceRole, order.id);
+    if (result.ok) {
+      summary.invoicesIssued += 1;
+      // 走到 sweep 才開成＝webhook 那次失敗過，留告警追蹤（比照 promoted 慣例）
+      Sentry.captureMessage("reconcile: 補開發票成功（webhook 當次曾失敗）", {
+        level: "warning",
+        extra: { orderId: order.id, invoiceNo: result.invoiceNo },
+      });
+    } else {
+      summary.invoicesFailed += 1;
+      Sentry.captureMessage("reconcile: 補開發票仍失敗，需人工處理", {
+        level: "error",
+        extra: { orderId: order.id, error: result.error },
+      });
+    }
+    await sleep(THROTTLE_MS);
+  }
+}
 
 // T89：ECPay 主動對帳。webhook 是即時路徑，這支 cron 是每日一次的最終防線——
 // 只做「pending→paid 的主動修正＋告警」，範圍刻意不含逾期取消（見 T66）。
@@ -59,6 +110,9 @@ export async function GET(request: Request) {
     failed: 0,
     unexpected: 0,
     rateLimited: false,
+    invoicesSwept: 0,
+    invoicesIssued: 0,
+    invoicesFailed: 0,
   };
 
   try {
@@ -214,6 +268,10 @@ export async function GET(request: Request) {
 
       await sleep(THROTTLE_MS);
     }
+
+    // T42：付款對帳跑完後接著補開發票——即使上面被 rate limit 中斷也照跑
+    // （發票 API 是獨立網域與額度，不受金流查詢限速影響）
+    await sweepUninvoicedPaidOrders(serviceRole, summary);
 
     return Response.json(summary);
   } catch (e) {

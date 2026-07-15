@@ -38,6 +38,23 @@ export const STATUS_PILL_STYLES: Record<OrderStatus, string> = {
   refunded: "bg-destructive/10 text-destructive",
 };
 
+// T42：電子發票狀態的 admin pill meta（label+color 綁同筆，比照
+// PRODUCT_STATUS_META 慣例集中於 lib，不散落元件內）。type 取自 DB enum，
+// invoice_status 新增值時這裡編譯期就會報缺。
+import type { Database } from "@/types/database.types";
+
+export type InvoiceStatus = Database["public"]["Enums"]["invoice_status"];
+
+export const INVOICE_STATUS_META: Record<
+  InvoiceStatus,
+  { label: string; color: string }
+> = {
+  none: { label: "尚未開立", color: "bg-gray-100 text-gray-700" },
+  issued: { label: "已開立", color: "bg-green-100 text-green-800" },
+  allowance: { label: "已折讓", color: "bg-amber-100 text-amber-800" },
+  voided: { label: "已作廢", color: "bg-red-100 text-red-800" },
+};
+
 // admin 端用 Tailwind gray 系素色（與前台品牌 token 刻意分開，CLAUDE.md §0.2）；
 // 原本 admin/orders 列表與詳情頁各複製一份，T11 code review 收斂於此
 export const ADMIN_STATUS_COLORS: Record<OrderStatus, string> = {

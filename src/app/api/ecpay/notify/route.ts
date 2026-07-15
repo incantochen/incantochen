@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { verifyCheckMacValue } from "@/lib/ecpay/check-mac-value";
 import { serverEnv } from "@/lib/env.server";
@@ -6,6 +7,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
   ensureOrderPaid,
   ensureNotificationSent,
+  ensureInvoiceIssued,
 } from "@/lib/order/ensure-paid";
 
 const OK = () =>
@@ -72,6 +74,11 @@ export async function POST(request: Request) {
       if (paidPayment) {
         await ensureOrderPaid(serviceRole, order.id, "webhook");
         await ensureNotificationSent(serviceRole, order.id);
+        // T42：發票開立移出回應路徑（after()）——外部 ECPay Issue API 的
+        // 延遲不可佔用 ReturnURL 的 10 秒預算（藍圖：發票不阻塞金流）；
+        // ensureInvoiceIssued 冪等且絕不 throw，回應送出後執行安全，
+        // 失敗由每日 reconcile cron 的未開票 sweep 兜底
+        after(() => ensureInvoiceIssued(serviceRole, order.id));
         return OK();
       }
 
@@ -116,6 +123,8 @@ export async function POST(request: Request) {
       if (isPaid) {
         await ensureOrderPaid(serviceRole, order.id, "webhook");
         await ensureNotificationSent(serviceRole, order.id);
+        // T42：發票開立移出回應路徑（理由同上一處）
+        after(() => ensureInvoiceIssued(serviceRole, order.id));
       }
 
       return OK();
@@ -128,6 +137,8 @@ export async function POST(request: Request) {
     if (payment.status === "paid") {
       await ensureOrderPaid(serviceRole, payment.order_id, "webhook");
       await ensureNotificationSent(serviceRole, payment.order_id);
+      // T42：發票開立移出回應路徑（理由見上方 fallback 分支）
+      after(() => ensureInvoiceIssued(serviceRole, payment.order_id));
       return OK();
     }
 
@@ -215,6 +226,8 @@ export async function POST(request: Request) {
     if (isPaid) {
       await ensureOrderPaid(serviceRole, payment.order_id, "webhook");
       await ensureNotificationSent(serviceRole, payment.order_id);
+      // T42：發票開立移出回應路徑（理由見上方 fallback 分支）
+      after(() => ensureInvoiceIssued(serviceRole, payment.order_id));
     }
 
     return OK();

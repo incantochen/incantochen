@@ -364,6 +364,7 @@ export type Database = {
           created_at: string;
           custom_consent: boolean;
           id: string;
+          invoice_meta: Json | null;
           invoice_no: string | null;
           invoice_status: Database["public"]["Enums"]["invoice_status"];
           member_id: string;
@@ -385,6 +386,7 @@ export type Database = {
           created_at?: string;
           custom_consent?: boolean;
           id?: string;
+          invoice_meta?: Json | null;
           invoice_no?: string | null;
           invoice_status?: Database["public"]["Enums"]["invoice_status"];
           member_id: string;
@@ -406,6 +408,7 @@ export type Database = {
           created_at?: string;
           custom_consent?: boolean;
           id?: string;
+          invoice_meta?: Json | null;
           invoice_no?: string | null;
           invoice_status?: Database["public"]["Enums"]["invoice_status"];
           member_id?: string;
