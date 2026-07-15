@@ -100,6 +100,13 @@ type PaymentRow = {
 };
 
 let candidates: PaymentRow[] = [];
+// T127②：漂移臂（payment=paid／orders=pending_payment）的候選。payment 表的
+// select 依 .eq("status", …) 的值分流——主迴圈撈 pending、漂移臂撈 paid。
+let driftCandidates: {
+  id: string;
+  order_id: string;
+  merchant_trade_no: string;
+}[] = [];
 let recorded: { filters: Record<string, unknown>; values: unknown }[] = [];
 // 模擬「webhook 先搶到 CAS」：promote 的 UPDATE...WHERE status='pending' 命中
 // 0 rows，但 Supabase 不會回傳 error，只有 .select().maybeSingle() 的 data
@@ -216,7 +223,10 @@ function makeChain() {
     },
     then: (resolve: (v: unknown) => void) => {
       if (chain._op === "select") {
-        resolve({ data: candidates, error: null });
+        resolve({
+          data: chain._filters.status === "paid" ? driftCandidates : candidates,
+          error: null,
+        });
         return;
       }
       const values = chain._values as Record<string, unknown> | undefined;
@@ -251,6 +261,7 @@ function buildRequest(auth?: string): Request {
 
 beforeEach(() => {
   candidates = [];
+  driftCandidates = [];
   recorded = [];
   casLossIds = new Set();
   casErrorIds = new Set();
@@ -309,6 +320,8 @@ describe("認證", () => {
     expect(body).toEqual({
       checked: 0,
       promoted: 0,
+      driftChecked: 0,
+      driftPromoted: 0,
       promotedOnClosedOrder: 0,
       mismatches: 0,
       failed: 0,
@@ -895,6 +908,128 @@ describe("queryTradeInfo 拋例外", () => {
       "o2",
       "reconcile",
     );
+  });
+});
+
+describe("T127② 漂移臂（webhook 側卡單：payment=paid／orders=pending_payment）", () => {
+  it("漂移候選 → 以 'reconcile-drift' 呼叫 ensureOrderPaid、不打 ECPay、計 driftChecked/driftPromoted、寫 last_reconciled_at、warning 告警", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    // 財務事實已確立（payment=paid＝當初驗章＋金額核對通過），不需要也不
+    // 應該再打 ECPay。
+    expect(queryTradeInfo).not.toHaveBeenCalled();
+    expect(ensureOrderPaid).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+      "reconcile-drift",
+    );
+    expect(ensureNotificationSent).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+    );
+    expect(body.driftChecked).toBe(1);
+    expect(body.driftPromoted).toBe(1);
+    // 不污染主臂的計數。
+    expect(body.checked).toBe(0);
+    expect(body.promoted).toBe(0);
+    // 冷卻蓋章（防手動加跑當日重複告警）。
+    expect(
+      recorded.some(
+        (r) => r.filters.id === "p1" && (r.values as any)?.last_reconciled_at,
+      ),
+    ).toBe(true);
+    // 每一筆 driftPromoted 都代表 webhook settlePaid 半路失敗過：留 warning
+    // 追蹤 webhook 可靠度（比照 promoted 慣例）。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: promoted webhook-side stuck order",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("ensureOrderPaid 拋例外 → unexpected +1、批次繼續、仍寫 last_reconciled_at", async () => {
+    driftCandidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1" },
+      { id: "p2", order_id: "o2", merchant_trade_no: "M2" },
+    ];
+    ensureOrderPaid.mockRejectedValueOnce(
+      new Error("ensureOrderPaid failed: simulated"),
+    );
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.driftChecked).toBe(2);
+    expect(body.unexpected).toBe(1);
+    // 第二筆不受影響。
+    expect(body.driftPromoted).toBe(1);
+    // 失敗那筆的冷卻蓋章在處理之前就寫了：throw 也保有冷卻，隔日冪等重試。
+    expect(
+      recorded.some(
+        (r) => r.filters.id === "p1" && (r.values as any)?.last_reconciled_at,
+      ),
+    ).toBe(true);
+  });
+
+  it("撞上取消競態（ensureOrderPaid 回 closed）→ 沿用 promotedOnClosedOrder＋error 告警、不計 driftPromoted", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureOrderPaid.mockResolvedValueOnce("closed");
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftPromoted).toBe(0);
+    expect(body.promotedOnClosedOrder).toBe(1);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: money received on closed order",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("候選查詢後才被別人推進（already-settled）→ 不計數、不告警", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureOrderPaid.mockResolvedValueOnce("already-settled");
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftChecked).toBe(1);
+    expect(body.driftPromoted).toBe(0);
+    expect(body.promotedOnClosedOrder).toBe(0);
+    expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
+      "reconcile: promoted webhook-side stuck order",
+      expect.anything(),
+    );
+  });
+
+  it("通知投遞失敗（ensureNotificationSent 回 false）→ notifyFailed 計數", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureNotificationSent.mockResolvedValueOnce(false);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftPromoted).toBe(1);
+    expect(body.notifyFailed).toBe(1);
+  });
+
+  it("主迴圈 rate limited 中止後，漂移臂仍照常執行（不打 ECPay、不受限速影響）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(new RateLimitError("403"));
+    driftCandidates = [{ id: "p9", order_id: "o9", merchant_trade_no: "M9" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.rateLimited).toBe(true);
+    expect(body.driftChecked).toBe(1);
+    expect(body.driftPromoted).toBe(1);
   });
 });
 

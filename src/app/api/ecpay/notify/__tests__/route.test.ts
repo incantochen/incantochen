@@ -610,6 +610,48 @@ describe("金額核對：TradeAmt 格式異常", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 金額正數防呆（T127③，與 reconcile 對稱）：0===0／負數不得視為吻合
+// ---------------------------------------------------------------------------
+
+describe("金額核對：正數防呆（T127③）", () => {
+  it("正常路徑：TradeAmt=0 且 payment.amount=0（雙零）→ 回 ERR、不更新、不寄信", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 0 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "0" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(updatesTo("payment")).toHaveLength(0);
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("fallback 路徑：TradeAmt=0 且 order.total_amount=0（雙零）→ 回 ERR、不 insert amount=0 的 paid payment、不寄信", async () => {
+    db.payment = null;
+    db.order = { id: "o1", total_amount: 0 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "0" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(insertsTo("payment")).toHaveLength(0);
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("負數 TradeAmt（parseInt 可解析、isFinite 過）即使與記錄金額相等 → 仍擋下", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: -100 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "-100" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(updatesTo("payment")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 並發保護：ensureOrderPaid 的條件式 UPDATE（T68 review round 2/3）
 // ---------------------------------------------------------------------------
 

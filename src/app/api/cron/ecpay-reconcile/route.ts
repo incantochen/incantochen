@@ -24,6 +24,7 @@ const MIN_AGE_MS = 10 * 60 * 1000;
 const RECONCILE_COOLDOWN_MS = 20 * 60 * 60 * 1000;
 const THROTTLE_MS = 400;
 const SWEEP_LIMIT = 20;
+const DRIFT_LIMIT = 20;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -135,6 +136,11 @@ async function sweepFailedNotifications(
 type Summary = {
   checked: number;
   promoted: number;
+  // T127②：漂移臂（payment=paid／orders=pending_payment 的 webhook 側卡單）
+  // 的候選數與實際推進數——driftPromoted 每一筆都代表 webhook 的 settlePaid
+  // 半路失敗過，是 webhook 可靠度訊號（比照 promoted 慣例）。
+  driftChecked: number;
+  driftPromoted: number;
   // 錢確認收到，但訂單處於 cancelled／refunded 等已關閉狀態（ensureOrderPaid
   // 回報 closed）——與 promoted（健康搶救）分流，這是「錢收在已關閉訂單上」
   // 的獨立訊號，須走人工裁決：退款或恢復訂單（ops-runbook §6.1）。
@@ -155,6 +161,116 @@ type Summary = {
   invoicesIssued: number;
   invoicesFailed: number;
 };
+
+// T127②：webhook 側卡單（payment=paid／orders=pending_payment）的第二候選臂。
+// 主迴圈的候選鍵是 payment.status='pending'，撈不到這種漂移——它是 webhook 端
+// settlePaid「先翻 payment、再推進訂單」半路失敗＋ECPay 重送耗盡的產物，若不
+// 處理則不自癒、且錢收了沒有任何自動告警（ops-runbook §1.1 第④類）。
+// 故意不打 ECPay：payment=paid 是當初驗章＋金額核對通過後才寫入的財務事實，
+// 直接信任即可；也因此本臂不受 queryTradeInfo 的 rate limit 影響——主迴圈被
+// RateLimitError 中斷（break）後本臂照跑。每筆 sleep(THROTTLE_MS) 保留，
+// 禮貌對象是 ensureNotificationSent 背後的 Resend。
+async function reconcileDriftedOrders(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+) {
+  const now = Date.now();
+  const maxPaidAt = new Date(now - MIN_AGE_MS).toISOString();
+  const reconcileCutoff = new Date(now - RECONCILE_COOLDOWN_MS).toISOString();
+
+  // inner embed 過濾 orders.status，只撈漂移單。MIN_AGE_MS 壓 paid_at：避免
+  // 撈到 webhook 正在 settle 中的單（payment 剛翻、訂單推進 in-flight）。
+  // .or() 的 timestamp 值必須雙引號包住（同主迴圈候選查詢的註解）。
+  const { data: drifted, error } = await serviceRole
+    .from("payment")
+    .select("id, order_id, merchant_trade_no, orders!inner(status)")
+    .eq("status", "paid")
+    .eq("orders.status", "pending_payment")
+    .lt("paid_at", maxPaidAt)
+    .or(`last_reconciled_at.is.null,last_reconciled_at.lt."${reconcileCutoff}"`)
+    .order("paid_at", { ascending: true })
+    .limit(DRIFT_LIMIT);
+
+  if (error) {
+    Sentry.captureMessage("reconcile: drifted-order 候選查詢失敗", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return;
+  }
+
+  for (const payment of drifted ?? []) {
+    // 凡入選必計、進迴圈第一行就計（不論後續成敗），日報才能對出
+    // 「撈到幾筆 vs 救活幾筆」。
+    summary.driftChecked += 1;
+
+    // 冷卻語意從「查過 ECPay」放寬為「對帳處理過」：防手動加跑當日重複告警。
+    // 先蓋章再處理，throw 也保有冷卻，隔日 cron（冷卻 20h < 24h）冪等重試；
+    // 推進成功後訂單離開候選集，天然收斂。
+    await markReconciled(serviceRole, payment.id);
+
+    try {
+      // source 用獨立字串，order_status_log.note 稽核可辨識是漂移臂救的。
+      const orderResult = await ensureOrderPaid(
+        serviceRole,
+        payment.order_id,
+        "reconcile-drift",
+      );
+
+      if (orderResult === "promoted") {
+        summary.driftPromoted += 1;
+        Sentry.captureMessage("reconcile: promoted webhook-side stuck order", {
+          level: "warning",
+          extra: {
+            orderId: payment.order_id,
+            merchantTradeNo: payment.merchant_trade_no,
+          },
+        });
+      } else if (orderResult === "closed") {
+        // 撞上取消競態：錢收在已關閉訂單上——沿用主迴圈的計數與訊息，
+        // 走人工裁決（ops-runbook §6.1）。
+        summary.promotedOnClosedOrder += 1;
+        Sentry.captureMessage("reconcile: money received on closed order", {
+          level: "error",
+          extra: {
+            orderId: payment.order_id,
+            merchantTradeNo: payment.merchant_trade_no,
+          },
+        });
+      }
+      // already-settled：本臂候選鍵含 orders.status='pending_payment'，走到
+      // 這代表候選查詢後才被別人推進（webhook 遲到的重送等）——不是本臂的
+      // 搶救，不計數。indeterminate：ensureOrderPaid 內已發 P0，保守不計數。
+
+      // 補寄通知：卡單期間確認信一定沒寄過（訂單當時還不是 paid）。
+      const notified = await ensureNotificationSent(
+        serviceRole,
+        payment.order_id,
+      );
+      if (!notified) {
+        summary.notifyFailed += 1;
+        Sentry.captureMessage("reconcile: notification delivery failed", {
+          level: "warning",
+          extra: {
+            orderId: payment.order_id,
+            merchantTradeNo: payment.merchant_trade_no,
+          },
+        });
+      }
+    } catch (e) {
+      // 單筆失敗不拖垮整批；已 markReconciled，隔日冷卻期滿自動重試。
+      summary.unexpected += 1;
+      Sentry.captureException(e, {
+        extra: {
+          orderId: payment.order_id,
+          merchantTradeNo: payment.merchant_trade_no,
+        },
+      });
+    }
+
+    await sleep(THROTTLE_MS);
+  }
+}
 
 const INVOICE_SWEEP_LIMIT = 20;
 
@@ -212,6 +328,8 @@ export async function GET(request: Request) {
   const summary: Summary = {
     checked: 0,
     promoted: 0,
+    driftChecked: 0,
+    driftPromoted: 0,
     promotedOnClosedOrder: 0,
     mismatches: 0,
     failed: 0,
@@ -503,6 +621,10 @@ export async function GET(request: Request) {
 
       await sleep(THROTTLE_MS);
     }
+
+    // T127②：漂移臂在主迴圈之後跑——不打 ECPay，主迴圈被 rate limit 中斷
+    // （break）也照跑（理由同下方發票 sweep）。
+    await reconcileDriftedOrders(serviceRole, summary);
 
     await sweepFailedNotifications(serviceRole, summary);
 

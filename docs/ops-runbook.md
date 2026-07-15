@@ -45,7 +45,7 @@ order by created_at;
 **判斷**：
 
 1. 跑 §0 查詢：`payment.status` 是否仍 `pending`？
-   - **分支**：若 `payment.status` 已是 `paid`、但 `orders.status` 仍 `pending_payment`——這是**webhook 側卡單**（webhook 先翻 payment paid、`settlePaid` 推進訂單那步失敗，且 ECPay 重送已耗盡）。對帳 cron 撈不到它（候選鍵＝`payment.status='pending'`），**不會自癒**（T127 落地前的已知盲點）：直接到 `/admin/orders/[id]` 用 **Admin Override** 手動把訂單推進到 `paid`（reason 填「webhook settlePaid 失敗，payment 已收款、人工推進訂單」），再依 §4 補確認信。
+   - **分支**：若 `payment.status` 已是 `paid`、但 `orders.status` 仍 `pending_payment`——這是**webhook 側卡單**（webhook 先翻 payment paid、`settlePaid` 推進訂單那步失敗，且 ECPay 重送已耗盡）。T127 已落地：對帳 cron 的**漂移臂**（第二候選臂，撈 payment=paid＋orders=pending_payment）會在**隔日凌晨冪等推進**並補寄確認信（Sentry 會有「reconcile: promoted webhook-side stuck order」warning），T66 逾期取消 cron 也會 skip 這種訂單（「paid payment exists on expiring order」error 告警）——先等自癒，**連續兩天仍漂移才人工**：到 `/admin/orders/[id]` 用 **Admin Override** 手動把訂單推進到 `paid`（reason 填「webhook settlePaid 失敗，payment 已收款、人工推進訂單」），再依 §4 補確認信。急件可手動觸發對帳（下方修復步驟 2）。
 2. 到**綠界廠商後台**用 `merchant_trade_no` 查該筆交易——綠界顯示「已付款」才算已付款（權威來源）。
 
 **修復（依序嘗試，前面的成功就停）**：
@@ -67,17 +67,17 @@ order by created_at;
 
 > 前提都是 webhook 已先失靈（否則輪不到對帳出手）、客人在綠界**已成功扣款**。對帳 cron 現行每日一次（台北 02:00）；T126（改小時級）落地後本表的「隔日／每日」同步更新。
 
-| 失敗點                                     | 客人看到什麼                                                 | 店家看到什麼                                                                                                                                                               | 自癒時間                                             |
-| ------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| ① 訂單推進失敗（DB 暫時錯誤）              | 付了款但訂單仍「待付款」、沒收到確認信                       | Sentry exception ＋ cron summary `unexpected` +1                                                                                                                           | 隔日 cron 冪等重試（連續多日同一筆才走本節上方步驟） |
-| ② payment 翻 paid 失敗                     | **幾乎無感**——訂單已顯示已付款、確認信照寄（③不被②擋）       | 訂單 paid／payment pending 漂移（見上方註記，勿手動改）；唯一風險窗口：漂移期間要退款的話，`gateway_trade_no` 尚未落地——去綠界後台用 `merchant_trade_no` 查（§3 同一條路） | 隔日 cron CAS 補翻                                   |
-| ③ 確認信寄送失敗                           | 訂單狀態、金額都正常，只是**信晚到**；急的客人可在訂單頁自查 | `notifyFailed` 告警；連續 2–3 天同一筆 → §4 人工介入                                                                                                                       | 每日 sweep 補寄                                      |
-| ④ webhook 側卡單（見下方）                 | 付了款但訂單仍「待付款」、沒收到確認信                       | `payment.status='paid'` 但 `orders.status='pending_payment'`；對帳 cron 撈不到（候選鍵是 payment pending）                                                                 | **不自癒**——靠人工（§1 判斷步驟 1 的分支）           |
-| ⑤ 訂單已關閉仍收到錢（逾期取消後付款成立） | 訂單顯示已取消，但卡已被扣款                                 | error 告警「reconcile: money received on closed order」＋summary `promotedOnClosedOrder`；payment 已翻 paid、訂單維持 cancelled／refunded                                  | **不自癒**——人工裁決退款或恢復訂單（§6.1）           |
+| 失敗點                                     | 客人看到什麼                                                 | 店家看到什麼                                                                                                                                                                                              | 自癒時間                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| ① 訂單推進失敗（DB 暫時錯誤）              | 付了款但訂單仍「待付款」、沒收到確認信                       | Sentry exception ＋ cron summary `unexpected` +1                                                                                                                                                          | 隔日 cron 冪等重試（連續多日同一筆才走本節上方步驟）                          |
+| ② payment 翻 paid 失敗                     | **幾乎無感**——訂單已顯示已付款、確認信照寄（③不被②擋）       | 訂單 paid／payment pending 漂移（見上方註記，勿手動改）；唯一風險窗口：漂移期間要退款的話，`gateway_trade_no` 尚未落地——去綠界後台用 `merchant_trade_no` 查（§3 同一條路）                                | 隔日 cron CAS 補翻                                                            |
+| ③ 確認信寄送失敗                           | 訂單狀態、金額都正常，只是**信晚到**；急的客人可在訂單頁自查 | `notifyFailed` 告警；連續 2–3 天同一筆 → §4 人工介入                                                                                                                                                      | 每日 sweep 補寄                                                               |
+| ④ webhook 側卡單（見下方）                 | 付了款但訂單仍「待付款」、沒收到確認信                       | `payment.status='paid'` 但 `orders.status='pending_payment'`；Sentry warning「promoted webhook-side stuck order」＋summary `driftPromoted`（自癒當下發）；卡單期間若逼近 72h，另有 T66 skip 的 error 告警 | 隔日 cron 漂移臂冪等推進（T127；連續兩天仍漂移才走 §1 判斷步驟 1 的分支人工） |
+| ⑤ 訂單已關閉仍收到錢（逾期取消後付款成立） | 訂單顯示已取消，但卡已被扣款                                 | error 告警「reconcile: money received on closed order」＋summary `promotedOnClosedOrder`；payment 已翻 paid、訂單維持 cancelled／refunded                                                                 | **不自癒**——人工裁決退款或恢復訂單（§6.1）                                    |
 
-> ⚠️ **第④類「webhook 側卡單」是 T127 落地前的已知盲點**：webhook 端 `settlePaid` 先翻 `payment.status='paid'`、才推進訂單，若推進那步失敗且 ECPay 重送額度耗盡，會停在「payment 已 paid、orders 卡 pending_payment」。對帳 cron 的候選鍵是 `payment.status='pending'`，撈不到這種漂移，因此**不會自動復原**，只能靠人工（§1 判斷步驟 1 的分支）。T127 會補上 reconcile 第二候選臂（orders=pending_payment 且 payment=paid）自動兜底。
+> ℹ️ **第④類「webhook 側卡單」的成因與自癒（T127 已落地）**：webhook 端 `settlePaid` 先翻 `payment.status='paid'`、才推進訂單，若推進那步失敗且 ECPay 重送額度耗盡，會停在「payment 已 paid、orders 卡 pending_payment」。主對帳臂的候選鍵是 `payment.status='pending'`，撈不到這種漂移；T127 的**漂移臂**（第二候選臂，撈 payment=paid＋orders=pending_payment，不打 ECPay——payment=paid 是驗章＋金額核對通過後的財務事實，直接信任）隔日冪等推進＋補寄確認信，並在 T66 逾期取消 cron 加了取消前防呆（有 paid payment 就 skip＋error 告警），防止卡單被誤取消。連續兩天以上仍漂移才依 §1 判斷步驟 1 的分支人工處理。
 
-修完 T107 後，自動兜底涵蓋的失敗點（①②③）都會自癒；剩餘需人工的狀況有三類：**設計上的一天延遲**（webhook 失靈當天，客人最壞等到隔天凌晨才被扶正——急件走本節步驟 2 手動觸發）、**第④類 webhook 側卡單**（T127 落地前不自癒，靠人工推進），和**本來就該人工裁決的錢務問題**——金額不符（§2，永不自動修）、email 永久錯誤（§4）、重複扣款／退款（§5／§6）、已關閉訂單收到錢（第⑤類，§6.1）、付款失敗後重試付款（T66/T74 生命週期範圍，尚未做）。
+修完 T107＋T127 後，自動兜底涵蓋的失敗點（①②③④）都會自癒；剩餘需人工的狀況有兩類：**設計上的一天延遲**（webhook 失靈當天，客人最壞等到隔天凌晨才被扶正——急件走本節步驟 2 手動觸發），和**本來就該人工裁決的錢務問題**——金額不符（§2，永不自動修）、email 永久錯誤（§4）、重複扣款／退款（§5／§6）、已關閉訂單收到錢（第⑤類，§6.1）、付款失敗後重試付款（T66/T74 生命週期範圍，尚未做）。
 
 ### 1.2 webhook 失敗的分層機率評估（2026-07-15，工程推估）
 

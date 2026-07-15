@@ -109,6 +109,17 @@ export async function POST(request: Request) {
         });
         return ERR("Amount mismatch");
       }
+      // T127③：金額正數防呆（與 reconcile 對稱）——0===0 不得視為吻合。
+      // TradeAmt 與訂單金額同時為 0（建單 bug／異常回應被解析成 0）時，絕不可
+      // 據此標記 paid；也順帶擋掉「以 amount=0 insert 一筆 paid payment」的
+      // 髒資料寫入（下方 fallback insert 用 tradeAmt 當 amount）。
+      if (isPaid && tradeAmt <= 0) {
+        Sentry.captureMessage("[ecpay/notify] zero-amount payment anomaly", {
+          level: "error",
+          extra: { merchantTradeNo, tradeAmt },
+        });
+        return ERR("Amount mismatch");
+      }
       if (isPaid && tradeAmt !== Number(order.total_amount)) {
         return ERR("Amount mismatch");
       }
@@ -155,6 +166,14 @@ export async function POST(request: Request) {
       Sentry.captureMessage("[ecpay/notify] TradeAmt 格式異常", {
         level: "error",
         extra: { tradeAmt: params.TradeAmt },
+      });
+      return ERR("Amount mismatch");
+    }
+    // T127③：金額正數防呆，理由同 fallback 分支——0===0 不得視為吻合。
+    if (isPaid && tradeAmt <= 0) {
+      Sentry.captureMessage("[ecpay/notify] zero-amount payment anomaly", {
+        level: "error",
+        extra: { merchantTradeNo, tradeAmt },
       });
       return ERR("Amount mismatch");
     }

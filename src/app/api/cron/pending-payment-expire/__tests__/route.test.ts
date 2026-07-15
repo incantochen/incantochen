@@ -32,19 +32,38 @@ let candidates: OrderRow[] = [];
 let lastFilters: Record<string, unknown> = {};
 // 取消成功後順帶把該訂單的 pending payment 標 failed 的呼叫記錄
 const paymentSweeps: { order_id: unknown }[] = [];
+// T127①：取消前的 paid payment 批次查詢（select 分支）的可控回傳。
+let paidPayments: { order_id: string }[] = [];
+let paidQueryError: string | null = null;
 
 function makeServiceRole() {
   return {
     from: (table: string) => {
       if (table === "payment") {
         const filters: Record<string, unknown> = {};
+        // payment 表有兩種形狀的呼叫：T127① 的 select（取消前防呆查詢）與
+        // 取消後的 update（pending payment 掃成 failed），以有無呼叫 select 分流。
+        let isSelect = false;
         const chain: any = {
+          select: () => {
+            isSelect = true;
+            return chain;
+          },
           update: () => chain,
+          in: () => chain,
           eq: (col: string, val: unknown) => {
             filters[col] = val;
             return chain;
           },
           then: (resolve: (v: unknown) => void) => {
+            if (isSelect) {
+              resolve(
+                paidQueryError
+                  ? { data: null, error: { message: paidQueryError } }
+                  : { data: paidPayments, error: null },
+              );
+              return;
+            }
             paymentSweeps.push({ order_id: filters.order_id });
             resolve({ error: null });
           },
@@ -91,6 +110,8 @@ beforeEach(() => {
   candidates = [];
   lastFilters = {};
   paymentSweeps.length = 0;
+  paidPayments = [];
+  paidQueryError = null;
   transitionOrder.mockReset();
 });
 
@@ -114,6 +135,7 @@ describe("認證", () => {
       cancelled: 0,
       skipped: 0,
       failed: 0,
+      paidConflict: 0,
     });
   });
 });
@@ -134,7 +156,13 @@ describe("逐筆處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
-    expect(body).toEqual({ checked: 1, cancelled: 1, skipped: 0, failed: 0 });
+    expect(body).toEqual({
+      checked: 1,
+      cancelled: 1,
+      skipped: 0,
+      failed: 0,
+      paidConflict: 0,
+    });
     expect(transitionOrder).toHaveBeenCalledWith(
       "o1",
       "cancelled",
@@ -165,7 +193,59 @@ describe("逐筆處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
-    expect(body).toEqual({ checked: 1, cancelled: 0, skipped: 1, failed: 0 });
+    expect(body).toEqual({
+      checked: 1,
+      cancelled: 0,
+      skipped: 1,
+      failed: 0,
+      paidConflict: 0,
+    });
+  });
+
+  it("T127①：候選已有 paid payment → skip 取消、paidConflict 計數、不掃 payment", async () => {
+    candidates = [{ id: "o1" }, { id: "o2" }];
+    paidPayments = [{ order_id: "o1" }];
+    transitionOrder.mockResolvedValue(undefined);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    // o1 錢已收（webhook 側卡單）：不可取消，交給 reconcile 漂移臂自癒；
+    // o2 正常取消。
+    expect(body).toEqual({
+      checked: 2,
+      cancelled: 1,
+      skipped: 0,
+      failed: 0,
+      paidConflict: 1,
+    });
+    expect(transitionOrder).toHaveBeenCalledTimes(1);
+    expect(transitionOrder).toHaveBeenCalledWith(
+      "o2",
+      "cancelled",
+      expect.objectContaining({ note: expect.any(String) }),
+    );
+    expect(paymentSweeps).toEqual([{ order_id: "o2" }]);
+  });
+
+  it("T127①：paid payment 批次查詢失敗 → fail-safe 整批不取消、failed=候選數", async () => {
+    candidates = [{ id: "o1" }, { id: "o2" }];
+    paidQueryError = "connection timeout";
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    // 無法確認「有沒有已收款」就整批跳過：寧可晚一天取消，不可誤取消已付款訂單。
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      checked: 0,
+      cancelled: 0,
+      skipped: 0,
+      failed: 2,
+      paidConflict: 0,
+    });
+    expect(transitionOrder).not.toHaveBeenCalled();
+    expect(paymentSweeps).toEqual([]);
   });
 
   it("非預期錯誤 → failed 計數，繼續處理下一筆", async () => {
@@ -177,7 +257,13 @@ describe("逐筆處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
-    expect(body).toEqual({ checked: 2, cancelled: 1, skipped: 0, failed: 1 });
+    expect(body).toEqual({
+      checked: 2,
+      cancelled: 1,
+      skipped: 0,
+      failed: 1,
+      paidConflict: 0,
+    });
     expect(transitionOrder).toHaveBeenCalledTimes(2);
   });
 });
