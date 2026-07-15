@@ -6,12 +6,25 @@ import {
   INVOICE_STATUS_META,
   type InvoiceStatus,
 } from "@/lib/order/order-status";
+import type { InvoiceTarget } from "@/lib/order/invoice-meta";
 import { issueInvoiceAction } from "./actions";
+
+function describeTarget(target: InvoiceTarget): string {
+  switch (target.kind) {
+    case "company":
+      return `公司統編 ${target.taxId}`;
+    case "mobile_barcode":
+      return `手機條碼 ${target.barcode}`;
+    default:
+      return "個人（綠界會員載具）";
+  }
+}
 
 export function InvoiceSection({
   orderId,
   orderStatus,
   invoiceStatus,
+  invoiceTarget,
   invoiceNo,
   randomNumber,
   invoiceDate,
@@ -19,6 +32,7 @@ export function InvoiceSection({
   orderId: string;
   orderStatus: string;
   invoiceStatus: InvoiceStatus;
+  invoiceTarget: InvoiceTarget;
   invoiceNo: string | null;
   randomNumber: string | null;
   invoiceDate: string | null;
@@ -49,6 +63,10 @@ export function InvoiceSection({
           <dd className="mt-0.5">
             <AdminPill label={pill.label} color={pill.color} />
           </dd>
+        </div>
+        <div>
+          <dt className="text-gray-500">發票去向</dt>
+          <dd className="mt-0.5">{describeTarget(invoiceTarget)}</dd>
         </div>
         {invoiceNo && (
           <div>

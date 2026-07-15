@@ -24,7 +24,9 @@ import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 // transitionOrder 的 CAS 守衛（T66）代表狀態轉換現在可能因為別的流程（cron
 // 自動取消、ECPay webhook）搶先動過而失敗。這種情況不是操作失敗，是頁面顯示
 // 的狀態已經過期。回傳契約（結構化 { ok, error }）的緣由見 action-result.ts。
-export type { AdminActionResult };
+// 注意："use server" 檔案內不可放 `export type { … }` re-export——Turbopack 的
+// server actions loader 會在模組載入時對它產生值層級參照，整個 actions 模組
+// ReferenceError，所有按鈕全掛。需要這個型別的請直接 import action-result.ts。
 
 const RACE_MESSAGE = `此訂單狀態已被其他流程異動${REFRESH_TO_RETRY_SUFFIX}`;
 

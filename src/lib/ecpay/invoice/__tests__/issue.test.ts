@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 function decryptRequestData(fetchMock: ReturnType<typeof vi.fn>) {
-  const [, options] = fetchMock.mock.calls[0];
+  const [, options] = fetchMock.mock.calls[0]!;
   const body = JSON.parse(options.body);
   return decryptEcpayPayload(
     body.Data,

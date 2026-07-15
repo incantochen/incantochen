@@ -8,6 +8,7 @@ import {
   type OrderStatus,
 } from "@/lib/order/order-status";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
+import { parseInvoiceTargetFromMeta } from "@/lib/order/invoice-meta";
 import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
 import { OrderActions } from "./order-actions";
 import { CustomerInfo } from "./customer-info";
@@ -262,6 +263,7 @@ export default async function AdminOrderDetailPage({
               orderId={order.id}
               orderStatus={order.status}
               invoiceStatus={order.invoice_status}
+              invoiceTarget={parseInvoiceTargetFromMeta(order.invoice_meta)}
               invoiceNo={order.invoice_no}
               randomNumber={
                 (order.invoice_meta as { random_number?: string } | null)
