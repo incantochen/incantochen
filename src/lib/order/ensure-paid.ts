@@ -120,13 +120,21 @@ export async function ensureOrderPaid(
     // 「錢收到了、但訂單卡在 cancelled」必須告警，不能跟正常冪等重入混淆
     // 而悄悄放過。
     // 這段的存在意義就是「不要靜默」，所以重查失敗（error）或查無此單
-    // （current 為 null）同樣要告警——只有明確確認「已是 paid」才安靜返回。
+    // （current 為 null）同樣要告警——只有明確確認「付款已成立」才安靜返回。
+    // 判斷用 PAID_LINEAGE 而非只認 paid：遲到的重入（ECPay 晚到的重送、或
+    // T107 後 reconcile 隔日補翻 payment CAS 的重試）可能撞上已被管理員推進
+    // 到製作／出貨的訂單——那是付款成立後的正常演進，只認 paid 會把它誤報成
+    // 「付款卡住」的 P0 告警（與 ops-runbook §1「漂移屬自癒中」矛盾）。
     const { data: current, error: statusError } = await serviceRole
       .from("orders")
       .select("status")
       .eq("id", orderId)
       .maybeSingle();
-    if (statusError || !current || current.status !== "paid") {
+    if (
+      statusError ||
+      !current ||
+      !PAID_LINEAGE.includes(current.status as OrderStatus)
+    ) {
       const status = statusError
         ? `查詢失敗: ${statusError.message}`
         : (current?.status ?? "查無此訂單");

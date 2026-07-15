@@ -3,6 +3,17 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+// Sentry mock：驗證「該告警的路徑有告警、正常冪等重入不告警」——T107 後
+// reconcile 隔日重試會撞上已被推進的訂單，誤報與漏報都要鎖住。
+const { sentryCaptureMessage, sentryCaptureException } = vi.hoisted(() => ({
+  sentryCaptureMessage: vi.fn(),
+  sentryCaptureException: vi.fn(),
+}));
+vi.mock("@sentry/nextjs", () => ({
+  captureMessage: (...args: unknown[]) => sentryCaptureMessage(...args),
+  captureException: (...args: unknown[]) => sentryCaptureException(...args),
+}));
+
 const sendOrderConfirmation = vi.fn().mockResolvedValue(undefined);
 const sendNewOrderNotification = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/lib/email/order-confirmation", () => ({
@@ -138,6 +149,8 @@ beforeEach(() => {
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
   sendOnceResult = {};
+  sentryCaptureMessage.mockClear();
+  sentryCaptureException.mockClear();
 });
 
 describe("ensureOrderPaid：T75 付款成功清購物車", () => {
@@ -234,7 +247,7 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
     expect(cartDeleteCalls).toEqual([]);
   });
 
-  it("!promoted 但訂單現況已是 paid（正常冪等重入）→ 不碰 cart，不視為異常", async () => {
+  it("!promoted 但訂單現況已是 paid（正常冪等重入）→ 不碰 cart，不視為異常、不告警", async () => {
     const { serviceRole, cartDeleteCalls } = makeServiceRole({
       promote: { data: null, error: null },
       currentOrderStatus: "paid",
@@ -243,9 +256,26 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
     await ensureOrderPaid(serviceRole, "order-1", "webhook");
 
     expect(cartDeleteCalls).toEqual([]);
+    expect(sentryCaptureMessage).not.toHaveBeenCalled();
   });
 
-  it("!promoted 且訂單現況是 cancelled（cron 搶先取消、但錢已收到）→ 不 throw，仍正常結束", async () => {
+  it("!promoted 且訂單已推進到 in_production（PAID_LINEAGE）→ 視為正常冪等重入，不告警（T107）", async () => {
+    // T107 後可達的劇本：reconcile day1 推進訂單成功但 payment CAS 遇暫時錯誤
+    // → 當天管理員把訂單推進到製作 → day2 重試時 CAS miss、重查得 in_production。
+    // 這是付款成立後的正常演進，只認 exactly 'paid' 會誤發「付款卡住」P0 告警。
+    const { serviceRole, cartDeleteCalls } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "in_production",
+    });
+
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "reconcile"),
+    ).resolves.toBeUndefined();
+    expect(cartDeleteCalls).toEqual([]);
+    expect(sentryCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it("!promoted 且訂單現況是 cancelled（cron 搶先取消、但錢已收到）→ 不 throw、發告警，仍正常結束", async () => {
     const { serviceRole, cartDeleteCalls } = makeServiceRole({
       promote: { data: null, error: null },
       currentOrderStatus: "cancelled",
@@ -255,6 +285,8 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       ensureOrderPaid(serviceRole, "order-1", "webhook"),
     ).resolves.toBeUndefined();
     expect(cartDeleteCalls).toEqual([]);
+    // 「錢收到了、訂單卡 cancelled」不可靜默放過。
+    expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
   });
 
   it("cart delete 回傳 error → 不 throw，函式正常結束（清車失敗不擋付款確認流程）", async () => {

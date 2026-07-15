@@ -13,7 +13,12 @@ import type { OrderStatus } from "@/lib/order/order-status";
 
 const CANDIDATE_LIMIT = 30;
 const MIN_AGE_MS = 10 * 60 * 1000;
-const RECONCILE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+// 冷卻必須明顯短於 cron 週期（每日一次）：last_reconciled_at 的蓋章時間晚於
+// cron 起跑（前面候選每筆 400ms 節流＋ECPay 往返），若冷卻＝24h，隔日 cron 的
+// cutoff（now−24h）會差幾秒到幾分鐘而撈不到同一筆，「隔日重試」實際變隔兩日。
+// T107 之後這個冷卻從「告警去重」升級為「失敗自癒的重試節奏」，20h 用來吸收
+// cron jitter＋整批處理時間。
+const RECONCILE_COOLDOWN_MS = 20 * 60 * 60 * 1000;
 const THROTTLE_MS = 400;
 const SWEEP_LIMIT = 20;
 
@@ -230,31 +235,60 @@ export async function GET(request: Request) {
             },
           });
         } else if (Number(result.tradeAmt) === Number(payment.amount)) {
-          // .select().maybeSingle() 取得是否真的搶到這次 CAS：webhook 可能在
-          // candidate 查詢之後、這個 UPDATE 之前就先推進成功，此時 0 rows
-          // affected 但 Supabase 不會回傳 error——若不檢查就會把「webhook 其實
-          // 正常運作」誤報成「對帳搶救了卡住的訂單」，污染 T88 要追蹤的
-          // webhook 可靠度訊號。
-          const { data: promotedRow, error: updateError } = await serviceRole
-            .from("payment")
-            .update({
-              status: "paid",
-              gateway_trade_no: result.tradeNo,
-              paid_at: new Date().toISOString(),
-              raw_callback: result.raw,
-            })
-            .eq("id", payment.id)
-            .eq("status", "pending") // CAS guard：防與 webhook 競態
-            .select("id")
-            .maybeSingle();
-
-          if (updateError) {
+          // ① 先推進訂單、payment 翻 paid 留到最後（T107／F-014）：候選查詢
+          // 以 payment.status='pending' 為鍵，若先翻 payment 再推進訂單，推進
+          // 段失敗時候選鍵已被消滅，隔日 cron 永遠選不到這筆——客人已付款、
+          // 訂單永久卡 pending_payment、確認信未寄，安全網自身留盲點。改成
+          // 推進失敗就跳過後續（payment 留 pending），隔日 24h 冷卻後自動重試。
+          // ensureOrderPaid 冪等（orders 條件式 UPDATE CAS），webhook 已推進
+          // 時安全 no-op；throw（狀態查詢 DB 暫時錯誤）不可中止整批——記錄後
+          // 繼續下一筆（T88 review）。
+          let orderPromotionOk = true;
+          try {
+            await ensureOrderPaid(serviceRole, payment.order_id, "reconcile");
+          } catch (e) {
+            orderPromotionOk = false;
             summary.unexpected += 1;
-            Sentry.captureException(new Error(updateError.message), {
-              extra: { merchantTradeNo: payment.merchant_trade_no },
+            Sentry.captureException(e, {
+              extra: {
+                orderId: payment.order_id,
+                merchantTradeNo: payment.merchant_trade_no,
+              },
             });
-          } else {
-            if (promotedRow) {
+          }
+
+          if (orderPromotionOk) {
+            // ② CAS 把 payment 翻 paid。.select().maybeSingle() 取得是否真的
+            // 搶到這次 CAS：webhook 可能在 candidate 查詢之後、這個 UPDATE 之
+            // 前就先推進成功，此時 0 rows affected 但 Supabase 不會回傳 error
+            // ——若不檢查就會把「webhook 其實正常運作」誤報成「對帳搶救了卡住
+            // 的訂單」，污染 T88 要追蹤的 webhook 可靠度訊號。
+            const { data: promotedRow, error: updateError } = await serviceRole
+              .from("payment")
+              .update({
+                status: "paid",
+                gateway_trade_no: result.tradeNo,
+                paid_at: new Date().toISOString(),
+                raw_callback: result.raw,
+              })
+              .eq("id", payment.id)
+              .eq("status", "pending") // CAS guard：防與 webhook 競態
+              .select("id")
+              .maybeSingle();
+
+            if (updateError) {
+              // 訂單已推進（①成功）、payment 留 pending：候選鍵保留，隔日
+              // 重撈時①冪等 no-op、這裡的 CAS 重試補翻。短暫的「orders=paid
+              // 但 payment=pending」漂移屬自癒中，勿人工介入（ops-runbook §1）。
+              // 不擋③——訂單已 paid，信該寄。
+              summary.unexpected += 1;
+              Sentry.captureException(new Error(updateError.message), {
+                extra: {
+                  orderId: payment.order_id,
+                  merchantTradeNo: payment.merchant_trade_no,
+                },
+              });
+            } else if (promotedRow) {
               summary.promoted += 1;
               // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
               // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
@@ -267,22 +301,17 @@ export async function GET(request: Request) {
               });
             }
 
-            // ensureOrderPaid/ensureNotificationSent 各自冪等，即使這次沒搶到
-            // CAS（webhook 已經處理過）呼叫也安全，用來補做可能半路失敗的通知。
-            // 包 try/catch：兩者的狀態查詢碰到 DB 暫時錯誤會 throw，不可讓
-            // 單筆失敗中止整批（外層 catch 會直接 500，其餘候選當天全數不
-            // 對帳）——記錄後繼續下一筆（T88 review）。
+            // ③ 補寄通知。冪等，且不 gate payment 翻 paid：payment.status 是
+            // 財務記錄（錢已確認收到），不拿它當通知重試旗標——通知失敗由
+            // 下方 failed-notification sweep 每天補救，webhook 端的 ECPay
+            // 重送（若還有回呼）也走 reclaim 補寄。②的 updateError／CAS 輸給
+            // webhook 都不影響這裡照跑。throw 同①：記錄後繼續下一筆。
             try {
-              await ensureOrderPaid(serviceRole, payment.order_id, "reconcile");
               const notified = await ensureNotificationSent(
                 serviceRole,
                 payment.order_id,
               );
               if (!notified) {
-                // 信投遞失敗：只告警不中止。這筆 payment 已是 paid、不會再被
-                // candidate 查詢（status='pending'）撈到，但下方的 failed-
-                // notification sweep 每天會補救，webhook 端的 ECPay 重送（若
-                // 還有回呼）也走 reclaim 補寄。
                 summary.notifyFailed += 1;
                 Sentry.captureMessage(
                   "reconcile: notification delivery failed",

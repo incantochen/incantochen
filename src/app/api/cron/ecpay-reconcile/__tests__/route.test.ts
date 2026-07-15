@@ -86,6 +86,9 @@ let recorded: { filters: Record<string, unknown>; values: unknown }[] = [];
 // 0 rows，但 Supabase 不會回傳 error，只有 .select().maybeSingle() 的 data
 // 會是 null。
 let casLossIds = new Set<string>();
+// 模擬 promote 的 CAS UPDATE 回傳 { error }（暫時性 DB 故障）：payment 在
+// 真實 DB 不會被寫入、留在 pending。
+let casErrorIds = new Set<string>();
 // 模擬 last_reconciled_at 那支 UPDATE 回傳 { error }（暫時性 DB 故障）。
 let lastReconciledError: string | null = null;
 // 捕捉候選查詢傳給 .or() 的實際字串，供斷言格式正確（PostgREST 要求值裡的
@@ -151,6 +154,12 @@ function makeChain() {
     maybeSingle: () => {
       recorded.push({ filters: { ...chain._filters }, values: chain._values });
       const id = chain._filters.id as string | undefined;
+      if (id && casErrorIds.has(id)) {
+        return Promise.resolve({
+          data: null,
+          error: { message: "simulated CAS update failure" },
+        });
+      }
       if (id && casLossIds.has(id)) {
         return Promise.resolve({ data: null, error: null });
       }
@@ -195,6 +204,7 @@ beforeEach(() => {
   candidates = [];
   recorded = [];
   casLossIds = new Set();
+  casErrorIds = new Set();
   lastReconciledError = null;
   lastOrFilter = undefined;
   failedNotifications = [];
@@ -292,6 +302,136 @@ describe("單筆候選：TradeStatus=1", () => {
     expect(reconciledWrites.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("順序（T107/F-014）：ensureOrderPaid 先執行、payment 翻 paid 是最後一步", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+    // 不能在 mock 內直接 expect：throw 會被 route 的 try/catch 吃掉、測試
+    // 反而綠。改成把「ensureOrderPaid 被呼叫當下是否已有 paid UPDATE」記
+    // 下來，事後斷言。
+    let paidUpdateBeforeEnsure: boolean | null = null;
+    ensureOrderPaid.mockImplementation(async () => {
+      paidUpdateBeforeEnsure = recorded.some(
+        (r) => (r.values as any)?.status === "paid",
+      );
+    });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(paidUpdateBeforeEnsure).toBe(false);
+    expect(body.promoted).toBe(1);
+  });
+
+  it("ensureOrderPaid 拋例外 → 不得翻 payment（候選鍵保留隔日重試）、unexpected +1、批次繼續（F-014 反向驗證）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+      { id: "p2", order_id: "o2", merchant_trade_no: "M2", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+    ensureOrderPaid.mockRejectedValueOnce(
+      new Error("ensureOrderPaid failed: simulated"),
+    );
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    // 舊版先翻 payment 再推進訂單：推進失敗時候選鍵（status='pending'）已被
+    // 消滅，隔日 cron 永遠選不到——訂單永久卡 pending_payment。新順序下 p1
+    // 絕不可出現 status='paid' 的 UPDATE。
+    expect(res.status).toBe(200);
+    expect(
+      recorded.some(
+        (r) => r.filters.id === "p1" && (r.values as any)?.status === "paid",
+      ),
+    ).toBe(false);
+    expect(body.unexpected).toBe(1);
+    expect(body.checked).toBe(2);
+    // 第二筆不受影響，照常推進＋翻 paid。
+    expect(body.promoted).toBe(1);
+    // p1 推進失敗也不該寄信（訂單仍 pending_payment）；只有 o2 該寄。
+    expect(ensureNotificationSent).toHaveBeenCalledTimes(1);
+    expect(ensureNotificationSent).toHaveBeenCalledWith(
+      expect.anything(),
+      "o2",
+    );
+  });
+
+  it("payment CAS 回 {error} → 不計 promoted、unexpected +1，ensureNotificationSent 仍照跑（訂單已 paid，信該寄）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    casErrorIds.add("p1");
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.promoted).toBe(0);
+    expect(body.unexpected).toBe(1);
+    expect(ensureNotificationSent).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+    );
+  });
+
+  it("CAS 失敗後隔日重跑收斂：訂單已 paid、payment 留 pending → 第二天 ①冪等 no-op、CAS 補翻成功", async () => {
+    // 失敗矩陣第②列的兩天劇本。route 無跨次狀態，「隔日」＝再呼叫一次 GET；
+    // 「payment 留 pending、隔日被候選重撈」那半段由 Postgres 語意（失敗的
+    // UPDATE 不寫入）＋候選查詢條件保證，mock 端以 candidates 維持同一筆表達。
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+
+    // 第一天：CAS 遇暫時性 DB 故障。
+    casErrorIds.add("p1");
+    const day1 = await (
+      await GET(buildRequest("Bearer test-cron-secret"))
+    ).json();
+    expect(day1.promoted).toBe(0);
+    expect(day1.unexpected).toBe(1);
+
+    // 第二天：故障排除、候選重撈到同一筆。
+    casErrorIds.delete("p1");
+    recorded = [];
+    const day2 = await (
+      await GET(buildRequest("Bearer test-cron-secret"))
+    ).json();
+
+    expect(day2.promoted).toBe(1);
+    expect(day2.unexpected).toBe(0);
+    expect(
+      recorded.some(
+        (r) => r.filters.id === "p1" && (r.values as any)?.status === "paid",
+      ),
+    ).toBe(true);
+    // ① 在兩天都被呼叫（第二天於真實環境是冪等 no-op）。
+    expect(ensureOrderPaid).toHaveBeenCalledTimes(2);
+  });
+
   it("通知投遞失敗（ensureNotificationSent 回 false）→ notifyFailed 計數 +1（獨立於 unexpected），不中止批次、不回 500（T88）", async () => {
     candidates = [
       { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
@@ -309,6 +449,13 @@ describe("單筆候選：TradeStatus=1", () => {
 
     expect(res.status).toBe(200);
     expect(body.promoted).toBe(1);
+    // 通知結果不 gate 翻 paid（T107）：payment.status 是財務記錄，寄信失敗
+    // 不可讓 gateway_trade_no／raw_callback（退款唯一依據）遲遲不落地。
+    expect(
+      recorded.some(
+        (r) => r.filters.id === "p1" && (r.values as any)?.status === "paid",
+      ),
+    ).toBe(true);
     // 投遞失敗走獨立的 notifyFailed 桶，不塞 unexpected——日報才能分辨
     // 「資料異常」與「郵件故障」。
     expect(body.notifyFailed).toBe(1);
@@ -339,6 +486,8 @@ describe("單筆候選：TradeStatus=1", () => {
     expect(body.checked).toBe(2);
     expect(body.unexpected).toBe(1);
     expect(ensureOrderPaid).toHaveBeenCalledTimes(2);
+    // 通知在 payment 翻 paid 之後才跑（T107），它的失敗不影響兩筆都翻 paid。
+    expect(body.promoted).toBe(2);
   });
 
   it("並發：webhook 搶先推進（CAS 未命中）→ 不計入 promoted、不發『搶救成功』告警，但仍補做 ensureOrderPaid/ensureNotificationSent", async () => {
