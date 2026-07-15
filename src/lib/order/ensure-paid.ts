@@ -5,6 +5,7 @@ import { sendOrderConfirmation } from "@/lib/email/order-confirmation";
 import { sendNewOrderNotification } from "@/lib/email/new-order-notification";
 import { sendOnce } from "@/lib/notification/send-once";
 import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
+import { PAID_LINEAGE, type OrderStatus } from "@/lib/order/order-status";
 
 // 付款期間 cart 被加入新品項時的精準清理：只刪除訂單裡出現過的 cart_item
 // （product_id + config_snapshot 完全一致），新加入的保留。cart_item 與
@@ -27,7 +28,10 @@ async function removePurchasedItemsFromCart(
 
   if (orderItemsRes.error || cartItemsRes.error) {
     const error = orderItemsRes.error ?? cartItemsRes.error;
-    console.error("[ensureOrderPaid] purchased-item cleanup query failed", error);
+    console.error(
+      "[ensureOrderPaid] purchased-item cleanup query failed",
+      error,
+    );
     Sentry.captureMessage("ensureOrderPaid: purchased-item cleanup failed", {
       level: "error",
       extra: { orderId, cartId, error: error?.message },
@@ -53,7 +57,10 @@ async function removePurchasedItemsFromCart(
     .delete()
     .in("id", idsToRemove);
   if (removeError) {
-    console.error("[ensureOrderPaid] purchased-item delete failed", removeError);
+    console.error(
+      "[ensureOrderPaid] purchased-item delete failed",
+      removeError,
+    );
     Sentry.captureMessage("ensureOrderPaid: purchased-item delete failed", {
       level: "error",
       extra: { orderId, cartId, error: removeError.message },
@@ -64,9 +71,11 @@ async function removePurchasedItemsFromCart(
 async function notifyOrderPaid(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
-) {
+): Promise<boolean> {
   // sendOnce 保證不往外拋例外，兩通知彼此獨立，可安全平行處理。
-  await Promise.all([
+  // 兩封皆確認送達（true）才回 true；任一封 send() 失敗（false）即回 false，
+  // 讓上游（webhook）觸發 ECPay 重送，重送時 reclaim 機制會補寄失敗那封（T88）。
+  const [confirmationOk, notificationOk] = await Promise.all([
     sendOnce(serviceRole, {
       orderId,
       type: "order_confirmation",
@@ -78,6 +87,7 @@ async function notifyOrderPaid(
       send: () => sendNewOrderNotification(orderId),
     }),
   ]);
+  return confirmationOk && notificationOk;
 }
 
 // source 標示這次推進是被誰觸發（"webhook" 或 T89 的 "reconcile"），寫進
@@ -207,14 +217,20 @@ export async function ensureOrderPaid(
   }
 }
 
+// 回傳 boolean（T88）：true = 通知已送達或無事可寄；false = 訂單為 paid 但
+// 至少一封信真的沒寄出。呼叫端（webhook）可據此對 ECPay 回錯誤觸發重送，
+// 讓下次重送走 reclaim 補寄。狀態查詢的 { error } 仍照舊 throw（次要 DB 故障
+// 由 webhook 最外層 catch 成 ERR，行為與現況一致）。
 export async function ensureNotificationSent(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
-) {
+): Promise<boolean> {
   // 不依賴呼叫者是否剛推進成功，重新查一次目前狀態：無論是這次才推進、
-  // 還是先前已經推進但通知沒寄成功，只要訂單現在確實是 paid 就補寄。
-  // 只在 paid 才寄，避免對已取消／退款的訂單誤發「訂單確認」信
-  // （目前系統尚無取消／退款通知信，故此處不需要導去別的通知）。
+  // 還是先前已經推進但通知沒寄成功，只要付款確實成立過就補寄。
+  // 判斷用 PAID_LINEAGE（paid 與其後續狀態）而非只認 paid：訂單可能在
+  // ECPay 下一次重送抵達前就被推進到製作／出貨，只認 paid 會把失敗信件
+  // 的重試靜默切斷（T88 review）。cancelled／refunded／pending_payment
+  //（含查無此單）不寄，避免對已取消／退款的訂單誤發「訂單確認」信。
   const { data: order, error } = await serviceRole
     .from("orders")
     .select("status")
@@ -223,9 +239,12 @@ export async function ensureNotificationSent(
 
   if (error) throw new Error(`ensureNotificationSent failed: ${error.message}`);
 
-  if (order?.status === "paid") {
-    await notifyOrderPaid(serviceRole, orderId);
+  if (!order || !PAID_LINEAGE.includes(order.status as OrderStatus)) {
+    // 付款未成立或不該寄：沒有要寄的信，視為成功。
+    return true;
   }
+
+  return notifyOrderPaid(serviceRole, orderId);
 }
 
 // T42：付款成功後自動開立電子發票。藍圖鐵律——發票失敗不得阻塞或回滾金流：

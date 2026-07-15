@@ -21,6 +21,25 @@ const ERR = (msg: string) =>
     headers: { "Content-Type": "text/plain" },
   });
 
+// 付款成立的結算 chokepoint：推進訂單＋補寄通知＋依結果回應，四個入口共用
+//（T88 review 收斂——原本四份複本，正是 T67 記錄過的散落複本失同步模式）。
+// 通知寄送失敗回 0|ERR 讓 ECPay 重送、重送走 sendOnce 的 reclaim 補寄；
+// 訂單推進在回應之前已完成且各自冪等，重送重入安全。
+async function settlePaid(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+): Promise<Response> {
+  await ensureOrderPaid(serviceRole, orderId, "webhook");
+  // T42：發票開立移出回應路徑（after()）——外部 ECPay Issue API 的延遲不可
+  // 佔用 ReturnURL 的 10 秒預算（藍圖：發票不阻塞金流）。ensureInvoiceIssued
+  // 冪等且絕不 throw，即使下方通知失敗回 0|ERR 觸發 ECPay 重送，重入也安全；
+  // 開立失敗由每日 reconcile cron 的未開票 sweep 兜底。
+  after(() => ensureInvoiceIssued(serviceRole, orderId));
+  const notified = await ensureNotificationSent(serviceRole, orderId);
+  if (!notified) return ERR("notification delivery failed");
+  return OK();
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
@@ -71,16 +90,7 @@ export async function POST(request: Request) {
         .eq("status", "paid")
         .maybeSingle();
 
-      if (paidPayment) {
-        await ensureOrderPaid(serviceRole, order.id, "webhook");
-        await ensureNotificationSent(serviceRole, order.id);
-        // T42：發票開立移出回應路徑（after()）——外部 ECPay Issue API 的
-        // 延遲不可佔用 ReturnURL 的 10 秒預算（藍圖：發票不阻塞金流）；
-        // ensureInvoiceIssued 冪等且絕不 throw，回應送出後執行安全，
-        // 失敗由每日 reconcile cron 的未開票 sweep 兜底
-        after(() => ensureInvoiceIssued(serviceRole, order.id));
-        return OK();
-      }
+      if (paidPayment) return await settlePaid(serviceRole, order.id);
 
       const isPaid = params.RtnCode === "1";
       const now = new Date().toISOString();
@@ -120,12 +130,7 @@ export async function POST(request: Request) {
         return ERR("DB insert failed");
       }
 
-      if (isPaid) {
-        await ensureOrderPaid(serviceRole, order.id, "webhook");
-        await ensureNotificationSent(serviceRole, order.id);
-        // T42：發票開立移出回應路徑（理由同上一處）
-        after(() => ensureInvoiceIssued(serviceRole, order.id));
-      }
+      if (isPaid) return await settlePaid(serviceRole, order.id);
 
       return OK();
     }
@@ -135,11 +140,7 @@ export async function POST(request: Request) {
     // 冪等：已 paid → 確保訂單推進與通知都完成（避免上次執行半路失敗卡住），
     // 再回 1|OK
     if (payment.status === "paid") {
-      await ensureOrderPaid(serviceRole, payment.order_id, "webhook");
-      await ensureNotificationSent(serviceRole, payment.order_id);
-      // T42：發票開立移出回應路徑（理由見上方 fallback 分支）
-      after(() => ensureInvoiceIssued(serviceRole, payment.order_id));
-      return OK();
+      return await settlePaid(serviceRole, payment.order_id);
     }
 
     const isPaid = params.RtnCode === "1";
@@ -223,12 +224,7 @@ export async function POST(request: Request) {
 
     // 訂單推進與通知寄送各自冪等，ensureOrderPaid 內部會重新確認目前狀態
     // 才決定是否真的要推進，不需要在這裡先查一次 orders.status。
-    if (isPaid) {
-      await ensureOrderPaid(serviceRole, payment.order_id, "webhook");
-      await ensureNotificationSent(serviceRole, payment.order_id);
-      // T42：發票開立移出回應路徑（理由見上方 fallback 分支）
-      after(() => ensureInvoiceIssued(serviceRole, payment.order_id));
-    }
+    if (isPaid) return await settlePaid(serviceRole, payment.order_id);
 
     return OK();
   } catch (e) {

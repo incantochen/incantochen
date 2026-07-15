@@ -659,6 +659,36 @@
 
 ---
 
+## 📅 2026-07-14
+
+### 本次作業
+
+#### #T116 / M4 素材 / 商品圖策略拍板＋AI 生成引擎實測驗證
+
+**說明**：C-1 商品圖策略拍板（取消 T55 疊圖／T56 自學 Blender，改「預產全矩陣平面圖＋T17 組合鍵查圖」），並以真實商品照完成引擎選型實測。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 拍板＋引擎實測完成（T116 工具本體未動工） |
+| 產出     | tasks.csv（T116 登記、T55/T56 取消、T17 改寫）、launch-scope.md（C-1 ✅ 已拍板、B 級 +2.5 天）、CLAUDE.md §1 同步；引擎研究（web）＋實測樣本（GPT×4、Gemini×2）；另 merge PR #63（vitest 排除 `.claude/worktrees/**`，防其他 session 的 worktree 半成品污染主專案測試與 completion-check hook） |
+| 更新描述 | 1. 路線源起：參考站 melaniecasey.com 實證「預產照片＋前端切換、無即時合成」；因核心價值＝解決「無法事先確認配色」痛點，需金屬×寶石全矩陣（每款約 24–32 張），離線預產比執行期疊圖簡單且質感可控。2. 引擎研究結論：Gemini（Nano Banana／Pro）主力——照片寫實編輯公認最強、固定每張計價（Pro 2K $0.134、Batch API 半價）、Flash 有免費 API（500 張/日）；GPT Image 1.5/2 備援（token 制、每輪重計參考圖費用）；FLUX Kontext 出局（輸出上限 ~1K 不夠 PDP）。GPT-5 系列非圖像模型，生圖實為呼叫 gpt-image 工具，套一層只多花錢。3. 以「戒指02-綠寶」實戴照實測：GPT Image 1.5「實戴照→棚拍商品照」氛圍轉換佳（~US$0.25/張、~55s），但**結構細節不服從**——主石六爪連續 4 張畫成四爪、側鑽數量前後不一致（同 prompt 抽卡變異），且整張重生導致細節漂移；Gemini 全 prompt 版服從視角指令且質感更佳，**局部編輯版一次命中**（四爪→六爪、其餘像素幾乎不動）。4. 量產工作流定型：實拍照→棚拍化底圖（人工對實物驗收結構）→結構錯誤用局部編輯修正（勿重抽）→底圖換金屬色→各金屬版換寶石（全程局部編輯保矩陣一致性）→每步多候選＋人工挑選。5. 教訓：prompt 對「爪數／鑽數」等微小幾何拉不動重生式模型（訓練先驗蓋過指令），越描越歪；商品結構描述需先與使用者對實物確認（本次六爪／側鑽數即經三輪修正）。 |
+| 待辦     | T116 工具動工（引擎層做成可抽換 adapter：Gemini 主力＋OpenAI 備援）；使用者備妥各款實拍底圖；`GEMINI_API_KEY` 由使用者於 AI Studio 生成填入 env；Gemini 端測試樣本（Downloads 兩張）與 GPT 定稿候選移入 `Desktop\GEM\` 保存。 |
+| 依賴     | T114（匯入腳本，供定稿上傳）；T17 依賴本任務產出素材 |
+
+#### #T88 / M2 通知 / sendOnce 失敗信件可重試（PR #66，Ultraplan＋本地 max review 修正）
+
+**說明**：關掉「寄信失敗→通知永久卡 failed、無機制可救」的缺口（PR #30 ultrareview 第三輪遺留）。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 完成（PR #66 squash merge `1591861`） |
+| 產出     | Ultraplan 雲端初版（sendOnce 回傳 boolean＋webhook 回 ERR 觸發 ECPay 重送）＋本地 `/code-review max`（10 finder＋verify＋sweep，15 findings）修正 commit `d0a3d5c`；新檔 `src/lib/notification/senders.ts`（type→寄信函式對照）；chore：auto-format hook 的 eslint --fix 排除 suggestion 類（`1eecda5`）；tasks.csv 登記 T123 技術債；ops-runbook §4 改寫；coding-system 案例庫回寫 2 型 |
+| 更新描述 | 1. 兩層重試：快路徑＝webhook 對 ECPay 回 `0\|notification delivery failed` 觸發重送、reclaim 補寄；兜底＝每日 reconcile cron 新增 failed-notification sweep（掃 `status='failed'` 逐筆補寄，order_shipped 一併涵蓋），ECPay 重送降級為加速器，最壞情況從「永久遺失」變「延遲至下一個 cron 週期」。2. max review 三個關鍵發現：借用 ECPay 重送當唯一重試迴路的三個終止切斷點（額度耗盡／訂單推進過 paid／reconcile 兜底單無重送可用）→ sweep＋`PAID_LINEAGE` 關掉；send-once 多處 resolve `{error}` 未檢查（supabase-js 不 throw，舊 try/catch 是死碼）→ 全數補檢查；測試 mock 用 throw 模擬 DB 失敗與真實 SDK 不符 → mock 補 resolve `{error}` 形態。3. 其他：標 failed 加 pending 守衛防蓋掉 sent、best-effort 寄成後補去重錨點、webhook 四複本抽 `settlePaid()`（`return await` 保外層 catch）、reconcile per-candidate try/catch＋`notifyFailed` 等獨立計數、shipOrder 寄失敗以 warning 告知管理員。4. 驗收：tsc／lint／vitest 419／build 全綠；CI 過後 merge。5. merge 前撞號：master 已用掉 T122（電子發票），本任務技術債改編 **T123**。 |
+| 待辦     | production 首次 cron 執行看 summary 新欄位（`sweepRetried`/`sweepSent`/`sweepStillFailing`）與 Sentry（T38 checklist 既有項涵蓋）；永久失敗分類＝T123（營運後視告警噪音） |
+| 依賴     | T69（send-once 原始落地）、T89（reconcile cron 基建） |
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```
