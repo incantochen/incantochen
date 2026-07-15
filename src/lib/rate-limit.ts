@@ -88,6 +88,22 @@ export async function checkCheckoutGuestRateLimit(
   return results.every((r) => r.success);
 }
 
+// T93（F-002）：售後申請需登入才能呼叫，key 用 memberId、不做 IP 維度。
+// 門檻抓寬鬆——正常客人一張訂單只會申請一次，5 次/10 分鐘已足以擋 script
+// 灌爆店家信箱與 support_request 表；同單去重另在 action 層處理。
+const supportRequestMemberRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(5, "10 m"),
+  prefix: "ratelimit:support-member",
+});
+
+export async function checkSupportRequestRateLimit(
+  memberId: string,
+): Promise<boolean> {
+  const { success } = await supportRequestMemberRatelimit.limit(memberId);
+  return success;
+}
+
 // T73 code-review #1：付款結果三頁把限流放進 Promise.all，一旦 Upstash Redis
 // 逾時／中斷，.limit() 會 throw、冒泡成 500——付款完成後的 success 頁與 pay
 // 頁在 Redis 故障時整段掛掉（改版前這幾頁只依賴 Postgres）。這裡對每個
