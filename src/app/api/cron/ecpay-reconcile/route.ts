@@ -6,7 +6,11 @@ import {
   ensureNotificationSent,
 } from "@/lib/order/ensure-paid";
 import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
-import { queryTradeInfo, RateLimitError } from "@/lib/ecpay/query-trade-info";
+import {
+  queryTradeInfo,
+  RateLimitError,
+  QueryTradeInfoHttpError,
+} from "@/lib/ecpay/query-trade-info";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 import { sendOnce } from "@/lib/notification/send-once";
 import { NOTIFICATION_SENDERS } from "@/lib/notification/senders";
@@ -151,6 +155,9 @@ type Summary = {
   sweepSent: number;
   sweepStillFailing: number;
   rateLimited: boolean;
+  // T99：HTTP 層失敗（ECPay 5xx 等，非限流）導致的整批中止，與 rateLimited
+  // 分開標示——語意不同（對方故障 vs 我方打太快），Sentry 告警也分流。
+  httpAborted: boolean;
   invoicesSwept: number;
   invoicesIssued: number;
   invoicesFailed: number;
@@ -221,6 +228,7 @@ export async function GET(request: Request) {
     sweepSent: 0,
     sweepStillFailing: 0,
     rateLimited: false,
+    httpAborted: false,
     invoicesSwept: 0,
     invoicesIssued: 0,
     invoicesFailed: 0,
@@ -282,6 +290,24 @@ export async function GET(request: Request) {
               error: e.message,
             },
           });
+          break;
+        }
+        // T99：非限流的 HTTP 層失敗（ECPay 5xx 等）同樣中止整批（系統性
+        // 故障，逐筆硬跑只會把候選蓋上冷卻戳記、延後自癒），但告警不再
+        // 誤標「被限流」。這條路徑不寫 last_reconciled_at，下次排程原樣重試。
+        if (e instanceof QueryTradeInfoHttpError) {
+          summary.httpAborted = true;
+          Sentry.captureMessage(
+            "reconcile: QueryTradeInfo HTTP error, aborting batch",
+            {
+              level: "error",
+              extra: {
+                merchantTradeNo: payment.merchant_trade_no,
+                status: e.status,
+                error: e.message,
+              },
+            },
+          );
           break;
         }
         // 單筆查詢失敗（含 CheckMacValue 驗證失敗）：記錄並繼續下一筆，

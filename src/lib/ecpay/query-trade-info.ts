@@ -31,6 +31,19 @@ export class RateLimitError extends Error {
   }
 }
 
+// T99 隨手項：非 429/503 的 HTTP 層失敗（如 ECPay 端 5xx）。與 RateLimitError
+// 同為「中止整批、下次排程再續」的語意——HTTP 層失敗是系統性的，若當單筆
+// 失敗處理會把整批候選蓋上冷卻戳記、白白延後重試——但告警分開標示，
+// 避免 Sentry 把 ECPay 故障誤報成「被限流」。
+export class QueryTradeInfoHttpError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`QueryTradeInfo 非 200 回應：${status}`);
+    this.name = "QueryTradeInfoHttpError";
+    this.status = status;
+  }
+}
+
 // TimeStamp 效期僅 3 分鐘（不同於 AioCheckOut 的 MerchantTradeDate），
 // 必須在每次呼叫前才產生新鮮值，不可預先建好快取。
 export function buildQueryTradeParams(
@@ -69,10 +82,16 @@ export async function queryTradeInfo(
     body: new URLSearchParams(params).toString(),
   });
 
-  // ECPay 官方文件明確警告此 API 有頻率限制、不建議高頻輪詢；非 200 視為
-  // 限流訊號，由呼叫端中止本次批次，下次排程再繼續，而不是當成單筆查詢失敗略過。
+  // ECPay 官方文件明確警告此 API 有頻率限制、不建議高頻輪詢；但只有
+  // 429（Too Many Requests）／503（Service Unavailable）才視為限流訊號，
+  // 其餘非 200（如 ECPay 端 500）改標一般錯誤——否則 ECPay 故障會在
+  // Sentry 誤報成「被限流」誤導除錯方向（T99 隨手項）。兩者都會讓呼叫端
+  // 中止本次批次、下次排程再續，保守行為不變，差別只在告警語意。
   if (!response.ok) {
-    throw new RateLimitError(`QueryTradeInfo 非 200 回應：${response.status}`);
+    if (response.status === 429 || response.status === 503) {
+      throw new RateLimitError(`QueryTradeInfo 限流回應：${response.status}`);
+    }
+    throw new QueryTradeInfoHttpError(response.status);
   }
 
   const text = await response.text();

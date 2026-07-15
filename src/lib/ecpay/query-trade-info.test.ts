@@ -23,6 +23,7 @@ import {
   buildQueryTradeParams,
   queryTradeInfo,
   RateLimitError,
+  QueryTradeInfoHttpError,
 } from "@/lib/ecpay/query-trade-info";
 
 const HASH_KEY = "test-hash-key";
@@ -106,12 +107,26 @@ describe("queryTradeInfo", () => {
     );
   });
 
-  it("非 200 回應 → 拋出 RateLimitError（呼叫端據此中止批次）", async () => {
-    global.fetch = vi.fn().mockResolvedValue(new Response("", { status: 403 }));
+  it("429／503 回應 → 拋出 RateLimitError（限流訊號，呼叫端據此中止批次）", async () => {
+    for (const status of [429, 503]) {
+      global.fetch = vi.fn().mockResolvedValue(new Response("", { status }));
 
-    await expect(queryTradeInfo("INC20260702ABC123XY")).rejects.toBeInstanceOf(
-      RateLimitError,
+      await expect(
+        queryTradeInfo("INC20260702ABC123XY"),
+      ).rejects.toBeInstanceOf(RateLimitError);
+    }
+  });
+
+  it("其他非 200（如 500）→ QueryTradeInfoHttpError 而非 RateLimitError，訊息帶 status", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
+
+    const error = await queryTradeInfo("INC20260702ABC123XY").catch(
+      (e: unknown) => e,
     );
+    expect(error).toBeInstanceOf(QueryTradeInfoHttpError);
+    expect(error).not.toBeInstanceOf(RateLimitError);
+    expect((error as QueryTradeInfoHttpError).status).toBe(500);
+    expect((error as Error).message).toContain("500");
   });
 
   it("TradeAmt 非數字格式 → tradeAmt 回傳 NaN，不誤判為金額相符", async () => {

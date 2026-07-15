@@ -32,13 +32,21 @@ vi.mock("@/lib/env.server", () => ({
 // query-trade-info 已在 src/lib/ecpay/query-trade-info.test.ts 獨立覆蓋；這裡
 // 當依賴邊界整個 mock 掉，讓這支測試專注在 reconcile route 自己的決策邏輯上。
 // vi.mock 工廠會被 hoist 到檔案最上方，故用 vi.hoisted 讓內部參照的變數安全初始化。
-const { queryTradeInfo, RateLimitError } = vi.hoisted(() => {
-  class RateLimitError extends Error {}
-  return { queryTradeInfo: vi.fn(), RateLimitError };
-});
+const { queryTradeInfo, RateLimitError, QueryTradeInfoHttpError } = vi.hoisted(
+  () => {
+    class RateLimitError extends Error {}
+    class QueryTradeInfoHttpError extends Error {
+      constructor(readonly status: number) {
+        super(`QueryTradeInfo 非 200 回應：${status}`);
+      }
+    }
+    return { queryTradeInfo: vi.fn(), RateLimitError, QueryTradeInfoHttpError };
+  },
+);
 vi.mock("@/lib/ecpay/query-trade-info", () => ({
   queryTradeInfo: (...args: unknown[]) => queryTradeInfo(...(args as [string])),
   RateLimitError,
+  QueryTradeInfoHttpError,
 }));
 
 // ensureOrderPaid / ensureNotificationSent 的行為已在
@@ -302,6 +310,11 @@ describe("認證", () => {
     expect(res.status).toBe(401);
   });
 
+  it("Authorization 長度相同但內容錯誤 → 401（timing-safe 比對路徑，T99）", async () => {
+    const res = await GET(buildRequest("Bearer test-cron-secreX"));
+    expect(res.status).toBe(401);
+  });
+
   it("Authorization 正確但無候選 → 200，摘要全 0", async () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     expect(res.status).toBe(200);
@@ -318,6 +331,7 @@ describe("認證", () => {
       sweepSent: 0,
       sweepStillFailing: 0,
       rateLimited: false,
+      httpAborted: false,
       invoicesSwept: 0,
       invoicesIssued: 0,
       invoicesFailed: 0,
@@ -868,6 +882,24 @@ describe("queryTradeInfo 拋例外", () => {
     expect(body.rateLimited).toBe(true);
     expect(body.checked).toBe(1);
     expect(queryTradeInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("QueryTradeInfoHttpError（ECPay 5xx）→ 同樣中止整批，但不標 rateLimited（T99）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+      { id: "p2", order_id: "o2", merchant_trade_no: "M2", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(new QueryTradeInfoHttpError(500));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.httpAborted).toBe(true);
+    expect(body.rateLimited).toBe(false);
+    expect(body.checked).toBe(1);
+    // 中止路徑不得蓋冷卻戳記，下次排程要能原樣重撈同一筆。
+    expect(queryTradeInfo).toHaveBeenCalledTimes(1);
+    expect(ensureOrderPaid).not.toHaveBeenCalled();
   });
 
   it("一般例外（如驗章失敗）→ 該筆記為 unexpected 並繼續下一筆", async () => {
