@@ -9,4 +9,5 @@ overrides:
   # T94 / CVE-2026-41305 (GHSA-qx2v-qp2m-jg93)：next 16.2.9 直接 pin
   # postcss 8.4.31（有 XSS 公告）。本站不解析使用者 CSS、postcss 僅
   # build 期使用，實際曝險極低，但釘 >=8.5.10 消除 audit 告警。
-  postcss@<8.5.10: '>=8.5.10'
+  # 上界 <9 防止日後 lockfile 重生成靜默拉入 postcss 主版本（CLAUDE.md §2）。
+  postcss@<8.5.10: '>=8.5.10 <9'
