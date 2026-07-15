@@ -224,8 +224,8 @@ beforeEach(() => {
   // mockResolvedValueOnce 佇列，會外洩到下一個測試造成順序相依的 flaky。
   // reset 後重新掛預設值。
   ensureOrderPaid.mockReset();
-  // 預設回 "promoted"（三態之一）：健康搶救路徑。個別測試可覆寫成
-  // "anomalous" 驗證「錢收在已關閉訂單上」的訊號分流。
+  // 預設回 "promoted"（四態之一）：健康搶救路徑。個別測試可覆寫成
+  // "closed"／"indeterminate"／"already-settled" 驗證分類與訊號分流。
   ensureOrderPaid.mockResolvedValue("promoted");
   ensureNotificationSent.mockReset();
   ensureNotificationSent.mockResolvedValue(true);
@@ -334,6 +334,9 @@ describe("單筆候選：TradeStatus=1", () => {
       paidUpdateBeforeEnsure = recorded.some(
         (r) => (r.values as any)?.status === "paid",
       );
+      // 分類掛在①的回傳上：這裡照樣回真實情境的 "promoted"，下方的
+      // promoted 計數斷言才有意義。
+      return "promoted";
     });
 
     const res = await GET(buildRequest("Bearer test-cron-secret"));
@@ -396,12 +399,20 @@ describe("單筆候選：TradeStatus=1", () => {
       raw: { TradeStatus: "1" },
     });
 
+    // ① 的真實回傳：第一天真的推進（promoted）、第二天冪等 no-op 撞上
+    // 已 paid 的訂單（already-settled）。
+    ensureOrderPaid
+      .mockResolvedValueOnce("promoted")
+      .mockResolvedValueOnce("already-settled");
+
     // 第一天：CAS 遇暫時性 DB 故障。
     casErrorIds.add("p1");
     const day1 = await (
       await GET(buildRequest("Bearer test-cron-secret"))
     ).json();
-    expect(day1.promoted).toBe(0);
+    // promoted 掛在①的回傳：搶救發生在第一天，就計在第一天——②的 CAS
+    // {error} 只影響 payment 何時補翻，不改變「訂單是這一輪被搶救」的事實。
+    expect(day1.promoted).toBe(1);
     expect(day1.unexpected).toBe(1);
     // CAS {error} 不擋③：訂單已 paid（①成功），信該寄。
     expect(ensureNotificationSent).toHaveBeenCalledWith(
@@ -416,7 +427,8 @@ describe("單筆候選：TradeStatus=1", () => {
       await GET(buildRequest("Bearer test-cron-secret"))
     ).json();
 
-    expect(day2.promoted).toBe(1);
+    // 第二天只是 payment 補翻（①回 already-settled），不重複計 promoted。
+    expect(day2.promoted).toBe(0);
     expect(day2.unexpected).toBe(0);
     expect(
       recorded.some(
@@ -427,7 +439,7 @@ describe("單筆候選：TradeStatus=1", () => {
     expect(ensureOrderPaid).toHaveBeenCalledTimes(2);
   });
 
-  it("錢收在已關閉訂單上（ensureOrderPaid 回 anomalous）→ payment 仍翻 paid（財務事實）、不計 promoted、走 promotedOnClosedOrder＋error 告警", async () => {
+  it("錢收在已關閉訂單上（ensureOrderPaid 回 closed）→ payment 仍翻 paid（財務事實）、不計 promoted、走 promotedOnClosedOrder＋error 告警", async () => {
     candidates = [
       { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
     ];
@@ -438,7 +450,7 @@ describe("單筆候選：TradeStatus=1", () => {
       raw: { TradeStatus: "1" },
     });
     // 訂單已被 T66 逾期取消（cancelled／refunded 等），但綠界確認錢已收到。
-    ensureOrderPaid.mockResolvedValueOnce("anomalous");
+    ensureOrderPaid.mockResolvedValueOnce("closed");
 
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
@@ -453,6 +465,14 @@ describe("單筆候選：TradeStatus=1", () => {
     // 不是健康搶救：不計 promoted、走獨立桶。
     expect(body.promoted).toBe(0);
     expect(body.promotedOnClosedOrder).toBe(1);
+    // closed 是分類結果不是故障：不得污染 unexpected／notifyFailed。
+    expect(body.unexpected).toBe(0);
+    expect(body.notifyFailed).toBe(0);
+    // ③照跑（ensureNotificationSent 內部自行判斷已關閉訂單不寄）。
+    expect(ensureNotificationSent).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+    );
     // error 級告警，與 warning 的 promoted stuck payment 分流。
     expect(sentryCaptureMessage).toHaveBeenCalledWith(
       "reconcile: money received on closed order",
@@ -461,6 +481,65 @@ describe("單筆候選：TradeStatus=1", () => {
     // 不得發「搶救成功」的 warning 告警。
     expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
       "reconcile: promoted stuck payment",
+      expect.anything(),
+    );
+  });
+
+  it("closed＋② CAS miss（payment 已被別人翻走）→ 告警仍發、promotedOnClosedOrder 仍計、promoted 不計", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    casLossIds.add("p1"); // ② CAS 0 rows：payment 已被 webhook／前一輪翻成 paid
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+    ensureOrderPaid.mockResolvedValueOnce("closed");
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    // 分類掛①不掛②：CAS miss＝payment 是別人翻的，錢一樣收在已關閉訂單
+    // 上，P0 告警與計數不得因此消失（R2 review #4 的漏報路徑）。
+    expect(body.promotedOnClosedOrder).toBe(1);
+    // closed 與 promoted 互斥：鎖住不雙重計數。
+    expect(body.promoted).toBe(0);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: money received on closed order",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("indeterminate（①無法確認訂單現況）＋② CAS 搶贏 → 維持修前語意：計 promoted＋warning", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 25000,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+    // ①的訂單 CAS miss、重查又失敗（或查無此單）：無法確認現況。
+    ensureOrderPaid.mockResolvedValueOnce("indeterminate");
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    // 保守語意：這一輪確實翻了 payment（② CAS 搶贏）才計 promoted，
+    // 不憑「查不到」推論成 closed 啟動錢務裁決。
+    expect(body.promoted).toBe(1);
+    expect(body.promotedOnClosedOrder).toBe(0);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: promoted stuck payment",
+      expect.objectContaining({ level: "warning" }),
+    );
+    expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
+      "reconcile: money received on closed order",
       expect.anything(),
     );
   });
@@ -528,6 +607,9 @@ describe("單筆候選：TradeStatus=1", () => {
       { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
     ];
     casLossIds.add("p1"); // 模擬 webhook 在這次 UPDATE 前就已經把 payment 推進成 paid
+    // webhook 已贏＝訂單早已被 webhook 推進，①的真實回傳是 already-settled
+    //（分類改掛①後，預設的 "promoted" 會被計數，不再符合此情境）。
+    ensureOrderPaid.mockResolvedValueOnce("already-settled");
     queryTradeInfo.mockResolvedValue({
       tradeStatus: "1",
       tradeAmt: 25000,
@@ -569,6 +651,38 @@ describe("單筆候選：TradeStatus=1", () => {
     // last_reconciled_at 寫入失敗不應該讓整支 route 掛掉或跳過該筆的業務邏輯。
     expect(res.status).toBe(200);
     expect(body.promoted).toBe(1);
+  });
+
+  it("TradeAmt 與 payment.amount 同為 0 → 走 mismatch 分支但發獨立的 zero-amount 告警、不推進", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 0 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "1",
+      tradeAmt: 0,
+      tradeNo: "T1",
+      raw: { TradeStatus: "1" },
+    });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    // 0===0 被正數防呆擋下：絕不可自動改狀態。
+    expect(body.mismatches).toBe(1);
+    expect(body.promoted).toBe(0);
+    expect(ensureOrderPaid).not.toHaveBeenCalled();
+    expect(recorded.some((r) => (r.values as any)?.status === "paid")).toBe(
+      false,
+    );
+    // 訊息與真正的金額不符分開：這裡沒有差額可查，是零元 payment 異常。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: zero-amount payment anomaly",
+      expect.objectContaining({ level: "error" }),
+    );
+    expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
+      "reconcile: amount mismatch",
+      expect.anything(),
+    );
   });
 
   it("金額不符 → mismatches 計數、不呼叫 ensureOrderPaid、不寫 status=paid", async () => {

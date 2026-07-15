@@ -93,17 +93,21 @@ async function notifyOrderPaid(
 // order_status_log.note 供稽核——區分「webhook 正常推進」與「靠對帳兜底才推進」，
 // 後者代表 webhook 當初失靈過，是 T90 runbook 判斷 webhook 可靠度的依據。
 //
-// 回傳三態，讓呼叫端能區分「這次推進的性質」（webhook 端不使用回傳值，向後相容）：
+// 回傳四態，讓呼叫端能區分「這次推進的性質」（webhook 端不使用回傳值，向後相容）：
 // - "promoted"：這次真的把訂單從 pending_payment 推進成 paid。
 // - "already-settled"：付款先前已成立（訂單在 PAID_LINEAGE 上）的正常冪等重入。
-// - "anomalous"：cancelled／refunded／查無此單／狀態重查失敗——已在本函式內發
-//   P0 告警，reconcile 據此把「錢收在已關閉訂單上」與健康搶救訊號分流。
+// - "closed"：重查後**已確認**訂單處於非 PAID_LINEAGE 的關閉狀態（cancelled／
+//   refunded 等）——錢確定收在已關閉訂單上，reconcile 據此走人工裁決流程。
+// - "indeterminate"：重查失敗（statusError）或查無此單——**無法確認**現況，
+//   不可與 closed 混為一談（不能只憑「查不到」就啟動錢務裁決），reconcile
+//   對它維持保守處理。
+// closed／indeterminate 都已在本函式內發 P0 告警。
 // DB 暫時性錯誤照舊 throw（呼叫端的重試機制依賴這個契約）。
 export async function ensureOrderPaid(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
   source: string,
-): Promise<"promoted" | "already-settled" | "anomalous"> {
+): Promise<"promoted" | "already-settled" | "closed" | "indeterminate"> {
   // 條件式 UPDATE：只有真正搶到這次推進的請求才會拿到 promoted，
   // 避免兩個近乎同時抵達的重送請求都各自寫入 order_status_log（該表無 unique 約束）。
   // 訂單若已經是 paid（例如上次執行已推進成功、但通知半路失敗），這裡安全地
@@ -153,7 +157,10 @@ export async function ensureOrderPaid(
         "ensureOrderPaid: order in unexpected status, payment may be stuck",
         { level: "error", extra: { orderId, status, source } },
       );
-      return "anomalous";
+      // 「確認已關閉」與「無法確認」必須分開回報：前者是錢務裁決訊號
+      // （closed），後者只是這一輪查不到現況（indeterminate），呼叫端
+      // 不該憑它啟動「錢收在已關閉訂單上」的人工流程。
+      return statusError || !current ? "indeterminate" : "closed";
     }
     return "already-settled";
   }

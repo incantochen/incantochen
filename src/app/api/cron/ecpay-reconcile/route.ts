@@ -134,9 +134,9 @@ async function sweepFailedNotifications(
 type Summary = {
   checked: number;
   promoted: number;
-  // 錢確認收到、payment 翻了 paid，但訂單處於 cancelled／refunded 等已關閉
-  // 狀態（ensureOrderPaid 回報 anomalous）——與 promoted（健康搶救）分流，
-  // 這是「錢收在已關閉訂單上」的獨立訊號，須走人工退款（ops-runbook §5/§6）。
+  // 錢確認收到，但訂單處於 cancelled／refunded 等已關閉狀態（ensureOrderPaid
+  // 回報 closed）——與 promoted（健康搶救）分流，這是「錢收在已關閉訂單上」
+  // 的獨立訊號，須走人工裁決：退款或恢復訂單（ops-runbook §6.1）。
   promotedOnClosedOrder: number;
   mismatches: number;
   failed: number;
@@ -275,8 +275,9 @@ export async function GET(request: Request) {
             // 段失敗時候選鍵已被消滅，隔日 cron 永遠選不到這筆——客人已付款、
             // 訂單永久卡 pending_payment、確認信未寄，安全網自身留盲點。
             // ensureOrderPaid 冪等（orders 條件式 UPDATE CAS），webhook 已推進
-            // 時安全 no-op。已知代價：①之後任一步在本輪失敗時，promoted 計數
-            // 會落在隔日補翻的那一輪，日報跨日不守恆屬候選鍵保留的必然結果。
+            // 時安全 no-op。promoted 計數掛在①的回傳（見下方分類），計在搶救
+            // 真正發生那一輪；隔日補翻 payment 的那一輪①回 already-settled、
+            // 不再重複計。
             const orderResult = await ensureOrderPaid(
               serviceRole,
               payment.order_id,
@@ -316,38 +317,60 @@ export async function GET(request: Request) {
                   error: updateError.message,
                 },
               });
-            } else if (promotedRow) {
-              if (orderResult === "anomalous") {
-                // ①回報訂單處於 cancelled／refunded 等已關閉狀態，但綠界確認
-                // 錢已收到——payment 照翻 paid（財務事實：gateway_trade_no／
-                // raw_callback 是日後退款的唯一依據，必須落地），但這不是
-                // 「搶救成功」：不計 promoted、走獨立計數＋error 級告警，與
-                // 健康搶救訊號分流。單次告警漏看的殘餘風險由人工退款程序
-                // 承接（ops-runbook §5/§6）。
-                summary.promotedOnClosedOrder += 1;
-                Sentry.captureMessage(
-                  "reconcile: money received on closed order",
-                  {
-                    level: "error",
-                    extra: {
-                      orderId: payment.order_id,
-                      merchantTradeNo: payment.merchant_trade_no,
-                    },
-                  },
-                );
-              } else {
-                summary.promoted += 1;
-                // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
-                // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
-                Sentry.captureMessage("reconcile: promoted stuck payment", {
-                  level: "warning",
+            }
+
+            // 分類掛在①的 orderResult 上、不論②結果——②只回答「payment 這
+            // 一輪有沒有翻成」，回答不了「這筆搶救的性質」：分類若 gate 在
+            // ② CAS 搶贏上，② CAS miss／{error} 時「錢收在已關閉訂單」的
+            // P0 告警整個不發（漏報）、promoted 也計錯天。
+            if (orderResult === "closed") {
+              // ①重查已確認訂單處於 cancelled／refunded 等關閉狀態，但綠界
+              // 確認錢已收到——payment 照翻 paid（財務事實：gateway_trade_no／
+              // raw_callback 是日後退款的唯一依據，必須落地），但這不是
+              // 「搶救成功」：不計 promoted、走獨立計數＋error 級告警，與
+              // 健康搶救訊號分流。不論②結果都要發：② CAS miss＝payment 被
+              // 別人翻的，錢一樣收在已關閉訂單上；② {error}＝payment 留
+              // pending、隔日再入選再告警，對 P0 錢務問題是催辦不是噪音。
+              // 單次告警漏看的殘餘風險由人工裁決程序承接（ops-runbook §6.1）。
+              summary.promotedOnClosedOrder += 1;
+              Sentry.captureMessage(
+                "reconcile: money received on closed order",
+                {
+                  level: "error",
                   extra: {
                     orderId: payment.order_id,
                     merchantTradeNo: payment.merchant_trade_no,
                   },
-                });
-              }
+                },
+              );
+            } else if (orderResult === "promoted") {
+              // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
+              // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
+              // 不論②結果：搶救＝①把訂單推進成 paid，計在發生的這一輪；
+              // ②失敗只代表 payment 隔日補翻，屆時①回 already-settled 不重計。
+              summary.promoted += 1;
+              Sentry.captureMessage("reconcile: promoted stuck payment", {
+                level: "warning",
+                extra: {
+                  orderId: payment.order_id,
+                  merchantTradeNo: payment.merchant_trade_no,
+                },
+              });
+            } else if (orderResult === "indeterminate" && promotedRow) {
+              // ①無法確認訂單現況（重查失敗／查無此單，①內已發 P0 告警）：
+              // 對計數維持保守語意——只有這一輪確實翻了 payment（② CAS 搶贏）
+              // 才計 promoted，不憑「查不到」推論搶救性質。
+              summary.promoted += 1;
+              Sentry.captureMessage("reconcile: promoted stuck payment", {
+                level: "warning",
+                extra: {
+                  orderId: payment.order_id,
+                  merchantTradeNo: payment.merchant_trade_no,
+                },
+              });
             }
+            // orderResult === "already-settled"：不計數——搶救（若曾發生）已
+            // 計在它真正發生的那一輪；②搶贏只是 payment 補翻，不是新事件。
 
             // ③ 補寄通知。冪等，且不 gate payment 翻 paid：payment.status 是
             // 財務記錄（錢已確認收到），不拿它當通知重試旗標——通知失敗由
@@ -379,16 +402,24 @@ export async function GET(request: Request) {
           // 「明確吻合」才能動用，呼應「絕不信任前端價格」的紅線精神。
           // payment 留 pending＝每日重新入選、每日重告警：這是 P0 錢務問題
           // 的催辦機制（intentional），人工處理完（ops-runbook §2）告警自止。
+          // 能走到這裡且兩值相等＝同為 0 被上方正數防呆擋下——那不是「金額
+          // 不符」而是「零元 payment」異常（建單 bug／回應被解析成 0），
+          // 訊息分開，告警才不會把人導去查根本不存在的差額。
           summary.mismatches += 1;
-          Sentry.captureMessage("reconcile: amount mismatch", {
-            level: "error",
-            extra: {
-              orderId: payment.order_id,
-              merchantTradeNo: payment.merchant_trade_no,
-              tradeAmt: result.tradeAmt,
-              paymentAmount: payment.amount,
+          Sentry.captureMessage(
+            Number(result.tradeAmt) === Number(payment.amount)
+              ? "reconcile: zero-amount payment anomaly"
+              : "reconcile: amount mismatch",
+            {
+              level: "error",
+              extra: {
+                orderId: payment.order_id,
+                merchantTradeNo: payment.merchant_trade_no,
+                tradeAmt: result.tradeAmt,
+                paymentAmount: payment.amount,
+              },
             },
-          });
+          );
         }
       } else if (result.tradeStatus === "10200095") {
         // ECPay 官方文件記載的付款失敗碼：只告警，不把 payment.status 改成

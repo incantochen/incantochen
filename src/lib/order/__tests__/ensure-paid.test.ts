@@ -56,6 +56,7 @@ function makeServiceRole(opts: {
   cartDeleteError?: any;
   cartUpdatedAt?: string | null; // null 代表 cart 已不存在
   currentOrderStatus?: string; // 給「!promoted」分支查詢現況用
+  currentOrderStatusError?: any; // 模擬「!promoted」分支的重查回傳 { error }
   orderItems?: { product_id: string; config_snapshot: unknown }[];
   cartItems?: { id: string; product_id: string; config_snapshot: unknown }[];
 }) {
@@ -81,9 +82,11 @@ function makeServiceRole(opts: {
             eq: () => ({
               maybeSingle: () =>
                 Promise.resolve({
-                  data: opts.currentOrderStatus
-                    ? { status: opts.currentOrderStatus }
-                    : null,
+                  data:
+                    !opts.currentOrderStatusError && opts.currentOrderStatus
+                      ? { status: opts.currentOrderStatus }
+                      : null,
+                  error: opts.currentOrderStatusError ?? null,
                 }),
             }),
           }),
@@ -291,12 +294,40 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       currentOrderStatus: "cancelled",
     });
 
-    // 回傳 "anomalous"：reconcile 據此把「錢收在已關閉訂單上」與健康搶救分流。
+    // 回傳 "closed"（已確認關閉）：reconcile 據此把「錢收在已關閉訂單上」
+    // 與健康搶救分流、啟動人工裁決。
     await expect(
       ensureOrderPaid(serviceRole, "order-1", "webhook"),
-    ).resolves.toBe("anomalous");
+    ).resolves.toBe("closed");
     expect(cartDeleteCalls).toEqual([]);
     // 「錢收到了、訂單卡 cancelled」不可靜默放過。
+    expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("!promoted 且重查回傳 { error }（無法確認現況）→ 回 indeterminate、告警照發", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatusError: { message: "connection timeout" },
+    });
+
+    // 「無法確認」不可與「已確認關閉」混為一態：closed 會啟動錢務裁決
+    // 流程，只憑一次查詢失敗不該觸發它。
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("indeterminate");
+    // 但「不要靜默」不變：P0 告警照發。
+    expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("!promoted 且重查查無此單 → 回 indeterminate、告警照發", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      // currentOrderStatus 不給 → maybeSingle 回 data: null
+    });
+
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("indeterminate");
     expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
   });
 
