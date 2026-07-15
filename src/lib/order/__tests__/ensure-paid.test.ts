@@ -167,7 +167,10 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       cartUpdatedAt: CART_UNCHANGED_SINCE,
     });
 
-    await ensureOrderPaid(serviceRole, "order-1", "webhook");
+    // 真正搶到推進的 happy path 回傳 "promoted"（reconcile 據此計數）。
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("promoted");
 
     expect(cartDeleteCalls).toEqual(["cart-1"]);
   });
@@ -253,10 +256,15 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       currentOrderStatus: "paid",
     });
 
-    await ensureOrderPaid(serviceRole, "order-1", "webhook");
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("already-settled");
 
     expect(cartDeleteCalls).toEqual([]);
+    // 良性路徑兩支 Sentry API 都不得被呼叫——只鎖 captureMessage 的話，實作
+    // 若改用 captureException 告警會靜默漏測。
     expect(sentryCaptureMessage).not.toHaveBeenCalled();
+    expect(sentryCaptureException).not.toHaveBeenCalled();
   });
 
   it("!promoted 且訂單已推進到 in_production（PAID_LINEAGE）→ 視為正常冪等重入，不告警（T107）", async () => {
@@ -270,9 +278,11 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
 
     await expect(
       ensureOrderPaid(serviceRole, "order-1", "reconcile"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("already-settled");
     expect(cartDeleteCalls).toEqual([]);
+    // 同上一測試：良性路徑兩支 Sentry API 都不得被呼叫。
     expect(sentryCaptureMessage).not.toHaveBeenCalled();
+    expect(sentryCaptureException).not.toHaveBeenCalled();
   });
 
   it("!promoted 且訂單現況是 cancelled（cron 搶先取消、但錢已收到）→ 不 throw、發告警，仍正常結束", async () => {
@@ -281,9 +291,10 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       currentOrderStatus: "cancelled",
     });
 
+    // 回傳 "anomalous"：reconcile 據此把「錢收在已關閉訂單上」與健康搶救分流。
     await expect(
       ensureOrderPaid(serviceRole, "order-1", "webhook"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("anomalous");
     expect(cartDeleteCalls).toEqual([]);
     // 「錢收到了、訂單卡 cancelled」不可靜默放過。
     expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
@@ -302,9 +313,10 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       cartDeleteError: { message: "db down" },
     });
 
+    // 清車失敗只告警不拋錯，仍走完 promoted 路徑回 "promoted"。
     await expect(
       ensureOrderPaid(serviceRole, "order-1", "webhook"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("promoted");
     expect(cartDeleteCalls).toEqual(["cart-1"]);
   });
 });

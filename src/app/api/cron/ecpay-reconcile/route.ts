@@ -17,7 +17,9 @@ const MIN_AGE_MS = 10 * 60 * 1000;
 // cron 起跑（前面候選每筆 400ms 節流＋ECPay 往返），若冷卻＝24h，隔日 cron 的
 // cutoff（now−24h）會差幾秒到幾分鐘而撈不到同一筆，「隔日重試」實際變隔兩日。
 // T107 之後這個冷卻從「告警去重」升級為「失敗自癒的重試節奏」，20h 用來吸收
-// cron jitter＋整批處理時間。
+// cron jitter＋整批處理時間。注意：此值與「每日一次」的排程頻率耦合——改排程
+// （T124 小時級）必須連動改這裡（規則與連動清單見 tasks.csv T124 說明欄），
+// 兩者相距僅一個檔案內常數與外部設定，不另加程式防呆。
 const RECONCILE_COOLDOWN_MS = 20 * 60 * 60 * 1000;
 const THROTTLE_MS = 400;
 const SWEEP_LIMIT = 20;
@@ -35,8 +37,8 @@ async function markReconciled(
     .update({ last_reconciled_at: new Date().toISOString() })
     .eq("id", paymentId);
 
-  // 跟其他 Supabase 呼叫一樣必須檢查 { error }：漏檢查的話，這筆的
-  // 24 小時對帳冷卻紀錄悄悄沒寫入，隔天同一筆又會被撈出來重新告警。
+  // 跟其他 Supabase 呼叫一樣必須檢查 { error }：漏檢查的話，這筆的對帳冷卻
+  // 紀錄（RECONCILE_COOLDOWN_MS）悄悄沒寫入，隔天同一筆又會被撈出來重新告警。
   if (error) {
     console.error("[ecpay-reconcile] last_reconciled_at update failed", error);
     Sentry.captureMessage("reconcile: last_reconciled_at update failed", {
@@ -132,6 +134,10 @@ async function sweepFailedNotifications(
 type Summary = {
   checked: number;
   promoted: number;
+  // 錢確認收到、payment 翻了 paid，但訂單處於 cancelled／refunded 等已關閉
+  // 狀態（ensureOrderPaid 回報 anomalous）——與 promoted（健康搶救）分流，
+  // 這是「錢收在已關閉訂單上」的獨立訊號，須走人工退款（ops-runbook §5/§6）。
+  promotedOnClosedOrder: number;
   mismatches: number;
   failed: number;
   unexpected: number;
@@ -155,6 +161,7 @@ export async function GET(request: Request) {
   const summary: Summary = {
     checked: 0,
     promoted: 0,
+    promotedOnClosedOrder: 0,
     mismatches: 0,
     failed: 0,
     unexpected: 0,
@@ -163,6 +170,23 @@ export async function GET(request: Request) {
     sweepSent: 0,
     sweepStillFailing: 0,
     rateLimited: false,
+  };
+
+  // 單筆候選「非預期失敗」的共用出口：計數＋Sentry exception。已知取捨：同一
+  // 筆候選一輪內可能計到 2 次 unexpected（例如②的 CAS {error} 與③的 throw 各
+  // 記一次）——兩個獨立故障本來就是兩個訊號，去重需額外狀態、弊大於利，維持
+  // 雙計（PR #67 review 拍板）。
+  const recordUnexpected = (
+    e: unknown,
+    payment: { order_id: string; merchant_trade_no: string },
+  ) => {
+    summary.unexpected += 1;
+    Sentry.captureException(e, {
+      extra: {
+        orderId: payment.order_id,
+        merchantTradeNo: payment.merchant_trade_no,
+      },
+    });
   };
 
   try {
@@ -208,10 +232,7 @@ export async function GET(request: Request) {
         }
         // 單筆查詢失敗（含 CheckMacValue 驗證失敗）：記錄並繼續下一筆，
         // 不讓一筆髒資料拖垮整批；last_reconciled_at 仍要寫，避免明天重查同一筆卡死。
-        summary.unexpected += 1;
-        Sentry.captureException(e, {
-          extra: { merchantTradeNo: payment.merchant_trade_no },
-        });
+        recordUnexpected(e, payment);
         await markReconciled(serviceRole, payment.id);
         // 節流不能因為這筆失敗就跳過——連續幾筆壞資料若零間隔連續打
         // ECPay，正是節流機制原本要防止的情況。
@@ -219,7 +240,8 @@ export async function GET(request: Request) {
         continue;
       }
 
-      // 不論後續分支結果如何，先記錄查過的時間，避免同一筆 24 小時內被重複告警。
+      // 不論後續分支結果如何，先記錄查過的時間，避免同一筆在冷卻期
+      // （RECONCILE_COOLDOWN_MS）內被重複告警。
       await markReconciled(serviceRole, payment.id);
 
       if (result.tradeStatus === "1") {
@@ -234,30 +256,33 @@ export async function GET(request: Request) {
               tradeAmt: result.raw.TradeAmt,
             },
           });
-        } else if (Number(result.tradeAmt) === Number(payment.amount)) {
-          // ① 先推進訂單、payment 翻 paid 留到最後（T107／F-014）：候選查詢
-          // 以 payment.status='pending' 為鍵，若先翻 payment 再推進訂單，推進
-          // 段失敗時候選鍵已被消滅，隔日 cron 永遠選不到這筆——客人已付款、
-          // 訂單永久卡 pending_payment、確認信未寄，安全網自身留盲點。改成
-          // 推進失敗就跳過後續（payment 留 pending），隔日 24h 冷卻後自動重試。
-          // ensureOrderPaid 冪等（orders 條件式 UPDATE CAS），webhook 已推進
-          // 時安全 no-op；throw（狀態查詢 DB 暫時錯誤）不可中止整批——記錄後
-          // 繼續下一筆（T88 review）。
-          let orderPromotionOk = true;
+        } else if (
+          // 金額正數防呆：0 === 0 不得視為吻合——TradeAmt 與 payment.amount 同
+          // 時為 0（建單 bug／異常回應被解析成 0）時，絕不可據此自動改狀態，
+          // 落到下方 mismatch 分支告警交人工。notify 路徑（webhook 端）沒有這
+          // 道對稱防呆，待 T125 順手補上。
+          Number(result.tradeAmt) > 0 &&
+          Number(result.tradeAmt) === Number(payment.amount)
+        ) {
+          // 單一 try/catch 包住 ①②③：①的 throw 自然跳過②③（候選鍵保留、
+          // 冷卻期滿隔日自動重試＝F-014 修正核心）；②走 {error} 解構、不
+          // throw；③的 throw 落到同一個 catch。任何單筆失敗都不可中止整批
+          // （外層 catch 會直接 500，其餘候選當天全數不對帳）——記錄後繼續
+          // 下一筆（T88 review）。
           try {
-            await ensureOrderPaid(serviceRole, payment.order_id, "reconcile");
-          } catch (e) {
-            orderPromotionOk = false;
-            summary.unexpected += 1;
-            Sentry.captureException(e, {
-              extra: {
-                orderId: payment.order_id,
-                merchantTradeNo: payment.merchant_trade_no,
-              },
-            });
-          }
+            // ① 先推進訂單、payment 翻 paid 留到最後（T107／F-014）：候選查詢
+            // 以 payment.status='pending' 為鍵，若先翻 payment 再推進訂單，推進
+            // 段失敗時候選鍵已被消滅，隔日 cron 永遠選不到這筆——客人已付款、
+            // 訂單永久卡 pending_payment、確認信未寄，安全網自身留盲點。
+            // ensureOrderPaid 冪等（orders 條件式 UPDATE CAS），webhook 已推進
+            // 時安全 no-op。已知代價：①之後任一步在本輪失敗時，promoted 計數
+            // 會落在隔日補翻的那一輪，日報跨日不守恆屬候選鍵保留的必然結果。
+            const orderResult = await ensureOrderPaid(
+              serviceRole,
+              payment.order_id,
+              "reconcile",
+            );
 
-          if (orderPromotionOk) {
             // ② CAS 把 payment 翻 paid。.select().maybeSingle() 取得是否真的
             // 搶到這次 CAS：webhook 可能在 candidate 查詢之後、這個 UPDATE 之
             // 前就先推進成功，此時 0 rows affected 但 Supabase 不會回傳 error
@@ -279,20 +304,66 @@ export async function GET(request: Request) {
             if (updateError) {
               // 訂單已推進（①成功）、payment 留 pending：候選鍵保留，隔日
               // 重撈時①冪等 no-op、這裡的 CAS 重試補翻。短暫的「orders=paid
-              // 但 payment=pending」漂移屬自癒中，勿人工介入（ops-runbook §1）。
-              // 不擋③——訂單已 paid，信該寄。
+              // 但 payment=pending」漂移屬自癒中，勿人工介入（ops-runbook §1）
+              // ——嚴重度比照「promoted stuck payment」用 warning，不進
+              // exception。不擋③——訂單已 paid，信該寄。
               summary.unexpected += 1;
-              Sentry.captureException(new Error(updateError.message), {
+              Sentry.captureMessage("reconcile: payment CAS update failed", {
+                level: "warning",
                 extra: {
                   orderId: payment.order_id,
                   merchantTradeNo: payment.merchant_trade_no,
+                  error: updateError.message,
                 },
               });
             } else if (promotedRow) {
-              summary.promoted += 1;
-              // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
-              // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
-              Sentry.captureMessage("reconcile: promoted stuck payment", {
+              if (orderResult === "anomalous") {
+                // ①回報訂單處於 cancelled／refunded 等已關閉狀態，但綠界確認
+                // 錢已收到——payment 照翻 paid（財務事實：gateway_trade_no／
+                // raw_callback 是日後退款的唯一依據，必須落地），但這不是
+                // 「搶救成功」：不計 promoted、走獨立計數＋error 級告警，與
+                // 健康搶救訊號分流。單次告警漏看的殘餘風險由人工退款程序
+                // 承接（ops-runbook §5/§6）。
+                summary.promotedOnClosedOrder += 1;
+                Sentry.captureMessage(
+                  "reconcile: money received on closed order",
+                  {
+                    level: "error",
+                    extra: {
+                      orderId: payment.order_id,
+                      merchantTradeNo: payment.merchant_trade_no,
+                    },
+                  },
+                );
+              } else {
+                summary.promoted += 1;
+                // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
+                // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
+                Sentry.captureMessage("reconcile: promoted stuck payment", {
+                  level: "warning",
+                  extra: {
+                    orderId: payment.order_id,
+                    merchantTradeNo: payment.merchant_trade_no,
+                  },
+                });
+              }
+            }
+
+            // ③ 補寄通知。冪等，且不 gate payment 翻 paid：payment.status 是
+            // 財務記錄（錢已確認收到），不拿它當通知重試旗標——通知失敗由
+            // 下方 failed-notification sweep 每天補救，webhook 端的 ECPay
+            // 重送（若還有回呼）也走 reclaim 補寄。②的 updateError／CAS 輸給
+            // webhook 都不影響這裡照跑；訂單已關閉時它內部自行判斷不寄。
+            const notified = await ensureNotificationSent(
+              serviceRole,
+              payment.order_id,
+            );
+            if (!notified) {
+              // 已知取捨：併發雙跑（手動觸發撞上排程）時 sendOnce 的輸方會讓
+              // 這個計數虛報——「false＝未確認送達」是 T88 契約，不為降噪改
+              // 弱；實際投遞由 sendOnce 天然去重、sweep 自癒。
+              summary.notifyFailed += 1;
+              Sentry.captureMessage("reconcile: notification delivery failed", {
                 level: "warning",
                 extra: {
                   orderId: payment.order_id,
@@ -300,43 +371,14 @@ export async function GET(request: Request) {
                 },
               });
             }
-
-            // ③ 補寄通知。冪等，且不 gate payment 翻 paid：payment.status 是
-            // 財務記錄（錢已確認收到），不拿它當通知重試旗標——通知失敗由
-            // 下方 failed-notification sweep 每天補救，webhook 端的 ECPay
-            // 重送（若還有回呼）也走 reclaim 補寄。②的 updateError／CAS 輸給
-            // webhook 都不影響這裡照跑。throw 同①：記錄後繼續下一筆。
-            try {
-              const notified = await ensureNotificationSent(
-                serviceRole,
-                payment.order_id,
-              );
-              if (!notified) {
-                summary.notifyFailed += 1;
-                Sentry.captureMessage(
-                  "reconcile: notification delivery failed",
-                  {
-                    level: "warning",
-                    extra: {
-                      orderId: payment.order_id,
-                      merchantTradeNo: payment.merchant_trade_no,
-                    },
-                  },
-                );
-              }
-            } catch (e) {
-              summary.unexpected += 1;
-              Sentry.captureException(e, {
-                extra: {
-                  orderId: payment.order_id,
-                  merchantTradeNo: payment.merchant_trade_no,
-                },
-              });
-            }
+          } catch (e) {
+            recordUnexpected(e, payment);
           }
         } else {
           // 金額不符：只告警，絕不自動改狀態——對帳的自動修正權限收斂到
           // 「明確吻合」才能動用，呼應「絕不信任前端價格」的紅線精神。
+          // payment 留 pending＝每日重新入選、每日重告警：這是 P0 錢務問題
+          // 的催辦機制（intentional），人工處理完（ops-runbook §2）告警自止。
           summary.mismatches += 1;
           Sentry.captureMessage("reconcile: amount mismatch", {
             level: "error",
@@ -351,6 +393,7 @@ export async function GET(request: Request) {
       } else if (result.tradeStatus === "10200095") {
         // ECPay 官方文件記載的付款失敗碼：只告警，不把 payment.status 改成
         // failed——讓客人能重新付款屬 T66/T74 待付款生命週期整批的範圍。
+        // payment 留 pending＝每日重告警屬 intentional 催辦，同 mismatch 分支。
         summary.failed += 1;
         Sentry.captureMessage("reconcile: ECPay reports payment failed", {
           level: "warning",
