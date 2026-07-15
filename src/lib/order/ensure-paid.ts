@@ -93,11 +93,22 @@ async function notifyOrderPaid(
 // source 標示這次推進是被誰觸發（"webhook" 或 T89 的 "reconcile"），寫進
 // order_status_log.note 供稽核——區分「webhook 正常推進」與「靠對帳兜底才推進」，
 // 後者代表 webhook 當初失靈過，是 T90 runbook 判斷 webhook 可靠度的依據。
+//
+// 回傳四態，讓呼叫端能區分「這次推進的性質」（webhook 端不使用回傳值，向後相容）：
+// - "promoted"：這次真的把訂單從 pending_payment 推進成 paid。
+// - "already-settled"：付款先前已成立（訂單在 PAID_LINEAGE 上）的正常冪等重入。
+// - "closed"：重查後**已確認**訂單處於非 PAID_LINEAGE 的關閉狀態（cancelled／
+//   refunded 等）——錢確定收在已關閉訂單上，reconcile 據此走人工裁決流程。
+// - "indeterminate"：重查失敗（statusError）或查無此單——**無法確認**現況，
+//   不可與 closed 混為一談（不能只憑「查不到」就啟動錢務裁決），reconcile
+//   對它維持保守處理。
+// closed／indeterminate 都已在本函式內發 P0 告警。
+// DB 暫時性錯誤照舊 throw（呼叫端的重試機制依賴這個契約）。
 export async function ensureOrderPaid(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
   source: string,
-) {
+): Promise<"promoted" | "already-settled" | "closed" | "indeterminate"> {
   // 條件式 UPDATE：只有真正搶到這次推進的請求才會拿到 promoted，
   // 避免兩個近乎同時抵達的重送請求都各自寫入 order_status_log（該表無 unique 約束）。
   // 訂單若已經是 paid（例如上次執行已推進成功、但通知半路失敗），這裡安全地
@@ -121,13 +132,21 @@ export async function ensureOrderPaid(
     // 「錢收到了、但訂單卡在 cancelled」必須告警，不能跟正常冪等重入混淆
     // 而悄悄放過。
     // 這段的存在意義就是「不要靜默」，所以重查失敗（error）或查無此單
-    // （current 為 null）同樣要告警——只有明確確認「已是 paid」才安靜返回。
+    // （current 為 null）同樣要告警——只有明確確認「付款已成立」才安靜返回。
+    // 判斷用 PAID_LINEAGE 而非只認 paid：遲到的重入（ECPay 晚到的重送、或
+    // T107 後 reconcile 隔日補翻 payment CAS 的重試）可能撞上已被管理員推進
+    // 到製作／出貨的訂單——那是付款成立後的正常演進，只認 paid 會把它誤報成
+    // 「付款卡住」的 P0 告警（與 ops-runbook §1「漂移屬自癒中」矛盾）。
     const { data: current, error: statusError } = await serviceRole
       .from("orders")
       .select("status")
       .eq("id", orderId)
       .maybeSingle();
-    if (statusError || !current || current.status !== "paid") {
+    if (
+      statusError ||
+      !current ||
+      !PAID_LINEAGE.includes(current.status as OrderStatus)
+    ) {
       const status = statusError
         ? `查詢失敗: ${statusError.message}`
         : (current?.status ?? "查無此訂單");
@@ -139,8 +158,12 @@ export async function ensureOrderPaid(
         "ensureOrderPaid: order in unexpected status, payment may be stuck",
         { level: "error", extra: { orderId, status, source } },
       );
+      // 「確認已關閉」與「無法確認」必須分開回報：前者是錢務裁決訊號
+      // （closed），後者只是這一輪查不到現況（indeterminate），呼叫端
+      // 不該憑它啟動「錢收在已關閉訂單上」的人工流程。
+      return statusError || !current ? "indeterminate" : "closed";
     }
-    return;
+    return "already-settled";
   }
 
   const { error: logError } = await serviceRole
@@ -215,6 +238,8 @@ export async function ensureOrderPaid(
       );
     }
   }
+
+  return "promoted";
 }
 
 // 回傳 boolean（T88）：true = 通知已送達或無事可寄；false = 訂單為 paid 但

@@ -3,6 +3,17 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+// Sentry mock：驗證「該告警的路徑有告警、正常冪等重入不告警」——T107 後
+// reconcile 隔日重試會撞上已被推進的訂單，誤報與漏報都要鎖住。
+const { sentryCaptureMessage, sentryCaptureException } = vi.hoisted(() => ({
+  sentryCaptureMessage: vi.fn(),
+  sentryCaptureException: vi.fn(),
+}));
+vi.mock("@sentry/nextjs", () => ({
+  captureMessage: (...args: unknown[]) => sentryCaptureMessage(...args),
+  captureException: (...args: unknown[]) => sentryCaptureException(...args),
+}));
+
 const sendOrderConfirmation = vi.fn().mockResolvedValue(undefined);
 const sendNewOrderNotification = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/lib/email/order-confirmation", () => ({
@@ -51,6 +62,7 @@ function makeServiceRole(opts: {
   cartDeleteError?: any;
   cartUpdatedAt?: string | null; // null 代表 cart 已不存在
   currentOrderStatus?: string; // 給「!promoted」分支查詢現況用
+  currentOrderStatusError?: any; // 模擬「!promoted」分支的重查回傳 { error }
   orderItems?: { product_id: string; config_snapshot: unknown }[];
   cartItems?: { id: string; product_id: string; config_snapshot: unknown }[];
 }) {
@@ -76,9 +88,11 @@ function makeServiceRole(opts: {
             eq: () => ({
               maybeSingle: () =>
                 Promise.resolve({
-                  data: opts.currentOrderStatus
-                    ? { status: opts.currentOrderStatus }
-                    : null,
+                  data:
+                    !opts.currentOrderStatusError && opts.currentOrderStatus
+                      ? { status: opts.currentOrderStatus }
+                      : null,
+                  error: opts.currentOrderStatusError ?? null,
                 }),
             }),
           }),
@@ -144,6 +158,8 @@ beforeEach(() => {
   sendNewOrderNotification.mockClear();
   sendOnce.mockClear();
   sendOnceResult = {};
+  sentryCaptureMessage.mockClear();
+  sentryCaptureException.mockClear();
 });
 
 describe("ensureOrderPaid：T75 付款成功清購物車", () => {
@@ -160,7 +176,10 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       cartUpdatedAt: CART_UNCHANGED_SINCE,
     });
 
-    await ensureOrderPaid(serviceRole, "order-1", "webhook");
+    // 真正搶到推進的 happy path 回傳 "promoted"（reconcile 據此計數）。
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("promoted");
 
     expect(cartDeleteCalls).toEqual(["cart-1"]);
   });
@@ -240,27 +259,82 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
     expect(cartDeleteCalls).toEqual([]);
   });
 
-  it("!promoted 但訂單現況已是 paid（正常冪等重入）→ 不碰 cart，不視為異常", async () => {
+  it("!promoted 但訂單現況已是 paid（正常冪等重入）→ 不碰 cart，不視為異常、不告警", async () => {
     const { serviceRole, cartDeleteCalls } = makeServiceRole({
       promote: { data: null, error: null },
       currentOrderStatus: "paid",
     });
 
-    await ensureOrderPaid(serviceRole, "order-1", "webhook");
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("already-settled");
 
     expect(cartDeleteCalls).toEqual([]);
+    // 良性路徑兩支 Sentry API 都不得被呼叫——只鎖 captureMessage 的話，實作
+    // 若改用 captureException 告警會靜默漏測。
+    expect(sentryCaptureMessage).not.toHaveBeenCalled();
+    expect(sentryCaptureException).not.toHaveBeenCalled();
   });
 
-  it("!promoted 且訂單現況是 cancelled（cron 搶先取消、但錢已收到）→ 不 throw，仍正常結束", async () => {
+  it("!promoted 且訂單已推進到 in_production（PAID_LINEAGE）→ 視為正常冪等重入，不告警（T107）", async () => {
+    // T107 後可達的劇本：reconcile day1 推進訂單成功但 payment CAS 遇暫時錯誤
+    // → 當天管理員把訂單推進到製作 → day2 重試時 CAS miss、重查得 in_production。
+    // 這是付款成立後的正常演進，只認 exactly 'paid' 會誤發「付款卡住」P0 告警。
+    const { serviceRole, cartDeleteCalls } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatus: "in_production",
+    });
+
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "reconcile"),
+    ).resolves.toBe("already-settled");
+    expect(cartDeleteCalls).toEqual([]);
+    // 同上一測試：良性路徑兩支 Sentry API 都不得被呼叫。
+    expect(sentryCaptureMessage).not.toHaveBeenCalled();
+    expect(sentryCaptureException).not.toHaveBeenCalled();
+  });
+
+  it("!promoted 且訂單現況是 cancelled（cron 搶先取消、但錢已收到）→ 不 throw、發告警，仍正常結束", async () => {
     const { serviceRole, cartDeleteCalls } = makeServiceRole({
       promote: { data: null, error: null },
       currentOrderStatus: "cancelled",
     });
 
+    // 回傳 "closed"（已確認關閉）：reconcile 據此把「錢收在已關閉訂單上」
+    // 與健康搶救分流、啟動人工裁決。
     await expect(
       ensureOrderPaid(serviceRole, "order-1", "webhook"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("closed");
     expect(cartDeleteCalls).toEqual([]);
+    // 「錢收到了、訂單卡 cancelled」不可靜默放過。
+    expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("!promoted 且重查回傳 { error }（無法確認現況）→ 回 indeterminate、告警照發", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      currentOrderStatusError: { message: "connection timeout" },
+    });
+
+    // 「無法確認」不可與「已確認關閉」混為一態：closed 會啟動錢務裁決
+    // 流程，只憑一次查詢失敗不該觸發它。
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("indeterminate");
+    // 但「不要靜默」不變：P0 告警照發。
+    expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("!promoted 且重查查無此單 → 回 indeterminate、告警照發", async () => {
+    const { serviceRole } = makeServiceRole({
+      promote: { data: null, error: null },
+      // currentOrderStatus 不給 → maybeSingle 回 data: null
+    });
+
+    await expect(
+      ensureOrderPaid(serviceRole, "order-1", "webhook"),
+    ).resolves.toBe("indeterminate");
+    expect(sentryCaptureMessage).toHaveBeenCalledTimes(1);
   });
 
   it("cart delete 回傳 error → 不 throw，函式正常結束（清車失敗不擋付款確認流程）", async () => {
@@ -276,9 +350,10 @@ describe("ensureOrderPaid：T75 付款成功清購物車", () => {
       cartDeleteError: { message: "db down" },
     });
 
+    // 清車失敗只告警不拋錯，仍走完 promoted 路徑回 "promoted"。
     await expect(
       ensureOrderPaid(serviceRole, "order-1", "webhook"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("promoted");
     expect(cartDeleteCalls).toEqual(["cart-1"]);
   });
 });
