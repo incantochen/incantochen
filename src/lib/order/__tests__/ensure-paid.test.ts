@@ -27,6 +27,12 @@ vi.mock("@/lib/notification/send-once", () => ({
       ...(args as [unknown, { type: string; send: () => Promise<void> }]),
     ),
 }));
+// T42：ensure-paid.ts 現在也 import issueInvoiceForOrder，該模組會載入
+// src/lib/env.server（需要一整組 ECPay env）——這份測試只驗證
+// ensureOrderPaid，跟發票開立無關，mock 掉整條鏈避免無謂的 env 要求
+vi.mock("@/lib/order/issue-invoice", () => ({
+  issueInvoiceForOrder: vi.fn(),
+}));
 
 import { ensureOrderPaid, ensureNotificationSent } from "../ensure-paid";
 

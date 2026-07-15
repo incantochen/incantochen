@@ -15,9 +15,18 @@ import {
   createOrderFromCart,
   resolvePendingOrderForCart,
 } from "@/lib/order/create-order-from-cart";
+import {
+  invoiceTargetToMeta,
+  type InvoiceTargetInput,
+} from "@/lib/order/invoice-meta";
+import {
+  checkCompanyIdentifier,
+  checkBarcode,
+} from "@/lib/ecpay/invoice/validate";
 import { orderAccessCookieOptions } from "@/lib/order/order-access-token";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCheckoutGuestRateLimit } from "@/lib/rate-limit";
+import * as Sentry from "@sentry/nextjs";
 
 type CreateOrderResult = {
   ok: false;
@@ -48,6 +57,31 @@ export async function createOrder(
     parsed.data;
   // T71：正規化，避免大小寫變體繞過既有會員比對。
   const email = normalizeEmail(parsed.data.email);
+
+  // T42：三選一互斥已由 checkoutFormSchema 的 superRefine 保證格式正確，
+  // 這裡只需照 invoiceTarget 組出對應的 InvoiceTargetInput。
+  const invoiceTarget: InvoiceTargetInput =
+    parsed.data.invoiceTarget === "company"
+      ? { target: "company", customerIdentifier: parsed.data.taxId! }
+      : parsed.data.invoiceTarget === "mobile_barcode"
+        ? { target: "mobile_barcode", carrierNum: parsed.data.carrierBarcode! }
+        : { target: "personal" };
+
+  // T42：統編／手機條碼打 ECPay 驗證 API 擋明確無效值（檢查碼錯的統編、
+  // 查無歸戶的條碼）——這是 zod 格式檢查之外的真正防線，建單前擋下，
+  // 不讓錯誤資料流到付款後才在開立時爆掉。驗證 API 自身故障時不阻擋
+  // （validate.ts 內建 fail-open，官方原則：只有明確無效才擋）。
+  if (invoiceTarget.target === "company") {
+    const check = await checkCompanyIdentifier(invoiceTarget.customerIdentifier);
+    if (check.blocked) {
+      return { ok: false, error: check.error ?? "統一編號驗證未通過" };
+    }
+  } else if (invoiceTarget.target === "mobile_barcode") {
+    const check = await checkBarcode(invoiceTarget.carrierNum);
+    if (check.blocked) {
+      return { ok: false, error: check.error ?? "手機條碼驗證未通過" };
+    }
+  }
 
   const serviceRole = createServiceRoleClient();
   const cookieStore = await cookies();
@@ -99,6 +133,23 @@ export async function createOrder(
     return { ok: false, error: pending.error };
   }
   if (pending.kind === "reuse") {
+    // T42：沿用既有 pending 訂單時仍要帶入**這次**選的發票去向——客人可能
+    // 上次選個人、這次改成統編後重送（車與收件都沒變＝命中 reuse）。發票
+    // 尚未開立（invoice_status='none' 守衛），此時更新安全；失敗不擋付款
+    // （記 Sentry，開立時 fallback 舊值或個人發票）。
+    const { error: metaError } = await serviceRole
+      .from("orders")
+      .update({ invoice_meta: invoiceTargetToMeta(invoiceTarget) })
+      .eq("order_no", pending.orderNo)
+      .eq("status", "pending_payment")
+      .eq("invoice_status", "none");
+    if (metaError) {
+      console.error("[createOrder] reuse 路徑 invoice_meta 更新失敗", metaError);
+      Sentry.captureMessage("createOrder: reuse 路徑 invoice_meta 更新失敗", {
+        level: "warning",
+        extra: { orderNo: pending.orderNo, error: metaError.message },
+      });
+    }
     cookieStore.set(orderAccessCookieOptions(pending.orderNo));
     redirect(`/checkout/pay?order=${pending.orderNo}`);
   }
@@ -176,6 +227,7 @@ export async function createOrder(
       zipCode,
       shippingAddress,
     },
+    invoiceTarget,
   );
 
   if (!result.ok) {

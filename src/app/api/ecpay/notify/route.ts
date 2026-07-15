@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { verifyCheckMacValue } from "@/lib/ecpay/check-mac-value";
 import { serverEnv } from "@/lib/env.server";
@@ -6,6 +7,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
   ensureOrderPaid,
   ensureNotificationSent,
+  ensureInvoiceIssued,
 } from "@/lib/order/ensure-paid";
 
 const OK = () =>
@@ -28,6 +30,11 @@ async function settlePaid(
   orderId: string,
 ): Promise<Response> {
   await ensureOrderPaid(serviceRole, orderId, "webhook");
+  // T42：發票開立移出回應路徑（after()）——外部 ECPay Issue API 的延遲不可
+  // 佔用 ReturnURL 的 10 秒預算（藍圖：發票不阻塞金流）。ensureInvoiceIssued
+  // 冪等且絕不 throw，即使下方通知失敗回 0|ERR 觸發 ECPay 重送，重入也安全；
+  // 開立失敗由每日 reconcile cron 的未開票 sweep 兜底。
+  after(() => ensureInvoiceIssued(serviceRole, orderId));
   const notified = await ensureNotificationSent(serviceRole, orderId);
   if (!notified) return ERR("notification delivery failed");
   return OK();

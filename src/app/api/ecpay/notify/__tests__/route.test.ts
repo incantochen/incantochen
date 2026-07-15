@@ -3,6 +3,19 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+// next/server 的 after() 需要 Next request scope，vitest 直呼 handler 沒有——
+// 測試中改為同步立即執行回呼（生產行為是「回應送出後執行」，對測試斷言而言
+// 等價：回呼跑完才驗證副作用）
+vi.mock("next/server", async (importOriginal) => {
+  const original = await importOriginal<typeof import("next/server")>();
+  return {
+    ...original,
+    after: (cb: () => unknown) => {
+      void Promise.resolve(cb());
+    },
+  };
+});
+
 // serverEnv：測試用固定金鑰（值任意，簽章計算兩端一致即可）
 vi.mock("@/lib/env.server", () => ({
   serverEnv: {
@@ -27,6 +40,15 @@ vi.mock("@/lib/email/order-confirmation", () => ({
 vi.mock("@/lib/email/new-order-notification", () => ({
   sendNewOrderNotification: (...args: unknown[]) =>
     sendNewOrderNotification(...args),
+}));
+// T42：webhook 成功路徑會呼叫 ensureInvoiceIssued → issueInvoiceForOrder，
+// 這份測試專注驗證付款推進與通知邏輯，發票開立是獨立關注點（有自己的測試
+// 檔 src/lib/order/__tests__/issue-invoice.test.ts）——mock 掉避免對
+// 未設定的 ECPAY_INVOICE_URL 發出真實 fetch
+vi.mock("@/lib/order/issue-invoice", () => ({
+  issueInvoiceForOrder: vi
+    .fn()
+    .mockResolvedValue({ ok: true, invoiceNo: "TEST", alreadyIssued: false }),
 }));
 
 // sendOnce：T69 的去重/重試邏輯已在 send-once.test.ts 獨立覆蓋，

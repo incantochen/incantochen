@@ -32,6 +32,9 @@ export function AdminCheckoutForm() {
       zipCode,
       shippingAddress,
       customConsent,
+      // T42：admin 代客建單目前不收發票去向 UI，固定走個人發票（綠界載具）；
+      // schema 本身雖有 default('personal')，這裡明寫更清楚不是遺漏
+      invoiceTarget: "personal",
     });
     if (result.success) {
       setErrors({});
@@ -54,6 +57,7 @@ export function AdminCheckoutForm() {
         zipCode,
         shippingAddress,
         customConsent: customConsent as true,
+        invoiceTarget: "personal",
       });
       if (!result.ok) {
         if (result.priceUpdated) {

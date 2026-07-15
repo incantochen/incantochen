@@ -15,6 +15,12 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [zipCode, setZipCode] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [customConsent, setCustomConsent] = useState(false);
+  // T42：發票去向——個人（綠界載具）／公司統編／手機條碼載具三選一
+  const [invoiceTarget, setInvoiceTarget] = useState<
+    "personal" | "company" | "mobile_barcode"
+  >("personal");
+  const [taxId, setTaxId] = useState("");
+  const [carrierBarcode, setCarrierBarcode] = useState("");
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [priceUpdatedMessage, setPriceUpdatedMessage] = useState<string | null>(
@@ -32,6 +38,9 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       zipCode,
       shippingAddress,
       customConsent,
+      invoiceTarget,
+      taxId,
+      carrierBarcode,
     });
     if (result.success) {
       setErrors({});
@@ -56,6 +65,9 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         zipCode,
         shippingAddress,
         customConsent: customConsent as true,
+        invoiceTarget,
+        taxId,
+        carrierBarcode,
       });
       // redirect() in server action throws internally — only reach here on error
       if (!result.ok) {
@@ -181,6 +193,72 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       <div className="mb-5 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
         ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong>{" "}
         天，將於結帳再次告知。
+      </div>
+
+      {/* T42：電子發票去向 */}
+      <div className="mb-5">
+        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+          電子發票
+        </label>
+        <div className="mt-2 flex flex-wrap gap-4">
+          {(
+            [
+              { value: "personal", label: "個人（綠界會員載具）" },
+              { value: "company", label: "公司（統一編號）" },
+              { value: "mobile_barcode", label: "手機條碼載具" },
+            ] as const
+          ).map((option) => (
+            <label
+              key={option.value}
+              className="flex cursor-pointer items-center gap-1.5 text-sm"
+            >
+              <input
+                type="radio"
+                name="invoiceTarget"
+                value={option.value}
+                checked={invoiceTarget === option.value}
+                onChange={() => setInvoiceTarget(option.value)}
+                className="accent-primary"
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+        {invoiceTarget === "company" && (
+          <div className="mt-2.5">
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={8}
+              placeholder="統一編號（8 碼數字）"
+              value={taxId}
+              onChange={(e) => setTaxId(e.target.value.replace(/\D/g, ""))}
+              onBlur={validate}
+              className="w-full max-w-[240px] rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
+            />
+            {errors.taxId && (
+              <p className="mt-1 text-sm text-destructive">{errors.taxId}</p>
+            )}
+          </div>
+        )}
+        {invoiceTarget === "mobile_barcode" && (
+          <div className="mt-2.5">
+            <input
+              type="text"
+              maxLength={8}
+              placeholder="手機條碼（/ 開頭共 8 碼）"
+              value={carrierBarcode}
+              onChange={(e) => setCarrierBarcode(e.target.value.toUpperCase())}
+              onBlur={validate}
+              className="w-full max-w-[240px] rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
+            />
+            {errors.carrierBarcode && (
+              <p className="mt-1 text-sm text-destructive">
+                {errors.carrierBarcode}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* T57 客製例外同意 — ⚖️ TODO: 以律師審定版取代下方文字（T36） */}
