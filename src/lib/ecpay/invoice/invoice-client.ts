@@ -1,5 +1,5 @@
 import "server-only";
-import type { z } from "zod";
+import { z } from "zod";
 import {
   encryptEcpayPayload,
   decryptEcpayPayload,
@@ -23,6 +23,13 @@ type EcpayInvoiceResponse = {
 export type InvoiceApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; rtnCode?: number };
+
+// 業務層最小 envelope：只認 RtnCode（必為整數）＋RtnMsg（失敗回應可能缺席
+// 或為 null，容忍之）。完整 responseSchema 只在 RtnCode=1 成功時才套用。
+const envelopeSchema = z.object({
+  RtnCode: z.number(),
+  RtnMsg: z.string().nullish(),
+});
 
 // 雙層錯誤檢查（藍圖 04-security.md §2.1，缺一不可）：
 // ① 外層 TransCode===1（傳輸層，整數）
@@ -107,8 +114,28 @@ export async function postInvoiceApi<
     };
   }
 
-  // 外部資料先 zod 驗形（專案慣例：RPC/外部 payload 不信任形狀），
-  // 驗不過視為協議層錯誤——好過 as-cast 後在深處讀到 undefined
+  // ② 業務層檢查——先用最小 envelope 讀 RtnCode/RtnMsg（整數比對），再決定
+  // 是否套完整 schema。順序不可顛倒：失敗回應的伴隨欄位可能是 null／空字串
+  //（實測 1200125 時 CompanyName:null、5070357 時 InvoiceNo:""），若先套完整
+  // schema，解析失敗會把「明確的業務拒絕」誤降級成「形狀不符」而遺失
+  // rtnCode——checkCompanyIdentifier 的 1200125 阻擋就曾因此被 fail-open
+  // 繞過（無效統編 12345678 一路走到開立才爆）。
+  const envelope = envelopeSchema.safeParse(decrypted);
+  if (!envelope.success) {
+    return {
+      ok: false,
+      error: `發票 API 回應形狀不符：${envelope.error.issues[0]?.message ?? "unknown"}`,
+    };
+  }
+  if (Number(envelope.data.RtnCode) !== 1) {
+    return {
+      ok: false,
+      error: envelope.data.RtnMsg || "發票 API 業務邏輯失敗",
+      rtnCode: envelope.data.RtnCode,
+    };
+  }
+
+  // ③ 成功回應才驗完整形狀（成功時欄位由官方規格保證存在，可維持嚴格）
   const parsed = responseSchema.safeParse(decrypted);
   if (!parsed.success) {
     return {
@@ -116,16 +143,6 @@ export async function postInvoiceApi<
       error: `發票 API 回應形狀不符：${parsed.error.issues[0]?.message ?? "unknown"}`,
     };
   }
-  const inner = parsed.data;
 
-  // ② 業務層檢查——同樣是整數
-  if (Number(inner.RtnCode) !== 1) {
-    return {
-      ok: false,
-      error: inner.RtnMsg || "發票 API 業務邏輯失敗",
-      rtnCode: inner.RtnCode,
-    };
-  }
-
-  return { ok: true, data: inner };
+  return { ok: true, data: parsed.data };
 }

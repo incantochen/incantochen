@@ -71,6 +71,31 @@ describe("postInvoiceApi — 雙層錯誤檢查", () => {
     }
   });
 
+  it("業務層失敗且伴隨欄位違反完整 schema（如 InvoiceNo:null）→ 仍回 rtnCode，不降級成形狀不符", async () => {
+    // 迴歸測試：真實 API 的失敗回應常帶 null／空字串伴隨欄位；RtnCode 判讀
+    // 必須先於完整 schema 驗形，否則明確的業務拒絕碼會遺失（曾讓 1200125
+    // 統編阻擋被 fail-open 繞過）
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          encryptedResponse({
+            RtnCode: 5070357,
+            RtnMsg: "自訂編號重覆",
+            InvoiceNo: null,
+          }),
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const result = await postInvoiceApi("/B2CInvoice/Issue", {}, issueSchema);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.rtnCode).toBe(5070357);
+      expect(result.error).toBe("自訂編號重覆");
+    }
+  });
+
   it("回應形狀不符 zod schema → 回失敗（不 as-cast 硬吃）", async () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(
