@@ -83,6 +83,15 @@ vi.mock("@/lib/notification/senders", () => ({
   },
 }));
 
+// 發票補開的核心邏輯已在 issue-invoice.test.ts 完整覆蓋；這裡當依賴邊界
+// mock 掉，專注驗證 sweep 的查詢條件與摘要計數。
+const { issueInvoiceForOrder } = vi.hoisted(() => ({
+  issueInvoiceForOrder: vi.fn(),
+}));
+vi.mock("@/lib/order/issue-invoice", () => ({
+  issueInvoiceForOrder: (...args: unknown[]) => issueInvoiceForOrder(...args),
+}));
+
 type PaymentRow = {
   id: string;
   order_id: string;
@@ -109,12 +118,42 @@ let lastOrFilter: string | undefined;
 let failedNotifications: { id: string; order_id: string; type: string }[] = [];
 let sweepOrders: { id: string; status: string }[] = [];
 
+// T42 sweep：orders 表的「已付款未開票」候選（預設空）。
+const uninvoicedOrders: { id: string }[] = [];
+// 捕捉 sweep 查詢實際帶的過濾條件，斷言只撈 paid＋invoice_status='none'。
+const lastOrdersFilters: Record<string, unknown> = {};
+
+// orders 表被兩個 sweep 用到，查詢形狀不同，以此分流：
+// T88 通知 sweep 用 .in("id",[...]) 撈訂單狀態 → 回 sweepOrders；
+// T42 發票 sweep 用 .eq×2＋.order＋.limit 撈未開票訂單 → 回 uninvoicedOrders
+// （並側錄 eq 過濾條件供斷言）。
+function makeOrdersChain() {
+  let usedIn = false;
+  const chain: any = {
+    select: () => chain,
+    eq: (col: string, val: unknown) => {
+      lastOrdersFilters[col] = val;
+      return chain;
+    },
+    in: () => {
+      usedIn = true;
+      return chain;
+    },
+    order: () => chain,
+    limit: () => chain,
+    then: (resolve: (v: unknown) => void) => {
+      resolve({ data: usedIn ? sweepOrders : uninvoicedOrders, error: null });
+    },
+  };
+  return chain;
+}
+
 function makeServiceRole() {
   return {
     from: (table: string) => {
       if (table === "payment") return makeChain();
       if (table === "notification") return makeSweepChain(failedNotifications);
-      if (table === "orders") return makeSweepChain(sweepOrders);
+      if (table === "orders") return makeOrdersChain();
       throw new Error(`unexpected table: ${table}`);
     },
   };
@@ -232,6 +271,11 @@ beforeEach(() => {
   sendOnce.mockReset();
   sendOnce.mockResolvedValue(true);
   sentryCaptureMessage.mockClear();
+  uninvoicedOrders.length = 0;
+  for (const key of Object.keys(lastOrdersFilters)) {
+    delete lastOrdersFilters[key];
+  }
+  issueInvoiceForOrder.mockReset();
 });
 
 describe("候選查詢的 .or() 過濾字串格式", () => {
@@ -274,7 +318,42 @@ describe("認證", () => {
       sweepSent: 0,
       sweepStillFailing: 0,
       rateLimited: false,
+      invoicesSwept: 0,
+      invoicesIssued: 0,
+      invoicesFailed: 0,
     });
+  });
+});
+
+describe("T42 發票補開 sweep", () => {
+  it("查詢條件＝status='paid' 且 invoice_status='none'", async () => {
+    await GET(buildRequest("Bearer test-cron-secret"));
+    expect(lastOrdersFilters).toEqual({
+      status: "paid",
+      invoice_status: "none",
+    });
+  });
+
+  it("候選逐筆呼叫 issueInvoiceForOrder，成功/失敗分別計數", async () => {
+    uninvoicedOrders.push({ id: "o1" }, { id: "o2" });
+    issueInvoiceForOrder
+      .mockResolvedValueOnce({ ok: true, invoiceNo: "AB11111111" })
+      .mockResolvedValueOnce({ ok: false, error: "ECPay 5000000" });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(issueInvoiceForOrder).toHaveBeenCalledTimes(2);
+    expect(body.invoicesSwept).toBe(2);
+    expect(body.invoicesIssued).toBe(1);
+    expect(body.invoicesFailed).toBe(1);
+  });
+
+  it("無未開票訂單 → 不呼叫 issueInvoiceForOrder", async () => {
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+    expect(issueInvoiceForOrder).not.toHaveBeenCalled();
+    expect(body.invoicesSwept).toBe(0);
   });
 });
 

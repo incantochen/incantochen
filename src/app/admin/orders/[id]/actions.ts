@@ -19,11 +19,14 @@ import {
 } from "@/lib/support/schema";
 import type { SupportRequestStatus } from "@/lib/support/support-request";
 import { REFRESH_TO_RETRY_SUFFIX } from "@/lib/concurrency-message";
+import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 
 // transitionOrder 的 CAS 守衛（T66）代表狀態轉換現在可能因為別的流程（cron
 // 自動取消、ECPay webhook）搶先動過而失敗。這種情況不是操作失敗，是頁面顯示
 // 的狀態已經過期。回傳契約（結構化 { ok, error }）的緣由見 action-result.ts。
-export type { AdminActionResult };
+// 注意："use server" 檔案內不可放 `export type { … }` re-export——Turbopack 的
+// server actions loader 會在模組載入時對它產生值層級參照，整個 actions 模組
+// ReferenceError，所有按鈕全掛。需要這個型別的請直接 import action-result.ts。
 
 const RACE_MESSAGE = `此訂單狀態已被其他流程異動${REFRESH_TO_RETRY_SUFFIX}`;
 
@@ -222,4 +225,23 @@ export async function createSupportCaseByAdmin(
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath(`/account/orders/${orderId}`);
   revalidatePath(`/account/orders/${orderId}/support`);
+}
+
+// T42：後台手動補開發票——與 webhook 自動開立（ensureInvoiceIssued）共用同一支
+// issueInvoiceForOrder，天生冪等。這是藍圖鐵律「發票失敗不阻塞金流」的補償
+// 入口：webhook 那次失敗只會記 Sentry，管理員看到告警後回這裡按按鈕重試。
+export async function issueInvoiceAction(
+  orderId: string,
+): Promise<AdminActionResult> {
+  await requireAdmin();
+
+  const serviceRole = createServiceRoleClient();
+  const result = await issueInvoiceForOrder(serviceRole, orderId);
+
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath(`/admin/orders/${orderId}`);
+  return { ok: true };
 }

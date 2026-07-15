@@ -719,6 +719,24 @@
 
 ---
 
+## 📅 2026-07-15
+
+### 本次作業
+
+#### #T42 / M5 金流 / 電子發票串接（ECPay B2C）（PR #68）
+
+**說明**：付款成功後自動開立電子發票，含結帳發票去向三選一、失敗補開防線、後台手動補開。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 完成（PR #68 squash merge `3dbf143`） |
+| 產出     | 新模組：`src/lib/ecpay/aes-payload.ts`（AES-128-CBC 層，官方測試向量驗證）、`src/lib/ecpay/invoice/`（invoice-client／issue／validate／relate-number）、`src/lib/order/issue-invoice.ts`（冪等開立核心）、`src/lib/order/invoice-meta.ts`（invoice_meta 單一出處）；migration 0016（`orders.invoice_meta` jsonb，本機＋雲端已套用）；結帳表單三選一 UI＋成功頁發票區塊＋後台發票區塊（含發票去向顯示＋手動開立按鈕）；reconcile cron 未開票 sweep；測試 484 全綠；tasks.csv 登記 T122（正式帳號＋字軌）／T125（自家頁面補發票資訊）、T122 補正式環境通知信驗收條件 |
+| 更新描述 | 1. 協議層：AES-JSON（與 CMV-SHA256 完全分離），aesUrlEncode 對齊 .NET UrlEncode（官方特殊字元向量揭露 `!*'()` 需補編碼）；雙層錯誤檢查（TransCode／RtnCode 皆整數比對）。2. 去向規則（官方 7896 逐字核對）：個人＝綠界載具 CarrierType=1＋Print=0；手機條碼 CarrierType=3；公司統編必 Print=1＋CustomerAddr＋空載具。3. 冪等：RelateNumber=INV+MTN；Issue 失敗以 GetIssue 判別「其實已開立」並取回真號碼（取代 RtnMsg regex）；CAS 寫入＋backfill。4. 不阻塞金流：開票走 settlePaid 內的 `after()`（不佔 ReturnURL 10 秒預算）、絕不 throw；失敗由每日 sweep＋後台手動補開兜底。5. `/code-review max` 15 findings 全修；dev 走查再抓 2 個真 bug：①"use server" 檔的 `export type` re-export 讓 Turbopack server actions loader 模組載入即 ReferenceError（既有地雷，全按鈕炸）②RtnCode 判讀被完整 schema 驗形搶先——ECPay 失敗回應帶 `CompanyName:null`，optional 不收 null → 解析失敗降級成「API 故障」fail-open，無效統編 12345678 繞過結帳驗證（修：先讀最小 envelope 判業務失敗再驗全形；案例庫已回填）。6. stage 真實 API 六情境端到端全過（開立／重複／GetIssue 復原／統編有效與無效／條碼／公司發票）。7. merge 前與 master 的 T88 解衝突：發票 after() 併入 settlePaid chokepoint、兩個 sweep 並存。實際耗時約 3 人天（原估 1.5）。 |
+| 待辦     | 使用者：Vercel 補 4 個 `ECPAY_INVOICE_*` env（Preview＋Production，先填公開沙盒值）後 production 部署才會過；正式帳號＋字軌＝T122（上線前）；發票通知信由綠界寄，stage 不保證寄達、正式環境實測（記在 T122 驗收） |
+| 依賴     | T26（ECPay 金流基建）；T122／T125 為後續 |
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```

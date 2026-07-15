@@ -5,6 +5,7 @@ import {
   ensureOrderPaid,
   ensureNotificationSent,
 } from "@/lib/order/ensure-paid";
+import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 import { queryTradeInfo, RateLimitError } from "@/lib/ecpay/query-trade-info";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 import { sendOnce } from "@/lib/notification/send-once";
@@ -18,7 +19,7 @@ const MIN_AGE_MS = 10 * 60 * 1000;
 // cutoff（now−24h）會差幾秒到幾分鐘而撈不到同一筆，「隔日重試」實際變隔兩日。
 // T107 之後這個冷卻從「告警去重」升級為「失敗自癒的重試節奏」，20h 用來吸收
 // cron jitter＋整批處理時間。注意：此值與「每日一次」的排程頻率耦合——改排程
-// （T124 小時級）必須連動改這裡（規則與連動清單見 tasks.csv T124 說明欄），
+// （T126 小時級）必須連動改這裡（規則與連動清單見 tasks.csv T126 說明欄），
 // 兩者相距僅一個檔案內常數與外部設定，不另加程式防呆。
 const RECONCILE_COOLDOWN_MS = 20 * 60 * 60 * 1000;
 const THROTTLE_MS = 400;
@@ -150,7 +151,57 @@ type Summary = {
   sweepSent: number;
   sweepStillFailing: number;
   rateLimited: boolean;
+  invoicesSwept: number;
+  invoicesIssued: number;
+  invoicesFailed: number;
 };
+
+const INVOICE_SWEEP_LIMIT = 20;
+
+// T42：「已付款未開票」每日 sweep（藍圖 07-invoice.md §6 明訂的核對項）——
+// webhook 那次開立失敗（ECPay 暫時性故障、after() 執行環境被提早回收等）的
+// 自動補開防線；issueInvoiceForOrder 冪等（issued 短路＋GetIssue 判別），
+// 與 webhook／後台補開共用同一支，重跑安全。
+async function sweepUninvoicedPaidOrders(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+) {
+  const { data: uninvoiced, error } = await serviceRole
+    .from("orders")
+    .select("id")
+    .eq("status", "paid")
+    .eq("invoice_status", "none")
+    .order("created_at", { ascending: true })
+    .limit(INVOICE_SWEEP_LIMIT);
+
+  if (error) {
+    Sentry.captureMessage("reconcile: 未開票訂單查詢失敗", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return;
+  }
+
+  for (const order of uninvoiced ?? []) {
+    summary.invoicesSwept += 1;
+    const result = await issueInvoiceForOrder(serviceRole, order.id);
+    if (result.ok) {
+      summary.invoicesIssued += 1;
+      // 走到 sweep 才開成＝webhook 那次失敗過，留告警追蹤（比照 promoted 慣例）
+      Sentry.captureMessage("reconcile: 補開發票成功（webhook 當次曾失敗）", {
+        level: "warning",
+        extra: { orderId: order.id, invoiceNo: result.invoiceNo },
+      });
+    } else {
+      summary.invoicesFailed += 1;
+      Sentry.captureMessage("reconcile: 補開發票仍失敗，需人工處理", {
+        level: "error",
+        extra: { orderId: order.id, error: result.error },
+      });
+    }
+    await sleep(THROTTLE_MS);
+  }
+}
 
 // T89：ECPay 主動對帳。webhook 是即時路徑，這支 cron 是每日一次的最終防線——
 // 只做「pending→paid 的主動修正＋告警」，範圍刻意不含逾期取消（見 T66）。
@@ -170,6 +221,9 @@ export async function GET(request: Request) {
     sweepSent: 0,
     sweepStillFailing: 0,
     rateLimited: false,
+    invoicesSwept: 0,
+    invoicesIssued: 0,
+    invoicesFailed: 0,
   };
 
   // 單筆候選「非預期失敗」的共用出口：計數＋Sentry exception。已知取捨：同一
@@ -260,7 +314,7 @@ export async function GET(request: Request) {
           // 金額正數防呆：0 === 0 不得視為吻合——TradeAmt 與 payment.amount 同
           // 時為 0（建單 bug／異常回應被解析成 0）時，絕不可據此自動改狀態，
           // 落到下方 mismatch 分支告警交人工。notify 路徑（webhook 端）沒有這
-          // 道對稱防呆，待 T125 順手補上。
+          // 道對稱防呆，待 T127 順手補上。
           Number(result.tradeAmt) > 0 &&
           Number(result.tradeAmt) === Number(payment.amount)
         ) {
@@ -451,6 +505,10 @@ export async function GET(request: Request) {
     }
 
     await sweepFailedNotifications(serviceRole, summary);
+
+    // T42：付款對帳跑完後接著補開發票——即使上面被 rate limit 中斷也照跑
+    // （發票 API 是獨立網域與額度，不受金流查詢限速影響）
+    await sweepUninvoicedPaidOrders(serviceRole, summary);
 
     return Response.json(summary);
   } catch (e) {

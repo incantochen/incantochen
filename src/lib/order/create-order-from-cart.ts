@@ -2,7 +2,12 @@ import "server-only";
 
 import { randomInt } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import * as Sentry from "@sentry/nextjs";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import {
+  invoiceTargetToMeta,
+  type InvoiceTargetInput as InvoiceTargetInputType,
+} from "@/lib/order/invoice-meta";
 import { verifyCartPrices, type VerifiedItem } from "@/lib/quote/verify-prices";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
 import {
@@ -41,6 +46,11 @@ type RecipientInput = {
   zipCode: string;
   shippingAddress: string;
 };
+
+// T42：發票去向（型別與 jsonb 對映的單一出處在 invoice-meta.ts），結帳時收集、
+// 寫進 orders.invoice_meta 供付款成功後開立時讀取。可選——admin 代客建單
+// （T111）目前不收發票去向，缺省時 issueInvoiceForOrder 預設走個人（綠界載具）。
+export type { InvoiceTargetInput } from "@/lib/order/invoice-meta";
 
 // T76：create_order_with_items 的 p_items 參數在 RPC 那端是未型別化的 jsonb，
 // 不像先前直接 .insert() 到 order_item 時能靠生成型別做端到端檢查。這裡在送
@@ -174,6 +184,7 @@ export async function createOrderFromCart(
   cartItems: CartItemInput[],
   memberId: string,
   recipient: RecipientInput,
+  invoiceTarget?: InvoiceTargetInputType,
 ): Promise<CreateOrderFromCartResult> {
   const { recipientName, recipientPhone, zipCode, shippingAddress } = recipient;
 
@@ -309,6 +320,35 @@ export async function createOrderFromCart(
   }
 
   // Cart 保留至付款成功才刪除（T75，見 ensureOrderPaid）——order 已存 cart_id。
+
+  // T42：寫入發票去向，供付款成功後 issueInvoiceForOrder 讀取。best-effort——
+  // 這支 UPDATE 不在 create_order_with_items 的交易內（訂單建立已成功，不該
+  // 因為這步失敗就讓整筆訂單失敗），寫入失敗時開立會 fallback 成個人發票。
+  // fallback 是稅務可見的錯誤結果（客人要統編卻拿到個人發票），失敗必須
+  // 進 Sentry（§0.2 靜默失敗點規約），不能只留 console。
+  if (invoiceTarget) {
+    const { error: invoiceMetaError } = await serviceRole
+      .from("orders")
+      .update({ invoice_meta: invoiceTargetToMeta(invoiceTarget) })
+      .eq("id", order.id);
+    if (invoiceMetaError) {
+      console.error(
+        "[createOrderFromCart] invoice_meta 寫入失敗，開立時將 fallback 為個人發票",
+        { orderId: order.id, invoiceMetaError },
+      );
+      Sentry.captureMessage(
+        "createOrderFromCart: invoice_meta 寫入失敗（將 fallback 個人發票）",
+        {
+          level: "error",
+          extra: {
+            orderId: order.id,
+            target: invoiceTarget.target,
+            error: invoiceMetaError.message,
+          },
+        },
+      );
+    }
+  }
 
   return { ok: true, orderNo };
 }

@@ -4,6 +4,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { sendOrderConfirmation } from "@/lib/email/order-confirmation";
 import { sendNewOrderNotification } from "@/lib/email/new-order-notification";
 import { sendOnce } from "@/lib/notification/send-once";
+import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 import { PAID_LINEAGE, type OrderStatus } from "@/lib/order/order-status";
 
 // 付款期間 cart 被加入新品項時的精準清理：只刪除訂單裡出現過的 cart_item
@@ -269,4 +270,31 @@ export async function ensureNotificationSent(
   }
 
   return notifyOrderPaid(serviceRole, orderId);
+}
+
+// T42：付款成功後自動開立電子發票。藍圖鐵律——發票失敗不得阻塞或回滾金流：
+// 本函式**絕不 throw**（issueInvoiceForOrder 契約上不 throw，這裡再包一層
+// 防衛），任何失敗只記 Sentry，webhook 的 1|OK 不受影響。冪等（issued 短路
+// ＋GetIssue 判別），可安全隨每次 webhook 重送重新呼叫；狀態檢查（須為 paid）
+// 由 issueInvoiceForOrder 內部負責，這裡不重複查詢。
+export async function ensureInvoiceIssued(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+) {
+  try {
+    const result = await issueInvoiceForOrder(serviceRole, orderId);
+    if (!result.ok) {
+      console.error("[ensureInvoiceIssued] 開立發票失敗，待補開", {
+        orderId,
+        error: result.error,
+      });
+      Sentry.captureMessage(
+        "ensureInvoiceIssued: 開立發票失敗，待補開（cron sweep／後台手動）",
+        { level: "error", extra: { orderId, error: result.error } },
+      );
+    }
+  } catch (e) {
+    console.error("[ensureInvoiceIssued] 非預期例外", e);
+    Sentry.captureException(e, { extra: { orderId } });
+  }
 }
