@@ -19,6 +19,9 @@ type Summary = {
   failed: number;
   // T127①：候選訂單已有 paid payment（webhook 側卡單漂移），取消被擋下的筆數。
   paidConflict: number;
+  // TOCTOU 補洞：取消後才發現 payment 已 paid（快照後、cancel 前的窄窗競態）
+  // ——錢收在剛被取消的訂單上，走 §6.1 人工裁決。
+  paidAfterCancel: number;
 };
 
 // T66：待付款訂單逾期（72 小時，以 orders.created_at 為固定時鐘，不因重新產生
@@ -36,6 +39,7 @@ export async function GET(request: Request) {
     skipped: 0,
     failed: 0,
     paidConflict: 0,
+    paidAfterCancel: 0,
   };
 
   try {
@@ -86,10 +90,8 @@ export async function GET(request: Request) {
       if (paidOrderIds.has(order.id)) {
         // webhook 側卡單：錢已收、訂單還在 pending_payment。skip 取消（連帶
         // 不掃 payment），P0 告警——這筆由 reconcile 漂移臂（T127②）自癒。
-        // 殘餘競態（本批次查詢之後、cancel 之前 webhook 才翻 paid）不需要
-        // 在這裡加防線：transitionOrder 的 CAS 會擋掉狀態已變的訂單，而
-        // 「cancel 搶先、webhook 撞 cancelled」由 ensureOrderPaid 回 closed
-        // ＋P0 告警、reconcile closed 臂接手（ops-runbook §6.1）。
+        // 殘餘競態（本批次查詢之後、cancel 之前 webhook 才翻 paid）由取消後
+        // 的 post-cancel paid 再查（見下方）補偵測，不在這裡加鎖。
         summary.paidConflict += 1;
         Sentry.captureMessage(
           "pending-payment-expire: paid payment exists on expiring order, skip cancel (webhook-side stuck order)",
@@ -122,6 +124,40 @@ export async function GET(request: Request) {
             {
               level: "warning",
               extra: { orderId: order.id, error: paymentSweepError.message },
+            },
+          );
+        }
+
+        // post-cancel paid 再查（T127① 的 TOCTOU 補洞）：批次快照之後、cancel
+        // 之前 webhook 才翻 payment=paid、且該次 ensureOrderPaid 失敗＋ECPay
+        // 重送恰好耗盡的窄窗，會產生「payment=paid／orders=cancelled」——主對帳
+        // 臂（鍵 payment=pending）與漂移臂（鍵 orders=pending_payment）都撈不
+        // 到、之後也沒有 webhook 會再來觸發 closed 告警＝完全無聲。取消「之後」
+        // 再查一次即完備：flip 在查之前→這裡抓到；flip 在查之後→同一次 webhook
+        // 呼叫接著跑 ensureOrderPaid 必撞 cancelled→closed P0（兩訊號互補，
+        // 無縫隙）。偵測即可（修復走 ops-runbook §6.1 人工裁決，同第⑤類）；
+        // 查詢失敗只降級告警，不影響已完成的取消。
+        const { data: paidAfter, error: paidAfterError } = await serviceRole
+          .from("payment")
+          .select("id")
+          .eq("order_id", order.id)
+          .eq("status", "paid")
+          .maybeSingle();
+        if (paidAfterError) {
+          Sentry.captureMessage(
+            "pending-payment-expire: post-cancel paid check failed",
+            {
+              level: "warning",
+              extra: { orderId: order.id, error: paidAfterError.message },
+            },
+          );
+        } else if (paidAfter) {
+          summary.paidAfterCancel += 1;
+          Sentry.captureMessage(
+            "pending-payment-expire: money received on order cancelled this run (race window), manual adjudication required",
+            {
+              level: "error",
+              extra: { orderId: order.id },
             },
           );
         }

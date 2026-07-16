@@ -35,28 +35,60 @@ const paymentSweeps: { order_id: unknown }[] = [];
 // T127①：取消前的 paid payment 批次查詢（select 分支）的可控回傳。
 let paidPayments: { order_id: string }[] = [];
 let paidQueryError: string | null = null;
+// 鎖住防呆查詢的實際形狀：漏掉 .eq("status","paid") 或 .in() 傳錯 id 集合
+// 是金流級回歸（把 pending 誤當 paid＝逾期單永不取消；範圍錯＝誤殺），
+// 光靠計數斷言測不出來，必須斷言引數。
+let paidGuardCapture:
+  | { inCol: string; inIds: unknown; status: unknown }
+  | undefined;
+// post-cancel paid 再查（TOCTOU 補洞）：命中此集合的 order_id 回一筆 paid。
+let paidAfterCancelIds = new Set<string>();
+// post-cancel 再查的呼叫記錄（含過濾條件），斷言它查的是 paid。
+let postCancelChecks: { order_id: unknown; status: unknown }[] = [];
 
 function makeServiceRole() {
   return {
     from: (table: string) => {
       if (table === "payment") {
         const filters: Record<string, unknown> = {};
-        // payment 表有兩種形狀的呼叫：T127① 的 select（取消前防呆查詢）與
-        // 取消後的 update（pending payment 掃成 failed），以有無呼叫 select 分流。
+        // payment 表有三種形狀的呼叫：T127① 的批次 select（取消前防呆查詢，
+        // 以 then 收尾）、post-cancel paid 再查（以 maybeSingle 收尾）、
+        // 取消後的 update（pending payment 掃成 failed，以 then 收尾）。
         let isSelect = false;
+        let inArgs: { col: string; ids: unknown } | undefined;
         const chain: any = {
           select: () => {
             isSelect = true;
             return chain;
           },
           update: () => chain,
-          in: () => chain,
+          in: (col: string, ids: unknown) => {
+            inArgs = { col, ids };
+            return chain;
+          },
           eq: (col: string, val: unknown) => {
             filters[col] = val;
             return chain;
           },
+          maybeSingle: () => {
+            postCancelChecks.push({
+              order_id: filters.order_id,
+              status: filters.status,
+            });
+            return Promise.resolve({
+              data: paidAfterCancelIds.has(filters.order_id as string)
+                ? { id: "pp1" }
+                : null,
+              error: null,
+            });
+          },
           then: (resolve: (v: unknown) => void) => {
             if (isSelect) {
+              paidGuardCapture = {
+                inCol: inArgs?.col ?? "",
+                inIds: inArgs?.ids,
+                status: filters.status,
+              };
               resolve(
                 paidQueryError
                   ? { data: null, error: { message: paidQueryError } }
@@ -112,6 +144,9 @@ beforeEach(() => {
   paymentSweeps.length = 0;
   paidPayments = [];
   paidQueryError = null;
+  paidGuardCapture = undefined;
+  paidAfterCancelIds = new Set();
+  postCancelChecks = [];
   transitionOrder.mockReset();
 });
 
@@ -136,6 +171,7 @@ describe("認證", () => {
       skipped: 0,
       failed: 0,
       paidConflict: 0,
+      paidAfterCancel: 0,
     });
   });
 });
@@ -162,6 +198,7 @@ describe("逐筆處理", () => {
       skipped: 0,
       failed: 0,
       paidConflict: 0,
+      paidAfterCancel: 0,
     });
     expect(transitionOrder).toHaveBeenCalledWith(
       "o1",
@@ -199,6 +236,7 @@ describe("逐筆處理", () => {
       skipped: 1,
       failed: 0,
       paidConflict: 0,
+      paidAfterCancel: 0,
     });
   });
 
@@ -218,6 +256,7 @@ describe("逐筆處理", () => {
       skipped: 0,
       failed: 0,
       paidConflict: 1,
+      paidAfterCancel: 0,
     });
     expect(transitionOrder).toHaveBeenCalledTimes(1);
     expect(transitionOrder).toHaveBeenCalledWith(
@@ -226,6 +265,36 @@ describe("逐筆處理", () => {
       expect.objectContaining({ note: expect.any(String) }),
     );
     expect(paymentSweeps).toEqual([{ order_id: "o2" }]);
+    // 防呆查詢形狀：必須以候選 id 集合為範圍、只認 status='paid'——這兩個
+    // 過濾條件任一回歸都是金流級錯誤（pending 誤當 paid／範圍錯誤殺）。
+    expect(paidGuardCapture).toEqual({
+      inCol: "order_id",
+      inIds: ["o1", "o2"],
+      status: "paid",
+    });
+  });
+
+  it("T127①：post-cancel paid 再查——取消後才發現 payment 已 paid（TOCTOU 窄窗）→ paidAfterCancel 計數", async () => {
+    candidates = [{ id: "o1" }];
+    // 批次快照時還沒 paid（paidPayments 空），cancel 之後的再查才命中：
+    // 模擬「快照後、cancel 前 webhook 翻 paid 且重送耗盡」的窄窗競態。
+    paidAfterCancelIds = new Set(["o1"]);
+    transitionOrder.mockResolvedValue(undefined);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body).toEqual({
+      checked: 1,
+      cancelled: 1,
+      skipped: 0,
+      failed: 0,
+      paidConflict: 0,
+      paidAfterCancel: 1,
+    });
+    // 再查必須查 paid（不是 pending）——它的職責是偵測「錢收在剛取消的
+    // 訂單上」，之後走 §6.1 人工裁決。
+    expect(postCancelChecks).toEqual([{ order_id: "o1", status: "paid" }]);
   });
 
   it("T127①：paid payment 批次查詢失敗 → fail-safe 整批不取消、throw→500（不誤報綠燈）", async () => {
@@ -246,6 +315,7 @@ describe("逐筆處理", () => {
       skipped: 0,
       failed: 0,
       paidConflict: 0,
+      paidAfterCancel: 0,
     });
     expect(transitionOrder).not.toHaveBeenCalled();
     expect(paymentSweeps).toEqual([]);
@@ -266,6 +336,7 @@ describe("逐筆處理", () => {
       skipped: 0,
       failed: 1,
       paidConflict: 0,
+      paidAfterCancel: 0,
     });
     expect(transitionOrder).toHaveBeenCalledTimes(2);
   });
