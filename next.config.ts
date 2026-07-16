@@ -3,19 +3,9 @@ import { withSentryConfig } from "@sentry/nextjs";
 import { env } from "./src/lib/env";
 import { MAX_IMAGE_FILE_SIZE } from "./src/lib/storage/constants";
 
-const isDev = process.env.NODE_ENV !== "production";
-
-const csp = [
-  "default-src 'self'",
-  isDev
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-    : "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.supabase.co",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io",
-  "form-action 'self' https://payment-stage.ecpay.com.tw https://payment.ecpay.com.tw",
-  "frame-ancestors 'none'",
-].join("; ");
+// T97：CSP 已搬到 src/proxy.ts（nonce 需每請求新產，靜態 headers() 做不到），
+// 這裡不可再設 Content-Security-Policy——瀏覽器對多個 CSP header 取交集，
+// 會把 proxy 的 nonce 版廢掉。其餘 security headers 仍由本檔負責。
 
 // next/image 只允許本專案的 Supabase Storage 公開圖（不用 *.supabase.co 萬用字元）；
 // hostname 由集中 env 模組（§2 規範）導出，換專案不需改碼。缺 env 時 env.ts 在
@@ -60,7 +50,6 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
-          { key: "Content-Security-Policy", value: csp },
           ...(process.env.NODE_ENV === "production"
             ? [
                 {
