@@ -121,6 +121,16 @@ let lastReconciledError: string | null = null;
 // 句點／逗號等保留字元須用雙引號包住，否則解析會跑掉——sandbox 端到端驗證
 // 實測到這個 bug，這裡的 mock 之前完全忽略引數、測不出這種格式錯誤）。
 let lastOrFilter: string | undefined;
+// T127②：捕捉漂移臂候選查詢的完整形狀（select 的 inner embed、兩個 .or() 的
+// AND 串接、order 的 nullsFirst）——這些若回歸（漏 embed、閘門掉引號、NULLS
+// LAST 把人工列擠出 DRIFT_LIMIT）計數斷言測不出來，必須鎖住實際引數。
+let driftQueryCapture:
+  | {
+      select: string | undefined;
+      ors: string[];
+      order: { col: string; opts: unknown } | undefined;
+    }
+  | undefined;
 // sweep 用：notification 表的 failed 紀錄與 orders 表的狀態查詢結果。
 let failedNotifications: { id: string; order_id: string; type: string }[] = [];
 let sweepOrders: { id: string; status: string }[] = [];
@@ -185,7 +195,11 @@ function makeChain() {
   const chain: any = {
     _op: "select",
     _filters: {} as Record<string, unknown>,
-    select: () => chain,
+    _ors: [] as string[],
+    select: (cols?: string) => {
+      chain._select = cols;
+      return chain;
+    },
     eq: (col: string, val: unknown) => {
       chain._filters[col] = val;
       return chain;
@@ -196,9 +210,13 @@ function makeChain() {
     },
     or: (filter: string) => {
       lastOrFilter = filter;
+      chain._ors.push(filter);
       return chain;
     },
-    order: () => chain,
+    order: (col: string, opts?: unknown) => {
+      chain._order = { col, opts };
+      return chain;
+    },
     limit: () => chain,
     update: (values: unknown) => {
       chain._op = "update";
@@ -223,10 +241,16 @@ function makeChain() {
     },
     then: (resolve: (v: unknown) => void) => {
       if (chain._op === "select") {
-        resolve({
-          data: chain._filters.status === "paid" ? driftCandidates : candidates,
-          error: null,
-        });
+        if (chain._filters.status === "paid") {
+          driftQueryCapture = {
+            select: chain._select,
+            ors: [...chain._ors],
+            order: chain._order,
+          };
+          resolve({ data: driftCandidates, error: null });
+          return;
+        }
+        resolve({ data: candidates, error: null });
         return;
       }
       const values = chain._values as Record<string, unknown> | undefined;
@@ -267,6 +291,7 @@ beforeEach(() => {
   casErrorIds = new Set();
   lastReconciledError = null;
   lastOrFilter = undefined;
+  driftQueryCapture = undefined;
   failedNotifications = [];
   sweepOrders = [];
   queryTradeInfo.mockReset();
@@ -948,6 +973,32 @@ describe("T127② 漂移臂（webhook 側卡單：payment=paid／orders=pending_
       "reconcile: promoted webhook-side stuck order",
       expect.objectContaining({ level: "warning" }),
     );
+  });
+
+  it("漂移候選查詢形狀：inner embed 過濾漂移單、NULL-tolerant 年齡閘門＋冷卻（timestamp 雙引號）、NULLS FIRST 排序", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(driftQueryCapture).toBeDefined();
+    // 漂移的定義有一半在 embed 上（orders.status='pending_payment'）：漏掉
+    // inner embed 會把「所有 paid payment」全撈進來當漂移單。
+    expect(driftQueryCapture!.select).toContain("orders!inner(status)");
+    // 兩個 .or() AND 串接：年齡閘門必須 NULL-tolerant（人工修 SQL 不寫
+    // paid_at）、timestamp 都要帶雙引號（PostgREST 保留字元陷阱）。
+    expect(driftQueryCapture!.ors).toHaveLength(2);
+    expect(driftQueryCapture!.ors[0]).toMatch(
+      /^paid_at\.is\.null,paid_at\.lt\."[^"]+"$/,
+    );
+    expect(driftQueryCapture!.ors[1]).toMatch(
+      /^last_reconciled_at\.is\.null,last_reconciled_at\.lt\."[^"]+"$/,
+    );
+    // NULLS FIRST 必須明示：Postgres ASC 預設 NULLS LAST，會把 paid_at IS
+    // NULL 的人工列排到 DRIFT_LIMIT 之外（大面積漂移時被截掉、多等數天）。
+    expect(driftQueryCapture!.order).toEqual({
+      col: "paid_at",
+      opts: { ascending: true, nullsFirst: true },
+    });
   });
 
   it("ensureOrderPaid 拋例外 → unexpected +1、批次繼續、仍寫 last_reconciled_at", async () => {

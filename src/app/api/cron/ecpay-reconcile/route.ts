@@ -225,7 +225,11 @@ async function reconcileDriftedOrders(
     .eq("orders.status", "pending_payment")
     .or(`paid_at.is.null,paid_at.lt."${maxPaidAt}"`)
     .or(reconcileCooldownOrFilter(reconcileCutoff))
-    .order("paid_at", { ascending: true })
+    // nullsFirst 必加：Postgres ASC 預設 NULLS LAST，會把上面特意保留的
+    // paid_at IS NULL 人工列排到最後——漂移列 ≥ DRIFT_LIMIT（大面積 webhook
+    // 失靈）時被截掉，「立即處理」的意圖被排序默默推翻；NULL 排最前才與
+    // 年齡閘門的 NULL-tolerant 設計一致。
+    .order("paid_at", { ascending: true, nullsFirst: true })
     .limit(DRIFT_LIMIT);
 
   if (error) {
