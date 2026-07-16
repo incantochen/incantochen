@@ -97,11 +97,13 @@ const supportRequestMemberRatelimit = new Ratelimit({
   prefix: "ratelimit:support-member",
 });
 
+// review 修正：沿用下方 safeLimit 的 fail-open 包裝（函式宣告會 hoist，
+// 這裡引用早於定義是安全的）——Redis 逾時／中斷不該讓售後申請整段 500，
+// 可用性優先於這條路徑的枚舉防護（同 T73 對付款結果頁的取捨）。
 export async function checkSupportRequestRateLimit(
   memberId: string,
 ): Promise<boolean> {
-  const { success } = await supportRequestMemberRatelimit.limit(memberId);
-  return success;
+  return safeLimit(supportRequestMemberRatelimit, memberId);
 }
 
 // T73 code-review #1：付款結果三頁把限流放進 Promise.all，一旦 Upstash Redis
