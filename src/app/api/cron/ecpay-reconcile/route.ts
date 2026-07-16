@@ -162,14 +162,43 @@ type Summary = {
   invoicesFailed: number;
 };
 
+// 冷卻過濾字串（主臂與漂移臂共用單一出處）：last_reconciled_at 為 null 或早於
+// cutoff。timestamp 值必須雙引號包住——PostgREST 的 .or() 用句點分隔「欄位.
+// 運算子.值」，值裡的句點（ISO 毫秒）／逗號會被誤解析（曾在 sandbox 端到端
+// 驗證實測到候選對不上、漏掉明確符合的資料）。這條規則踩過真實 bug 才寫對，
+// 只留一份供兩處查詢 import，禁止各自手抄複本失同步。
+function reconcileCooldownOrFilter(cutoffIso: string) {
+  return `last_reconciled_at.is.null,last_reconciled_at.lt."${cutoffIso}"`;
+}
+
+// 單筆候選「非預期失敗」的共用出口：計數＋Sentry exception。主迴圈與漂移臂
+// （reconcileDriftedOrders）共用同一份，避免兩處 extra payload／計數語意漂移。
+// 已知取捨：同一筆候選一輪內可能計到 2 次 unexpected（主臂②的 CAS {error}
+// 與③的 throw 各記一次）——兩個獨立故障本來就是兩個訊號，去重需額外狀態、
+// 弊大於利，維持雙計（PR #67 review 拍板）。
+function recordUnexpected(
+  summary: Summary,
+  e: unknown,
+  payment: { order_id: string; merchant_trade_no: string },
+) {
+  summary.unexpected += 1;
+  Sentry.captureException(e, {
+    extra: {
+      orderId: payment.order_id,
+      merchantTradeNo: payment.merchant_trade_no,
+    },
+  });
+}
+
 // T127②：webhook 側卡單（payment=paid／orders=pending_payment）的第二候選臂。
 // 主迴圈的候選鍵是 payment.status='pending'，撈不到這種漂移——它是 webhook 端
 // settlePaid「先翻 payment、再推進訂單」半路失敗＋ECPay 重送耗盡的產物，若不
 // 處理則不自癒、且錢收了沒有任何自動告警（ops-runbook §1.1 第④類）。
 // 故意不打 ECPay：payment=paid 是當初驗章＋金額核對通過後才寫入的財務事實，
-// 直接信任即可；也因此本臂不受 queryTradeInfo 的 rate limit 影響——主迴圈被
-// RateLimitError 中斷（break）後本臂照跑。每筆 sleep(THROTTLE_MS) 保留，
-// 禮貌對象是 ensureNotificationSent 背後的 Resend。
+// 直接信任即可；也因此本臂不受 queryTradeInfo 的 rate limit 影響——僅限主迴圈
+// 被 RateLimitError 中斷（break）的情況本臂照跑；主候選查詢若回 {error} 會
+// throw→500，本臂與後續 sweep 當天同樣被跳過（非本臂可救，隔日 cron 再來）。
+// 每筆 sleep(THROTTLE_MS) 保留，禮貌對象是 ensureNotificationSent 背後的 Resend。
 async function reconcileDriftedOrders(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   summary: Summary,
@@ -178,16 +207,24 @@ async function reconcileDriftedOrders(
   const maxPaidAt = new Date(now - MIN_AGE_MS).toISOString();
   const reconcileCutoff = new Date(now - RECONCILE_COOLDOWN_MS).toISOString();
 
-  // inner embed 過濾 orders.status，只撈漂移單。MIN_AGE_MS 壓 paid_at：避免
-  // 撈到 webhook 正在 settle 中的單（payment 剛翻、訂單推進 in-flight）。
-  // .or() 的 timestamp 值必須雙引號包住（同主迴圈候選查詢的註解）。
+  // inner embed 過濾 orders.status，只撈漂移單。年齡閘門必須 NULL-tolerant：
+  // 不可用 .lt("paid_at", cutoff)——PostgREST 中 NULL < ts 為假，會永久靜默
+  // 排除 paid_at IS NULL 的 paid 列。ops-runbook §1 步驟 3 的人工修 SQL
+  // （UPDATE payment SET status='paid', gateway_trade_no=... 不寫 paid_at）
+  // 正會產生這種列，加上 T127① 又擋住逾期取消，會卡 pending_payment 永不自癒
+  // ——正是本臂要關掉的盲點。code 寫入的 paid 列一律同時寫 paid_at，故
+  // NULL⟹人工列⟹立即處理安全（本查詢已用 orders.status='pending_payment'
+  // 過濾，只會撈到真正卡住的單）。MIN_AGE_MS 只壓非 NULL 分支：避免撈到
+  // webhook 正在 settle 中的單（payment 剛翻、訂單推進 in-flight）。
+  // 兩個 .or() 以 AND 串接（supabase-js 慣例）；timestamp 值必須雙引號包住
+  // （同主迴圈候選查詢的註解記載的 PostgREST 保留字元陷阱）。
   const { data: drifted, error } = await serviceRole
     .from("payment")
     .select("id, order_id, merchant_trade_no, orders!inner(status)")
     .eq("status", "paid")
     .eq("orders.status", "pending_payment")
-    .lt("paid_at", maxPaidAt)
-    .or(`last_reconciled_at.is.null,last_reconciled_at.lt."${reconcileCutoff}"`)
+    .or(`paid_at.is.null,paid_at.lt."${maxPaidAt}"`)
+    .or(reconcileCooldownOrFilter(reconcileCutoff))
     .order("paid_at", { ascending: true })
     .limit(DRIFT_LIMIT);
 
@@ -259,13 +296,8 @@ async function reconcileDriftedOrders(
       }
     } catch (e) {
       // 單筆失敗不拖垮整批；已 markReconciled，隔日冷卻期滿自動重試。
-      summary.unexpected += 1;
-      Sentry.captureException(e, {
-        extra: {
-          orderId: payment.order_id,
-          merchantTradeNo: payment.merchant_trade_no,
-        },
-      });
+      // 共用主臂的 recordUnexpected（計數＋Sentry extra 單一出處）。
+      recordUnexpected(summary, e, payment);
     }
 
     await sleep(THROTTLE_MS);
@@ -344,41 +376,20 @@ export async function GET(request: Request) {
     invoicesFailed: 0,
   };
 
-  // 單筆候選「非預期失敗」的共用出口：計數＋Sentry exception。已知取捨：同一
-  // 筆候選一輪內可能計到 2 次 unexpected（例如②的 CAS {error} 與③的 throw 各
-  // 記一次）——兩個獨立故障本來就是兩個訊號，去重需額外狀態、弊大於利，維持
-  // 雙計（PR #67 review 拍板）。
-  const recordUnexpected = (
-    e: unknown,
-    payment: { order_id: string; merchant_trade_no: string },
-  ) => {
-    summary.unexpected += 1;
-    Sentry.captureException(e, {
-      extra: {
-        orderId: payment.order_id,
-        merchantTradeNo: payment.merchant_trade_no,
-      },
-    });
-  };
-
   try {
     const serviceRole = createServiceRoleClient();
     const now = Date.now();
     const maxCreatedAt = new Date(now - MIN_AGE_MS).toISOString();
     const reconcileCutoff = new Date(now - RECONCILE_COOLDOWN_MS).toISOString();
 
-    // PostgREST 的 .or() 語法用句點分隔「欄位.運算子.值」，值裡若含句點／逗號
-    // 等保留字元（ISO timestamp 的毫秒部分就有句點）必須用雙引號包住，否則
-    // 解析會跑掉，導致撈到的候選跟預期不符（曾在 sandbox 端到端驗證中實測到
-    // 這個問題：候選數量對不上、且漏掉了明確符合條件的資料）。
+    // 冷卻過濾字串走 reconcileCooldownOrFilter 單一出處（雙引號包 timestamp 的
+    // PostgREST 陷阱說明見該 helper 的註解）。
     const { data: candidates, error } = await serviceRole
       .from("payment")
       .select("id, order_id, merchant_trade_no, amount")
       .eq("status", "pending")
       .lt("created_at", maxCreatedAt)
-      .or(
-        `last_reconciled_at.is.null,last_reconciled_at.lt."${reconcileCutoff}"`,
-      )
+      .or(reconcileCooldownOrFilter(reconcileCutoff))
       .order("created_at", { ascending: true })
       .limit(CANDIDATE_LIMIT);
 
@@ -404,7 +415,7 @@ export async function GET(request: Request) {
         }
         // 單筆查詢失敗（含 CheckMacValue 驗證失敗）：記錄並繼續下一筆，
         // 不讓一筆髒資料拖垮整批；last_reconciled_at 仍要寫，避免明天重查同一筆卡死。
-        recordUnexpected(e, payment);
+        recordUnexpected(summary, e, payment);
         await markReconciled(serviceRole, payment.id);
         // 節流不能因為這筆失敗就跳過——連續幾筆壞資料若零間隔連續打
         // ECPay，正是節流機制原本要防止的情況。
@@ -431,8 +442,8 @@ export async function GET(request: Request) {
         } else if (
           // 金額正數防呆：0 === 0 不得視為吻合——TradeAmt 與 payment.amount 同
           // 時為 0（建單 bug／異常回應被解析成 0）時，絕不可據此自動改狀態，
-          // 落到下方 mismatch 分支告警交人工。notify 路徑（webhook 端）沒有這
-          // 道對稱防呆，待 T127 順手補上。
+          // 落到下方 mismatch 分支告警交人工。notify 路徑（webhook 端）已於
+          // T127③ 補上對稱的正數防呆。
           Number(result.tradeAmt) > 0 &&
           Number(result.tradeAmt) === Number(payment.amount)
         ) {
@@ -567,7 +578,7 @@ export async function GET(request: Request) {
               });
             }
           } catch (e) {
-            recordUnexpected(e, payment);
+            recordUnexpected(summary, e, payment);
           }
         } else {
           // 金額不符：只告警，絕不自動改狀態——對帳的自動修正權限收斂到

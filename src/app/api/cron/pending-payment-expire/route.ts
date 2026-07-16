@@ -68,15 +68,14 @@ export async function GET(request: Request) {
       if (paidQueryError) {
         // fail-safe：無法確認「有沒有已收款」就整批不取消——寧可晚一天取消，
         // 不可誤取消已付款訂單（取消不可逆、且會觸發 T66 生命週期後續）。
-        Sentry.captureMessage(
-          "pending-payment-expire: paid-payment guard query failed, skip batch",
-          {
-            level: "error",
-            extra: { error: paidQueryError.message },
-          },
+        // 作法沿用上方候選查詢的 throw：走外層 catch＝Sentry captureException
+        // ＋HTTP 500。刻意不回 200／不動 failed 計數——回 200 會讓 Vercel cron
+        // 監控（以 HTTP 狀態判健康）把「整批被跳過」誤看成綠燈，且把 failed 的
+        // 語意從「單筆 transition 失敗」污染成「整批未檢查」，破壞
+        // cancelled+skipped+failed+paidConflict ≤ checked 不變式。
+        throw new Error(
+          `paid-payment guard 查詢失敗: ${paidQueryError.message}`,
         );
-        summary.failed = candidateIds.length;
-        return Response.json(summary);
       }
       for (const p of paidPayments ?? []) paidOrderIds.add(p.order_id);
     }

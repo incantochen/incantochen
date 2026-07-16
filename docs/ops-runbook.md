@@ -45,7 +45,7 @@ order by created_at;
 **判斷**：
 
 1. 跑 §0 查詢：`payment.status` 是否仍 `pending`？
-   - **分支**：若 `payment.status` 已是 `paid`、但 `orders.status` 仍 `pending_payment`——這是**webhook 側卡單**（webhook 先翻 payment paid、`settlePaid` 推進訂單那步失敗，且 ECPay 重送已耗盡）。T127 已落地：對帳 cron 的**漂移臂**（第二候選臂，撈 payment=paid＋orders=pending_payment）會在**隔日凌晨冪等推進**並補寄確認信（Sentry 會有「reconcile: promoted webhook-side stuck order」warning），T66 逾期取消 cron 也會 skip 這種訂單（「paid payment exists on expiring order」error 告警）——先等自癒，**連續兩天仍漂移才人工**：到 `/admin/orders/[id]` 用 **Admin Override** 手動把訂單推進到 `paid`（reason 填「webhook settlePaid 失敗，payment 已收款、人工推進訂單」），再依 §4 補確認信。急件可手動觸發對帳（下方修復步驟 2）。
+   - **分支**：若 `payment.status` 已是 `paid`、但 `orders.status` 仍 `pending_payment`——這是**webhook 側卡單**（webhook 先翻 payment paid、`settlePaid` 推進訂單那步失敗，且 ECPay 重送已耗盡）。T127 已落地：對帳 cron 的**漂移臂**（第二候選臂，撈 payment=paid＋orders=pending_payment）會在**隔日凌晨冪等推進**並補寄確認信（Sentry 會有「reconcile: promoted webhook-side stuck order」warning），T66 逾期取消 cron 也會 skip 這種訂單（「paid payment exists on expiring order」error 告警）——先等自癒，**連續兩天仍漂移才人工**：到 `/admin/orders/[id]` 用 **Admin Override** 手動把訂單推進到 `paid`（reason 填「webhook settlePaid 失敗，payment 已收款、人工推進訂單」），再依 §4 補確認信。**急件請直接走 Admin Override**——不要指望「手動觸發對帳」加速：漂移臂逐筆先蓋 `last_reconciled_at`（stamp-first）＋候選查詢帶 20h 冷卻，當晚排程已處理過的漂移列，同日手動重跑對帳會撈不到它（`driftChecked=0` 不代表沒漂移，只代表冷卻期內）。
 2. 到**綠界廠商後台**用 `merchant_trade_no` 查該筆交易——綠界顯示「已付款」才算已付款（權威來源）。
 
 **修復（依序嘗試，前面的成功就停）**：
@@ -77,7 +77,7 @@ order by created_at;
 
 > ℹ️ **第④類「webhook 側卡單」的成因與自癒（T127 已落地）**：webhook 端 `settlePaid` 先翻 `payment.status='paid'`、才推進訂單，若推進那步失敗且 ECPay 重送額度耗盡，會停在「payment 已 paid、orders 卡 pending_payment」。主對帳臂的候選鍵是 `payment.status='pending'`，撈不到這種漂移；T127 的**漂移臂**（第二候選臂，撈 payment=paid＋orders=pending_payment，不打 ECPay——payment=paid 是驗章＋金額核對通過後的財務事實，直接信任）隔日冪等推進＋補寄確認信，並在 T66 逾期取消 cron 加了取消前防呆（有 paid payment 就 skip＋error 告警），防止卡單被誤取消。連續兩天以上仍漂移才依 §1 判斷步驟 1 的分支人工處理。
 
-修完 T107＋T127 後，自動兜底涵蓋的失敗點（①②③④）都會自癒；剩餘需人工的狀況有兩類：**設計上的一天延遲**（webhook 失靈當天，客人最壞等到隔天凌晨才被扶正——急件走本節步驟 2 手動觸發），和**本來就該人工裁決的錢務問題**——金額不符（§2，永不自動修）、email 永久錯誤（§4）、重複扣款／退款（§5／§6）、已關閉訂單收到錢（第⑤類，§6.1）、付款失敗後重試付款（T66/T74 生命週期範圍，尚未做）。
+修完 T107＋T127 後，自動兜底涵蓋的失敗點（①②③④）都會自癒；剩餘需人工的狀況有三類：**設計上的一天延遲**（webhook 失靈當天，客人最壞等到隔天凌晨才被扶正——急件走 Admin Override）；**T127 部署前就已被逾期 cron 誤取消的漂移單**（`payment=paid`／`orders=cancelled`）——這種列主對帳臂（候選鍵 `payment=pending`）與漂移臂（候選鍵 `orders=pending_payment`）**都撈不到**、也沒有任何 cron 告警，只能靠一次性人工巡檢（查 `payment.status='paid'` 且對應 `orders.status IN ('cancelled','refunded')`）走 §6.1 錢務裁決，**T127 上線後新產生的卡單不再落入此類**（①已擋逾期取消）；和**本來就該人工裁決的錢務問題**——金額不符（§2，永不自動修）、email 永久錯誤（§4）、重複扣款／退款（§5／§6）、已關閉訂單收到錢（第⑤類，§6.1）、付款失敗後重試付款（T66/T74 生命週期範圍，尚未做）。
 
 ### 1.2 webhook 失敗的分層機率評估（2026-07-15，工程推估）
 

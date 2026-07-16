@@ -228,20 +228,23 @@ describe("逐筆處理", () => {
     expect(paymentSweeps).toEqual([{ order_id: "o2" }]);
   });
 
-  it("T127①：paid payment 批次查詢失敗 → fail-safe 整批不取消、failed=候選數", async () => {
+  it("T127①：paid payment 批次查詢失敗 → fail-safe 整批不取消、throw→500（不誤報綠燈）", async () => {
     candidates = [{ id: "o1" }, { id: "o2" }];
     paidQueryError = "connection timeout";
 
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
-    // 無法確認「有沒有已收款」就整批跳過：寧可晚一天取消，不可誤取消已付款訂單。
-    expect(res.status).toBe(200);
+    // 無法確認「有沒有已收款」就整批跳過：寧可晚一天取消，不可誤取消已付款
+    // 訂單。作法沿用候選查詢的 throw→外層 catch→HTTP 500（R2）：回 200 會讓
+    // cron 監控把「整批被跳過」誤看成綠燈，也不再用 failed 計數承載「整批未
+    // 檢查」（污染 failed 的單筆語意）。
+    expect(res.status).toBe(500);
     expect(body).toEqual({
       checked: 0,
       cancelled: 0,
       skipped: 0,
-      failed: 2,
+      failed: 0,
       paidConflict: 0,
     });
     expect(transitionOrder).not.toHaveBeenCalled();
