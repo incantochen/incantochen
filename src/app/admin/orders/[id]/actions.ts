@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import * as Sentry from "@sentry/nextjs";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import type { AdminActionResult } from "@/lib/admin/action-result";
@@ -30,6 +31,19 @@ import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 
 const RACE_MESSAGE = `此訂單狀態已被其他流程異動${REFRESH_TO_RETRY_SUFFIX}`;
 
+// 非競態的狀態轉換失敗必須留下遙測（T110 review）：log 寫入失敗現在會
+// rollback 整筆轉換並 throw 到這裡——若只回「請稍後再試」，持續性故障
+// （如 order_status_log 被未來 migration 的約束擋住）在管理員放棄重試後
+// 就完全沒有訊號，ops 無從追查。
+function reportAdminTransitionError(
+  action: string,
+  orderId: string,
+  e: unknown,
+) {
+  console.error(`[admin/orders] ${action} failed`, { orderId }, e);
+  Sentry.captureException(e, { extra: { action, orderId } });
+}
+
 export async function changeStatus(
   orderId: string,
   to: OrderStatus,
@@ -41,6 +55,7 @@ export async function changeStatus(
     if (e instanceof OrderTransitionRaceError) {
       return { ok: false, error: RACE_MESSAGE };
     }
+    reportAdminTransitionError("changeStatus", orderId, e);
     return { ok: false, error: "狀態更新失敗，請稍後再試" };
   }
   revalidatePath(`/admin/orders/${orderId}`);
@@ -73,6 +88,7 @@ export async function shipOrder(
     if (e instanceof OrderTransitionRaceError) {
       return { ok: false, error: RACE_MESSAGE };
     }
+    reportAdminTransitionError("shipOrder", orderId, e);
     return { ok: false, error: "出貨標記失敗，請稍後再試" };
   }
 
@@ -109,6 +125,7 @@ export async function overrideStatus(
     if (e instanceof OrderTransitionRaceError) {
       return { ok: false, error: RACE_MESSAGE };
     }
+    reportAdminTransitionError("overrideStatus", orderId, e);
     return { ok: false, error: "強制改狀態失敗，請稍後再試" };
   }
   revalidatePath(`/admin/orders/${orderId}`);

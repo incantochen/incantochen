@@ -328,8 +328,10 @@ export async function GET(request: Request) {
             // 以 payment.status='pending' 為鍵，若先翻 payment 再推進訂單，推進
             // 段失敗時候選鍵已被消滅，隔日 cron 永遠選不到這筆——客人已付款、
             // 訂單永久卡 pending_payment、確認信未寄，安全網自身留盲點。
-            // ensureOrderPaid 冪等（orders 條件式 UPDATE CAS），webhook 已推進
-            // 時安全 no-op。promoted 計數掛在①的回傳（見下方分類），計在搶救
+            // ensureOrderPaid 冪等（CAS 走 transition_order_status RPC，狀態
+            // 推進＋稽核 log 同一交易，T110），webhook 已推進時安全 no-op；
+            // log 寫入失敗會 rollback 推進並 throw（落到本 catch，候選鍵保留
+            // 隔日重試）。promoted 計數掛在①的回傳（見下方分類），計在搶救
             // 真正發生那一輪；隔日補翻 payment 的那一輪①回 already-settled、
             // 不再重複計。
             const orderResult = await ensureOrderPaid(

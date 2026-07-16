@@ -41,6 +41,10 @@ async function settlePaid(
 }
 
 export async function POST(request: Request) {
+  // hoist 到 try 外：T110 後 ensureOrderPaid 的 log 寫入失敗會 rollback 並
+  // throw 落到最外層 catch——告警必須帶得出是哪一筆交易，否則 Sentry 只剩
+  // 無法對應訂單的 generic error（舊版 log-insert 專屬告警帶有 orderId）。
+  let merchantTradeNo: string | undefined;
   try {
     const formData = await request.formData();
     const params: Record<string, string> = {};
@@ -57,7 +61,7 @@ export async function POST(request: Request) {
       return ERR("CheckMacValue Error");
     }
 
-    const merchantTradeNo = params.MerchantTradeNo;
+    merchantTradeNo = params.MerchantTradeNo;
     if (!merchantTradeNo) return ERR("MerchantTradeNo missing");
 
     const serviceRole = createServiceRoleClient();
@@ -228,8 +232,8 @@ export async function POST(request: Request) {
 
     return OK();
   } catch (e) {
-    console.error("[ecpay/notify] unhandled error", e);
-    Sentry.captureException(e);
+    console.error("[ecpay/notify] unhandled error", { merchantTradeNo }, e);
+    Sentry.captureException(e, { extra: { merchantTradeNo } });
     return ERR("Internal Error");
   }
 }
