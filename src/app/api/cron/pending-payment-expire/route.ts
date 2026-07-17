@@ -14,6 +14,9 @@ type Summary = {
   cancelled: number;
   skipped: number;
   failed: number;
+  // T110 分歧防護：已收款（payment=paid）卻卡 pending_payment 的訂單被本支
+  // 跳過取消的筆數——正常營運為 0，非 0 即代表 webhook 推進段曾 rollback。
+  diverged: number;
 };
 
 // T66：待付款訂單逾期（72 小時，以 orders.created_at 為固定時鐘，不因重新產生
@@ -25,7 +28,13 @@ export async function GET(request: Request) {
   const unauthorized = requireCronAuth(request);
   if (unauthorized) return unauthorized;
 
-  const summary: Summary = { checked: 0, cancelled: 0, skipped: 0, failed: 0 };
+  const summary: Summary = {
+    checked: 0,
+    cancelled: 0,
+    skipped: 0,
+    failed: 0,
+    diverged: 0,
+  };
 
   try {
     const serviceRole = createServiceRoleClient();
@@ -41,8 +50,46 @@ export async function GET(request: Request) {
 
     if (error) throw new Error(`候選查詢失敗: ${error.message}`);
 
+    // T110 分歧防護：批次撈出這批逾期候選中「已有 paid payment」的訂單。
+    // webhook 先翻 payment=paid 再推進訂單（notify/route.ts），若推進段的
+    // transition_order_status RPC 因 order_status_log 寫入失敗而 rollback，
+    // 會留下 payment=paid／order=pending_payment 的分歧；主對帳迴圈以
+    // payment.status='pending' 為鍵撈不到它，若這裡再把它當「逾期未付款」
+    // 取消，就變成「錢收了、單卻取消」的靜默 P0。故取消前先排除已收款者，
+    // 改為跳過＋error 告警，交 reconcile 的分歧兜底補推進、或人工結算。
+    const candidateIds = (candidates ?? []).map((o) => o.id);
+    const paidOrderIds = new Set<string>();
+    if (candidateIds.length > 0) {
+      const { data: paidPayments, error: paidError } = await serviceRole
+        .from("payment")
+        .select("order_id")
+        .in("order_id", candidateIds)
+        .eq("status", "paid");
+      // fail-safe：無法確認哪些已收款時，寧可整批不取消（throw→500、隔日
+      // 重跑），也不冒「把已收款訂單誤取消」的風險。
+      if (paidError) {
+        throw new Error(`paid-payment 分歧檢查失敗: ${paidError.message}`);
+      }
+      for (const p of paidPayments ?? []) paidOrderIds.add(p.order_id);
+    }
+
     for (const order of candidates ?? []) {
       summary.checked += 1;
+
+      if (paidOrderIds.has(order.id)) {
+        // 已收款卻卡 pending_payment：分歧態，絕不取消。發 P0 告警交人工／
+        // reconcile 兜底；正常營運不會走到這裡。
+        summary.diverged += 1;
+        console.error(
+          "[pending-payment-expire] 已收款訂單卡 pending_payment，跳過取消（需結算）",
+          { orderId: order.id },
+        );
+        Sentry.captureMessage(
+          "pending-payment-expire: paid payment on pending_payment order — skipped cancel (T110 divergence)",
+          { level: "error", extra: { orderId: order.id } },
+        );
+        continue;
+      }
 
       try {
         await transitionOrder(order.id, "cancelled", {
