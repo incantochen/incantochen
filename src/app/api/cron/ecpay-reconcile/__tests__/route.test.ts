@@ -128,6 +128,13 @@ type PaymentRow = {
 };
 
 let candidates: PaymentRow[] = [];
+// T127②：漂移臂（payment=paid／orders=pending_payment）的候選。payment 表的
+// select 依 .eq("status", …) 的值分流——主迴圈撈 pending、漂移臂撈 paid。
+let driftCandidates: {
+  id: string;
+  order_id: string;
+  merchant_trade_no: string;
+}[] = [];
 let recorded: { filters: Record<string, unknown>; values: unknown }[] = [];
 // 模擬「webhook 先搶到 CAS」：promote 的 UPDATE...WHERE status='pending' 命中
 // 0 rows，但 Supabase 不會回傳 error，只有 .select().maybeSingle() 的 data
@@ -138,10 +145,33 @@ let casLossIds = new Set<string>();
 let casErrorIds = new Set<string>();
 // 模擬 last_reconciled_at 那支 UPDATE 回傳 { error }（暫時性 DB 故障）。
 let lastReconciledError: string | null = null;
-// 捕捉候選查詢傳給 .or() 的實際字串，供斷言格式正確（PostgREST 要求值裡的
-// 句點／逗號等保留字元須用雙引號包住，否則解析會跑掉——sandbox 端到端驗證
-// 實測到這個 bug，這裡的 mock 之前完全忽略引數、測不出這種格式錯誤）。
-let lastOrFilter: string | undefined;
+// T127②：捕捉漂移臂候選查詢的完整形狀（select 的 inner embed、.or() 的
+// AND 串接、order 的 nullsFirst）——這些若回歸（漏 embed、閘門掉引號、NULLS
+// LAST 把人工列擠出 DRIFT_LIMIT）計數斷言測不出來，必須鎖住實際引數。
+let driftQueryCapture:
+  | {
+      select: string | undefined;
+      ors: string[];
+      order: { col: string; opts: unknown } | undefined;
+      filters: Record<string, unknown>;
+      limit: unknown;
+    }
+  | undefined;
+// 主候選查詢（status='pending'）自己的 .or() 捕捉——與漂移臂／稽核臂分開，
+// 不用會被後續 .or() 覆蓋的 last-write-wins 全域（否則主臂格式回歸測不出來）。
+let mainQueryCapture: { ors: string[] } | undefined;
+// #3 recurring 稽核臂（payment=paid ∧ orders=cancelled）的候選與捕捉。
+let auditCandidates: {
+  id: string;
+  order_id: string;
+  merchant_trade_no: string;
+}[] = [];
+let auditQueryCapture:
+  | { select: string | undefined; filters: Record<string, unknown> }
+  | undefined;
+// 候選查詢的 { error } 注入（Conv1 + degraded→500 測試）。
+let driftQueryError: string | null = null;
+let auditQueryError: string | null = null;
 // sweep 用：notification 表的 failed 紀錄與 orders 表的狀態查詢結果。
 let failedNotifications: { id: string; order_id: string; type: string }[] = [];
 let sweepOrders: { id: string; status: string }[] = [];
@@ -151,15 +181,8 @@ const uninvoicedOrders: { id: string }[] = [];
 // 捕捉 sweep 查詢實際帶的過濾條件，斷言只撈 paid＋invoice_status='none'。
 const lastOrdersFilters: Record<string, unknown> = {};
 
-// T110 分歧 sweep 用：pending_payment 訂單清單，及其中已有 paid payment 的
-// order_id 清單。
-let pendingDivergedOrders: { id: string }[] = [];
-let paidDivergedPayments: { order_id: string }[] = [];
-
-// orders 表被三種查詢用到，形狀不同以此分流：
+// orders 表被兩種查詢用到，形狀不同以此分流：
 // T88 通知 sweep 用 .in("id",[...]) 撈訂單狀態 → 回 sweepOrders；
-// T110 分歧 sweep 用 .eq("status","pending_payment").lt().order().limit() →
-//   回 pendingDivergedOrders；
 // T42 發票 sweep 用 .eq("status","paid").eq("invoice_status","none")… →
 //   回 uninvoicedOrders（並側錄 eq 過濾條件供斷言）。
 function makeOrdersChain() {
@@ -181,10 +204,6 @@ function makeOrdersChain() {
     then: (resolve: (v: unknown) => void) => {
       if (usedIn) {
         resolve({ data: sweepOrders, error: null });
-        return;
-      }
-      if (filters.status === "pending_payment") {
-        resolve({ data: pendingDivergedOrders, error: null });
         return;
       }
       // T42 發票 sweep：側錄過濾條件供斷言。
@@ -225,17 +244,18 @@ function makeSweepChain(rows: unknown[]) {
 function makeChain() {
   const chain: any = {
     _op: "select",
-    _usedIn: false,
     _filters: {} as Record<string, unknown>,
-    select: () => chain,
+    _ors: [] as string[],
+    select: (cols?: string) => {
+      chain._select = cols;
+      return chain;
+    },
     eq: (col: string, val: unknown) => {
       chain._filters[col] = val;
       return chain;
     },
-    // T110 分歧 sweep 的 paid-payment 查詢：.in("order_id",[...]).eq("status","paid")
     in: (col: string, val: unknown) => {
       chain._filters[col] = val;
-      chain._usedIn = true;
       return chain;
     },
     lt: (col: string, val: unknown) => {
@@ -243,11 +263,17 @@ function makeChain() {
       return chain;
     },
     or: (filter: string) => {
-      lastOrFilter = filter;
+      chain._ors.push(filter);
       return chain;
     },
-    order: () => chain,
-    limit: () => chain,
+    order: (col: string, opts?: unknown) => {
+      chain._order = { col, opts };
+      return chain;
+    },
+    limit: (n: unknown) => {
+      chain._limit = n;
+      return chain;
+    },
     update: (values: unknown) => {
       chain._op = "update";
       chain._values = values;
@@ -271,11 +297,36 @@ function makeChain() {
     },
     then: (resolve: (v: unknown) => void) => {
       if (chain._op === "select") {
-        // T110 分歧 sweep 的 paid-payment 查詢：以 .in + status='paid' 分流。
-        if (chain._usedIn && chain._filters.status === "paid") {
-          resolve({ data: paidDivergedPayments, error: null });
+        if (chain._filters.status === "paid") {
+          // status='paid' 有兩支：漂移臂（orders.status='pending_payment'）
+          // 與稽核臂（orders.status='cancelled'），以 embed 過濾值分流。
+          if (chain._filters["orders.status"] === "cancelled") {
+            auditQueryCapture = {
+              select: chain._select,
+              filters: { ...chain._filters },
+            };
+            resolve(
+              auditQueryError
+                ? { data: null, error: { message: auditQueryError } }
+                : { data: auditCandidates, error: null },
+            );
+            return;
+          }
+          driftQueryCapture = {
+            select: chain._select,
+            ors: [...chain._ors],
+            order: chain._order,
+            filters: { ...chain._filters },
+            limit: chain._limit,
+          };
+          resolve(
+            driftQueryError
+              ? { data: null, error: { message: driftQueryError } }
+              : { data: driftCandidates, error: null },
+          );
           return;
         }
+        mainQueryCapture = { ors: [...chain._ors] };
         resolve({ data: candidates, error: null });
         return;
       }
@@ -309,17 +360,32 @@ function buildRequest(auth?: string): Request {
   });
 }
 
+// C-Eff2：route 的節流 sleep 走 setTimeout(400ms)；測試不需要真的等，改成
+// 立即以 microtask 解析（保留 await 讓步的語意，但零真實延遲），省掉每輪
+// 漂移／sweep 測試 ~數秒的真實掛鐘等待。
+vi.stubGlobal(
+  "setTimeout",
+  ((fn: () => void) => {
+    queueMicrotask(fn);
+    return 0;
+  }) as unknown as typeof setTimeout,
+);
+
 beforeEach(() => {
   candidates = [];
+  driftCandidates = [];
+  auditCandidates = [];
   recorded = [];
   casLossIds = new Set();
   casErrorIds = new Set();
   lastReconciledError = null;
-  lastOrFilter = undefined;
+  driftQueryCapture = undefined;
+  mainQueryCapture = undefined;
+  auditQueryCapture = undefined;
+  driftQueryError = null;
+  auditQueryError = null;
   failedNotifications = [];
   sweepOrders = [];
-  pendingDivergedOrders = [];
-  paidDivergedPayments = [];
   queryTradeInfo.mockReset();
   // mockReset 而非 mockClear：mockClear 不會清掉前一個測試殘留、未被消耗的
   // mockResolvedValueOnce 佇列，會外洩到下一個測試造成順序相依的 flaky。
@@ -345,14 +411,19 @@ beforeEach(() => {
 });
 
 describe("候選查詢的 .or() 過濾字串格式", () => {
-  it("last_reconciled_at 的 ISO timestamp 值必須用雙引號包住（PostgREST 保留句點/逗號）", async () => {
+  it("主候選查詢的 last_reconciled_at ISO timestamp 值必須用雙引號包住（PostgREST 保留句點/逗號）", async () => {
     await GET(buildRequest("Bearer test-cron-secret"));
 
-    expect(lastOrFilter).toBeDefined();
+    // 專門斷言「主候選查詢」自己的 .or()（不是漂移臂後續 .or() 覆蓋的
+    // 全域 lastOrFilter——那會讓主臂格式回歸靜默溜過，見 K6）。
+    expect(mainQueryCapture).toBeDefined();
+    const mainOr = mainQueryCapture!.ors.find((f) =>
+      f.startsWith("last_reconciled_at"),
+    );
     // 錯誤示範（曾造成 sandbox 驗證撈到錯的候選）：
     //   last_reconciled_at.lt.2026-07-06T14:39:32.580Z   ← 值裡的句點沒包住
     // 正確：值兩端要有雙引號。
-    expect(lastOrFilter).toMatch(/last_reconciled_at\.lt\."[^"]+"/);
+    expect(mainOr).toMatch(/last_reconciled_at\.lt\."[^"]+"/);
   });
 });
 
@@ -380,7 +451,12 @@ describe("認證", () => {
     expect(body).toEqual({
       checked: 0,
       promoted: 0,
+      driftChecked: 0,
+      driftPromoted: 0,
+      driftTruncated: false,
       promotedOnClosedOrder: 0,
+      paidOnCancelled: 0,
+      paidOnCancelledTruncated: false,
       mismatches: 0,
       failed: 0,
       unexpected: 0,
@@ -393,7 +469,6 @@ describe("認證", () => {
       invoicesSwept: 0,
       invoicesIssued: 0,
       invoicesFailed: 0,
-      divergedRescued: 0,
     });
   });
 });
@@ -430,59 +505,6 @@ describe("T42 發票補開 sweep", () => {
   });
 });
 
-describe("T110 分歧兜底 sweep（payment=paid 但 order 卡 pending_payment）", () => {
-  it("分歧訂單 → 補推進 ensureOrderPaid('reconcile-diverged')、補寄通知、divergedRescued+1、error 告警", async () => {
-    pendingDivergedOrders = [{ id: "o1" }];
-    paidDivergedPayments = [{ order_id: "o1" }]; // webhook 已收款、訂單卻卡 pending
-
-    const res = await GET(buildRequest("Bearer test-cron-secret"));
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body.divergedRescued).toBe(1);
-    expect(ensureOrderPaid).toHaveBeenCalledWith(
-      expect.anything(),
-      "o1",
-      "reconcile-diverged",
-    );
-    // 補寄 webhook 當初沒寄成的確認信。
-    expect(ensureNotificationSent).toHaveBeenCalledWith(
-      expect.anything(),
-      "o1",
-    );
-    // 異常態：error 級告警。
-    expect(sentryCaptureMessage).toHaveBeenCalledWith(
-      "reconcile: paid payment on pending_payment order — rescuing (T110 divergence)",
-      expect.objectContaining({ level: "error" }),
-    );
-  });
-
-  it("pending_payment 訂單但無 paid payment（正常待付款）→ 不補推進、divergedRescued=0", async () => {
-    pendingDivergedOrders = [{ id: "o1" }];
-    paidDivergedPayments = []; // 沒有 paid payment：正常待付款，非分歧
-
-    const res = await GET(buildRequest("Bearer test-cron-secret"));
-    const body = await res.json();
-
-    expect(body.divergedRescued).toBe(0);
-    expect(ensureOrderPaid).not.toHaveBeenCalled();
-  });
-
-  it("補推進失敗（ensureOrderPaid throw，order_status_log 仍寫不進）→ 不計 divergedRescued、unexpected+1、續留 pending 隔日再試", async () => {
-    pendingDivergedOrders = [{ id: "o1" }];
-    paidDivergedPayments = [{ order_id: "o1" }];
-    ensureOrderPaid.mockRejectedValueOnce(
-      new Error("ensureOrderPaid failed: simulated"),
-    );
-
-    const res = await GET(buildRequest("Bearer test-cron-secret"));
-    const body = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(body.divergedRescued).toBe(0);
-    expect(body.unexpected).toBe(1);
-  });
-});
 
 describe("單筆候選：TradeStatus=1", () => {
   it("金額吻合 → 標記 paid、呼叫 ensureOrderPaid('reconcile')、寫 last_reconciled_at", async () => {
@@ -1119,6 +1141,312 @@ describe("queryTradeInfo 拋例外", () => {
       expect.anything(),
       "o2",
       "reconcile",
+    );
+  });
+});
+
+describe("T127② 漂移臂（webhook 側卡單：payment=paid／orders=pending_payment）", () => {
+  it("漂移候選 → 以 'reconcile-drift' 呼叫 ensureOrderPaid、不打 ECPay、計 driftChecked/driftPromoted、warning 告警", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    // 財務事實已確立（payment=paid＝當初驗章＋金額核對通過），不需要也不
+    // 應該再打 ECPay。
+    expect(queryTradeInfo).not.toHaveBeenCalled();
+    expect(ensureOrderPaid).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+      "reconcile-drift",
+    );
+    expect(ensureNotificationSent).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+    );
+    expect(body.driftChecked).toBe(1);
+    expect(body.driftPromoted).toBe(1);
+    // 不污染主臂的計數。
+    expect(body.checked).toBe(0);
+    expect(body.promoted).toBe(0);
+    // 漂移臂不再套主臂冷卻（K11）：不寫 last_reconciled_at（idempotent，推進
+    // 成功即離開候選集，天然收斂；共用主臂冷卻反而會延後一天自癒）。
+    expect(
+      recorded.some(
+        (r) => r.filters.id === "p1" && (r.values as any)?.last_reconciled_at,
+      ),
+    ).toBe(false);
+    // 每一筆 driftPromoted 都代表 webhook settlePaid 半路失敗過：留 warning
+    // 追蹤 webhook 可靠度（比照 promoted 慣例）。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: promoted webhook-side stuck order",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("漂移候選查詢形狀：inner embed＋orders.status='pending_payment' 過濾、NULL-tolerant 年齡閘門（timestamp 雙引號）、NULLS FIRST 排序、限量 DRIFT_LIMIT", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(driftQueryCapture).toBeDefined();
+    // 漂移的定義有一半在 embed 上（orders.status='pending_payment'）：漏掉
+    // inner embed 或漏掉這個 eq 會把「所有 paid payment」全撈進來當漂移單、
+    // 對已取消／退款訂單狂發假 P0（K7）。
+    expect(driftQueryCapture!.select).toContain("orders!inner(status)");
+    expect(driftQueryCapture!.filters["orders.status"]).toBe("pending_payment");
+    // 單一 .or()（K11 移除共用冷卻閘門後只剩年齡閘門）：NULL-tolerant（人工修
+    // SQL 不寫 paid_at）、timestamp 帶雙引號（PostgREST 保留字元陷阱）。
+    expect(driftQueryCapture!.ors).toHaveLength(1);
+    expect(driftQueryCapture!.ors[0]).toMatch(
+      /^paid_at\.is\.null,paid_at\.lt\."[^"]+"$/,
+    );
+    // NULLS FIRST 必須明示：Postgres ASC 預設 NULLS LAST，會把 paid_at IS
+    // NULL 的人工列排到 DRIFT_LIMIT 之外（大面積漂移時被截掉、多等數天）。
+    expect(driftQueryCapture!.order).toEqual({
+      col: "paid_at",
+      opts: { ascending: true, nullsFirst: true },
+    });
+    // 限量＝DRIFT_LIMIT+1：多撈一筆以精準偵測截斷（>20 才代表真有 backlog）。
+    expect(driftQueryCapture!.limit).toBe(21);
+  });
+
+  it("ensureOrderPaid 拋例外 → unexpected +1、批次繼續（本臂 idempotent，不蓋冷卻章）", async () => {
+    driftCandidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1" },
+      { id: "p2", order_id: "o2", merchant_trade_no: "M2" },
+    ];
+    ensureOrderPaid.mockRejectedValueOnce(
+      new Error("ensureOrderPaid failed: simulated"),
+    );
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.driftChecked).toBe(2);
+    expect(body.unexpected).toBe(1);
+    // 第二筆不受影響。
+    expect(body.driftPromoted).toBe(1);
+    // K11：漂移臂不蓋 last_reconciled_at（隔日候選集仍含此單自動重試）。
+    expect(
+      recorded.some(
+        (r) => r.filters.id === "p1" && (r.values as any)?.last_reconciled_at,
+      ),
+    ).toBe(false);
+  });
+
+  it("撞上取消競態（ensureOrderPaid 回 closed）→ 沿用 promotedOnClosedOrder＋error 告警、不計 driftPromoted", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureOrderPaid.mockResolvedValueOnce("closed");
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftPromoted).toBe(0);
+    expect(body.promotedOnClosedOrder).toBe(1);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: money received on closed order",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("候選查詢後才被別人推進（already-settled）→ 不計數、不告警", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureOrderPaid.mockResolvedValueOnce("already-settled");
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftChecked).toBe(1);
+    expect(body.driftPromoted).toBe(0);
+    expect(body.promotedOnClosedOrder).toBe(0);
+    expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
+      "reconcile: promoted webhook-side stuck order",
+      expect.anything(),
+    );
+  });
+
+  it("通知投遞失敗（ensureNotificationSent 回 false）→ notifyFailed 計數", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureNotificationSent.mockResolvedValueOnce(false);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftPromoted).toBe(1);
+    expect(body.notifyFailed).toBe(1);
+  });
+
+  it("主迴圈 rate limited 中止後，漂移臂仍照常執行（不打 ECPay、不受限速影響）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(new RateLimitError("403"));
+    driftCandidates = [{ id: "p9", order_id: "o9", merchant_trade_no: "M9" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.rateLimited).toBe(true);
+    expect(body.driftChecked).toBe(1);
+    expect(body.driftPromoted).toBe(1);
+  });
+
+  it("#4 推進成功後掃該訂單其餘 pending payment → failed（消滅永久 zombie）", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureOrderPaid.mockResolvedValueOnce("promoted");
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    // sweepSiblingPendingPayments：UPDATE payment SET status='failed'
+    // WHERE order_id='o1' AND status='pending'
+    expect(
+      recorded.some(
+        (r) =>
+          (r.values as any)?.status === "failed" &&
+          r.filters.order_id === "o1" &&
+          r.filters.status === "pending",
+      ),
+    ).toBe(true);
+  });
+
+  it("#4 already-settled 也掃 sibling pending（訂單已 paid，殘留 pending 須清）", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureOrderPaid.mockResolvedValueOnce("already-settled");
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(
+      recorded.some(
+        (r) =>
+          (r.values as any)?.status === "failed" &&
+          r.filters.order_id === "o1" &&
+          r.filters.status === "pending",
+      ),
+    ).toBe(true);
+  });
+
+  it("#4 closed 不掃 sibling（錢收在已關閉訂單，走人工裁決不動 payment）", async () => {
+    driftCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+    ensureOrderPaid.mockResolvedValueOnce("closed");
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(
+      recorded.some(
+        (r) =>
+          (r.values as any)?.status === "failed" &&
+          r.filters.order_id === "o1",
+      ),
+    ).toBe(false);
+  });
+
+  it("#10 撈到超過 DRIFT_LIMIT（+1）→ driftTruncated=true＋warning、只處理前 DRIFT_LIMIT 筆", async () => {
+    // 多撈一筆偵測截斷：回 21 筆代表真有 backlog（>20）。
+    driftCandidates = Array.from({ length: 21 }, (_, i) => ({
+      id: `p${i}`,
+      order_id: `o${i}`,
+      merchant_trade_no: `M${i}`,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftTruncated).toBe(true);
+    // 本輪只處理前 20 筆，多撈的第 21 筆留待隔日。
+    expect(body.driftChecked).toBe(20);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: drift backlog may exceed limit",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("#10 恰好 DRIFT_LIMIT 筆（無 backlog）→ driftTruncated=false、不誤發 backlog 告警", async () => {
+    driftCandidates = Array.from({ length: 20 }, (_, i) => ({
+      id: `p${i}`,
+      order_id: `o${i}`,
+      merchant_trade_no: `M${i}`,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftTruncated).toBe(false);
+    expect(body.driftChecked).toBe(20);
+    expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
+      "reconcile: drift backlog may exceed limit",
+      expect.anything(),
+    );
+  });
+
+  it("Conv1 漂移候選查詢 {error} → 告警＋不 throw、整支 cron 回 500（fail-visible）", async () => {
+    driftQueryError = "connection timeout";
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    // 不 throw（回 500 而非例外冒泡）、其餘 sweep 仍照跑。
+    expect(res.status).toBe(500);
+    expect(body.driftChecked).toBe(0);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: drifted-order 候選查詢失敗",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+});
+
+describe("#3 recurring 稽核臂（payment=paid ∧ orders=cancelled）", () => {
+  it("查詢形狀：inner embed＋orders.status='cancelled' 過濾", async () => {
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(auditQueryCapture).toBeDefined();
+    expect(auditQueryCapture!.select).toContain("orders!inner(status)");
+    expect(auditQueryCapture!.filters.status).toBe("paid");
+    expect(auditQueryCapture!.filters["orders.status"]).toBe("cancelled");
+  });
+
+  it("撈到 paid-on-cancelled 漂移列 → paidOnCancelled 計數＋error 告警（durable 兜底）", async () => {
+    auditCandidates = [{ id: "p1", order_id: "o1", merchant_trade_no: "M1" }];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.paidOnCancelled).toBe(1);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid payment on cancelled order",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("稽核查詢 {error} → 告警＋整支 cron 回 500（fail-visible）", async () => {
+    auditQueryError = "connection timeout";
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(res.status).toBe(500);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid-on-cancelled 稽核查詢失敗",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("撈到超過 DRIFT_LIMIT（+1）→ paidOnCancelledTruncated=true＋error 告警、只計前 DRIFT_LIMIT 筆", async () => {
+    auditCandidates = Array.from({ length: 21 }, (_, i) => ({
+      id: `p${i}`,
+      order_id: `o${i}`,
+      merchant_trade_no: `M${i}`,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.paidOnCancelledTruncated).toBe(true);
+    expect(body.paidOnCancelled).toBe(20);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid-on-cancelled backlog exceeds limit",
+      expect.objectContaining({ level: "error" }),
     );
   });
 });

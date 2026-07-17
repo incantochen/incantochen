@@ -12,6 +12,7 @@ import {
   transitionOrder,
   adminOverrideStatus,
   OrderTransitionRaceError,
+  PaidOrderCancelBlockedError,
   type OrderStatus,
 } from "@/lib/order/state-machine";
 import {
@@ -52,6 +53,13 @@ export async function changeStatus(
   try {
     await transitionOrder(orderId, to, { actorId: user.id });
   } catch (e) {
+    if (e instanceof PaidOrderCancelBlockedError) {
+      return {
+        ok: false,
+        error:
+          "此訂單已有付款記錄，不能直接取消；請改走退款流程或 Admin Override",
+      };
+    }
     if (e instanceof OrderTransitionRaceError) {
       return { ok: false, error: RACE_MESSAGE };
     }

@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildAioParams } from "@/lib/ecpay/aio-payment";
 import { generateMerchantTradeNo } from "@/lib/ecpay/merchant-trade-no";
+import { findPaidPayment } from "@/lib/order/find-paid-payment";
 import { serverEnv } from "@/lib/env.server";
 import { getClientIp } from "@/lib/get-client-ip";
 import {
@@ -255,14 +256,15 @@ export default async function CheckoutPayPage({
     // 發新號前最後一道防呆：若這張訂單已有 paid payment（webhook 正在處理中、
     // orders.status 還沒推進的極窄窗口），絕不能再發新交易序號讓客人二次付款
     // ——導去成功頁（ensureOrderPaid 冪等，稍後 webhook 會把訂單狀態補齊）。
-    const { data: paidPayment, error: paidCheckError } = await serviceRole
-      .from("payment")
-      .select("id")
-      .eq("order_id", order.id)
-      .eq("status", "paid")
-      .maybeSingle();
-    if (paidCheckError) {
-      // T95（F-008）：DB 暫時性故障不可把付款中的客人踢回結帳頁。
+    // findPaidPayment 內含 { error } 檢查（會 throw）——單一出處（T127）。
+    // T95（F-008）：DB 暫時性故障不可把付款中的客人踢回結帳頁——catch 回
+    // SystemBusyNotice 讓客人留在原地重試（合流裁決：取 master 的 T95 語意，
+    // 取代原「導回 /checkout」的寬鬆處理）。redirect() 內部以 throw 實作，
+    // 故成功頁導向必須放在 try 外，否則會被 catch 誤攔成「查詢失敗」。
+    let paidPayment: { id: string } | null;
+    try {
+      paidPayment = await findPaidPayment(serviceRole, order.id);
+    } catch {
       return <SystemBusyNotice />;
     }
     if (paidPayment) {

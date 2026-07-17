@@ -5,17 +5,24 @@ import {
   ensureOrderPaid,
   ensureNotificationSent,
 } from "@/lib/order/ensure-paid";
+import { markPendingPaymentsFailed } from "@/lib/order/mark-pending-payments-failed";
 import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 import {
   queryTradeInfo,
   RateLimitError,
   QueryTradeInfoHttpError,
 } from "@/lib/ecpay/query-trade-info";
+import { validateSettleAmount } from "@/lib/ecpay/validate-settle-amount";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 import { redis } from "@/lib/redis";
 import { sendOnce } from "@/lib/notification/send-once";
 import { NOTIFICATION_SENDERS } from "@/lib/notification/senders";
 import type { OrderStatus } from "@/lib/order/order-status";
+
+// serverless function 最長執行時間：主迴圈＋漂移臂＋通知／發票 sweep 逐筆
+// 400ms 節流，滿批最壞情況約需上百秒；設 300s 避免平台預設過低時中途被砍
+// （漂移臂推進到一半被中斷會延後自癒，見各 sweep 的冪等註解）。
+export const maxDuration = 300;
 
 const CANDIDATE_LIMIT = 30;
 const MIN_AGE_MS = 10 * 60 * 1000;
@@ -29,6 +36,7 @@ const MIN_AGE_MS = 10 * 60 * 1000;
 const RECONCILE_COOLDOWN_MS = 20 * 60 * 60 * 1000;
 const THROTTLE_MS = 400;
 const SWEEP_LIMIT = 20;
+const DRIFT_LIMIT = 20;
 
 // 連續 403 計數（跨排程持久化於 Redis）。ECPay 限流實測回 403（ops-runbook），
 // 但持續性 403 也可能是金鑰／CheckMacValue 失效——偶發 403 當限流退避即可，
@@ -67,10 +75,12 @@ async function markReconciled(
 //（客人 email 打錯等）會每天重試失敗＋告警一次，連續多日同一筆告警＝該
 // 人工介入（ops-runbook）；失敗分類＋次數上限的完整版需加欄位，登記為
 // 獨立技術債任務。
+// 回傳 false＝查詢失敗（呼叫端據此讓整支 cron fail-visible 回 500，理由同
+// 漂移臂）。正常跑完（含無事可補）回 true。
 async function sweepFailedNotifications(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   summary: Summary,
-) {
+): Promise<boolean> {
   const { data: failedRows, error } = await serviceRole
     .from("notification")
     .select("id, order_id, type")
@@ -84,9 +94,9 @@ async function sweepFailedNotifications(
       level: "error",
       extra: { error: error.message },
     });
-    return;
+    return false;
   }
-  if (!failedRows || failedRows.length === 0) return;
+  if (!failedRows || failedRows.length === 0) return true;
 
   // 批次撈訂單狀態做適寄判斷（不依賴 FK embed，兩段查詢即可）。
   const orderIds = [...new Set(failedRows.map((r) => r.order_id))];
@@ -101,7 +111,7 @@ async function sweepFailedNotifications(
       level: "error",
       extra: { error: ordersError.message },
     });
-    return;
+    return false;
   }
   const statusById = new Map((orders ?? []).map((o) => [o.id, o.status]));
 
@@ -141,15 +151,31 @@ async function sweepFailedNotifications(
     // 節流：對 Resend 的呼叫比照主迴圈對 ECPay 的禮貌。
     await sleep(THROTTLE_MS);
   }
+  return true;
 }
 
 type Summary = {
   checked: number;
   promoted: number;
+  // T127②：漂移臂（payment=paid／orders=pending_payment 的 webhook 側卡單）
+  // 的候選數與實際推進數——driftPromoted 每一筆都代表 webhook 的 settlePaid
+  // 半路失敗過，是 webhook 可靠度訊號（比照 promoted 慣例）。
+  driftChecked: number;
+  driftPromoted: number;
+  // 漂移臂撈到的筆數觸及 DRIFT_LIMIT：可能還有更多漂移單被截掉、留待隔日，
+  // 不再無聲（大面積 webhook 失靈時 backlog 累積需人工關注，ops-runbook §1.1）。
+  driftTruncated: boolean;
   // 錢確認收到，但訂單處於 cancelled／refunded 等已關閉狀態（ensureOrderPaid
   // 回報 closed）——與 promoted（健康搶救）分流，這是「錢收在已關閉訂單上」
   // 的獨立訊號，須走人工裁決：退款或恢復訂單（ops-runbook §6.1）。
   promotedOnClosedOrder: number;
+  // recurring 稽核臂：payment=paid ∧ orders=cancelled 的漂移單（取消守衛的
+  // TOCTOU 窄窗、或 T127 部署前既有列）。主臂（鍵 payment=pending）與漂移臂
+  //（鍵 orders=pending_payment）都撈不到，這是它的 durable 兜底——不靠單次
+  // Sentry，每日查得到就每日告警走人工裁決（ops-runbook §6.1）。
+  paidOnCancelled: number;
+  // 稽核臂撈到超過 DRIFT_LIMIT：大面積事故時 backlog 超出單輪量，需人工關注。
+  paidOnCancelledTruncated: boolean;
   mismatches: number;
   failed: number;
   unexpected: number;
@@ -168,11 +194,243 @@ type Summary = {
   invoicesSwept: number;
   invoicesIssued: number;
   invoicesFailed: number;
-  // T110 分歧兜底：payment=paid 但 order 仍卡 pending_payment 的訂單被本 sweep
-  // 補推進的筆數。正常營運為 0；非 0 代表 webhook 推進段曾 rollback（見
-  // sweepDivergedPaidOrders）。
-  divergedRescued: number;
 };
+
+// NULL-tolerant「欄位為 null 或早於 cutoff」的 PostgREST .or() 過濾字串單一
+// 出處（主臂的 last_reconciled_at 冷卻閘門、漂移臂的 paid_at 年齡閘門共用）。
+// timestamp 值必須雙引號包住——.or() 用句點分隔「欄位.運算子.值」，值裡的
+// 句點（ISO 毫秒）／逗號會被誤解析（曾在 sandbox 端到端驗證實測到候選對不上、
+// 漏掉明確符合的資料）。這條規則踩過真實 bug 才寫對，只留一份供各查詢 import，
+// 禁止各自手抄複本失同步。
+function nullOrBefore(column: string, cutoffIso: string) {
+  return `${column}.is.null,${column}.lt."${cutoffIso}"`;
+}
+
+// 單筆候選「非預期失敗」的共用出口：計數＋Sentry exception。主迴圈與漂移臂
+// （reconcileDriftedOrders）共用同一份，避免兩處 extra payload／計數語意漂移。
+// 已知取捨：同一筆候選一輪內可能計到 2 次 unexpected（主臂②的 CAS {error}
+// 與③的 throw 各記一次）——兩個獨立故障本來就是兩個訊號，去重需額外狀態、
+// 弊大於利，維持雙計（PR #67 review 拍板）。
+function recordUnexpected(
+  summary: Summary,
+  e: unknown,
+  payment: { order_id: string; merchant_trade_no: string },
+) {
+  summary.unexpected += 1;
+  Sentry.captureException(e, {
+    extra: {
+      orderId: payment.order_id,
+      merchantTradeNo: payment.merchant_trade_no,
+    },
+  });
+}
+
+// 「錢收在已關閉訂單上」的共用出口（主迴圈與漂移臂共用單一出處，避免兩處
+// 計數語意／Sentry 訊息字串漂移——runbook §6.1 與測試都比對這個字串）。
+function recordClosedOrder(
+  summary: Summary,
+  payment: { order_id: string; merchant_trade_no: string },
+) {
+  summary.promotedOnClosedOrder += 1;
+  Sentry.captureMessage("reconcile: money received on closed order", {
+    level: "error",
+    extra: {
+      orderId: payment.order_id,
+      merchantTradeNo: payment.merchant_trade_no,
+    },
+  });
+}
+
+// 通知信投遞失敗的共用出口（主迴圈與漂移臂共用單一出處，理由同上）。
+function recordNotifyFailed(
+  summary: Summary,
+  payment: { order_id: string; merchant_trade_no: string },
+) {
+  summary.notifyFailed += 1;
+  Sentry.captureMessage("reconcile: notification delivery failed", {
+    level: "warning",
+    extra: {
+      orderId: payment.order_id,
+      merchantTradeNo: payment.merchant_trade_no,
+    },
+  });
+}
+
+// T127②：webhook 側卡單（payment=paid／orders=pending_payment）的第二候選臂。
+// 主迴圈的候選鍵是 payment.status='pending'，撈不到這種漂移——它是 webhook 端
+// settlePaid「先翻 payment、再推進訂單」半路失敗＋ECPay 重送耗盡的產物，若不
+// 處理則不自癒、且錢收了沒有任何自動告警（ops-runbook §1.1 第④類）。
+// 故意不打 ECPay：payment=paid 是當初驗章＋金額核對通過後才寫入的財務事實，
+// 直接信任即可；也因此本臂不受 queryTradeInfo 的 rate limit 影響——僅限主迴圈
+// 被 RateLimitError 中斷（break）的情況本臂照跑；主候選查詢若回 {error} 會
+// throw→500，本臂與後續 sweep 當天同樣被跳過（非本臂可救，隔日 cron 再來）。
+// 每筆 sleep(THROTTLE_MS) 保留，禮貌對象是 ensureNotificationSent 背後的 Resend。
+// 訂單已推進成 paid 後，把它其餘的 pending payment 一併標成 failed：客人可能
+// 產生過多張付款連結（pay page 標舊 pending 為 failed 後另建 pending，T74），
+// 回傳 false＝候選查詢失敗（呼叫端據此讓整支 cron 回 HTTP 500，讓監控看得到
+// 紅燈，而非把「漂移臂靜默沒跑」誤看成綠燈——對齊 expire route 的 fail-visible
+// 理由；漂移臂是 webhook 側卡單的指定自癒者，它 dead 必須告警）。
+async function reconcileDriftedOrders(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+): Promise<boolean> {
+  const now = Date.now();
+  const maxPaidAt = new Date(now - MIN_AGE_MS).toISOString();
+
+  // inner embed 過濾 orders.status，只撈漂移單。年齡閘門必須 NULL-tolerant：
+  // 不可用 .lt("paid_at", cutoff)——PostgREST 中 NULL < ts 為假，會永久靜默
+  // 排除 paid_at IS NULL 的 paid 列。ops-runbook §1 步驟 3 的人工修 SQL
+  // （UPDATE payment SET status='paid', gateway_trade_no=... 不寫 paid_at）
+  // 正會產生這種列，加上取消守衛又擋住逾期取消，會卡 pending_payment 永不
+  // 自癒——正是本臂要關掉的盲點。code 寫入的 paid 列一律同時寫 paid_at，故
+  // NULL⟹人工列⟹立即處理安全（本查詢已用 orders.status='pending_payment'
+  // 過濾，只會撈到真正卡住的單）。MIN_AGE_MS 只壓非 NULL 分支：避免撈到
+  // webhook 正在 settle 中的單（payment 剛翻、訂單推進 in-flight）。
+  // timestamp 值必須雙引號包住（nullOrBefore helper 的註解記載 PostgREST 陷阱）。
+  //
+  // 刻意不套主臂的 last_reconciled_at 冷卻閘門：本臂 idempotent（ensureOrderPaid
+  // 走 CAS），推進成功後訂單即離開候選集（orders.status≠pending_payment），
+  // 天然收斂——不需冷卻去重。共用主臂的冷卻反而有害：主臂處理該 payment 仍
+  // pending 時蓋的章，會讓它稍後翻 paid 成漂移單後被冷卻排除，延後一天自癒。
+  const { data: drifted, error } = await serviceRole
+    .from("payment")
+    .select("id, order_id, merchant_trade_no, orders!inner(status)")
+    .eq("status", "paid")
+    .eq("orders.status", "pending_payment")
+    .or(nullOrBefore("paid_at", maxPaidAt))
+    // nullsFirst 必加：Postgres ASC 預設 NULLS LAST，會把上面特意保留的
+    // paid_at IS NULL 人工列排到最後——漂移列 ≥ DRIFT_LIMIT（大面積 webhook
+    // 失靈）時被截掉，「立即處理」的意圖被排序默默推翻；NULL 排最前才與
+    // 年齡閘門的 NULL-tolerant 設計一致。
+    .order("paid_at", { ascending: true, nullsFirst: true })
+    // 多撈一筆（+1）以精準偵測截斷：撈到 > DRIFT_LIMIT 才代表真有 backlog，
+    // 避免「恰好等於上限、後面沒有更多」誤觸 backlog 告警（本輪只處理前
+    // DRIFT_LIMIT 筆，多撈的那筆下輪再處理）。
+    .limit(DRIFT_LIMIT + 1);
+
+  if (error) {
+    Sentry.captureMessage("reconcile: drifted-order 候選查詢失敗", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return false;
+  }
+
+  const driftRows = (drifted ?? []).slice(0, DRIFT_LIMIT);
+  // 撈到超過上限＝還有更多漂移單留待隔日；不再無聲（大面積 webhook 失靈的
+  // backlog 需人工關注，ops-runbook §1.1）。
+  if ((drifted?.length ?? 0) > DRIFT_LIMIT) {
+    summary.driftTruncated = true;
+    Sentry.captureMessage("reconcile: drift backlog may exceed limit", {
+      level: "warning",
+      extra: { driftLimit: DRIFT_LIMIT },
+    });
+  }
+
+  for (const payment of driftRows) {
+    // 凡入選必計、進迴圈第一行就計（不論後續成敗），日報才能對出
+    // 「撈到幾筆 vs 救活幾筆」。
+    summary.driftChecked += 1;
+
+    try {
+      // source 用獨立字串，order_status_log.note 稽核可辨識是漂移臂救的。
+      const orderResult = await ensureOrderPaid(
+        serviceRole,
+        payment.order_id,
+        "reconcile-drift",
+      );
+
+      if (orderResult === "promoted") {
+        summary.driftPromoted += 1;
+        Sentry.captureMessage("reconcile: promoted webhook-side stuck order", {
+          level: "warning",
+          extra: {
+            orderId: payment.order_id,
+            merchantTradeNo: payment.merchant_trade_no,
+          },
+        });
+        // 推進成功：清掉該訂單其餘 pending payment 殘留（見函式註解）。
+        await markPendingPaymentsFailed(serviceRole, payment.order_id);
+      } else if (orderResult === "closed") {
+        // 撞上取消競態：錢收在已關閉訂單上——共用主迴圈的計數與訊息，
+        // 走人工裁決（ops-runbook §6.1）。
+        recordClosedOrder(summary, payment);
+      } else if (orderResult === "already-settled") {
+        // 候選查詢後才被別人推進（webhook 遲到的重送等）——不是本臂的搶救、
+        // 不計 driftPromoted，但訂單既已 paid，同樣清掉殘留 pending payment，
+        // 否則它會一直卡在主臂候選集。
+        await markPendingPaymentsFailed(serviceRole, payment.order_id);
+      }
+      // indeterminate：ensureOrderPaid 內已發 P0，保守不動作、不清 sibling。
+
+      // 補寄通知：卡單期間確認信一定沒寄過（訂單當時還不是 paid）。
+      const notified = await ensureNotificationSent(
+        serviceRole,
+        payment.order_id,
+      );
+      if (!notified) {
+        recordNotifyFailed(summary, payment);
+      }
+    } catch (e) {
+      // 單筆失敗不拖垮整批；本臂 idempotent，隔日候選集仍含此單自動重試。
+      // 共用主臂的 recordUnexpected（計數＋Sentry extra 單一出處）。
+      recordUnexpected(summary, e, payment);
+    }
+
+    await sleep(THROTTLE_MS);
+  }
+  return true;
+}
+
+// recurring 稽核臂（#3 durable 兜底）：payment=paid ∧ orders=cancelled 是取消
+// 守衛的 TOCTOU 窄窗、或 T127 部署前既有列——主臂（鍵 payment=pending）與漂移
+// 臂（鍵 orders=pending_payment）都撈不到，若只靠取消當下的單次 Sentry，事件
+// 漏看就永遠無聲。這支每日查得到就告警，把單次訊號升級為 durable 復發偵測，
+// 走人工裁決（ops-runbook §6.1）。post-guard 下這個集合應恆近乎空，量體 ~0。
+// 回傳 false＝查詢失敗（同漂移臂，讓整支 cron fail-visible 回 500）。
+async function auditPaidOnCancelledOrders(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+): Promise<boolean> {
+  const { data: rows, error } = await serviceRole
+    .from("payment")
+    .select("id, order_id, merchant_trade_no, orders!inner(status)")
+    .eq("status", "paid")
+    .eq("orders.status", "cancelled")
+    // 穩定排序：無 .order() 時 PostgREST 每輪可能回不同的 20 筆，害同一筆
+    // 卡單在告警集裡進出跳動；固定以 paid_at 升序（最早的錢最該先處理）。
+    .order("paid_at", { ascending: true, nullsFirst: true })
+    // 多撈一筆精準偵測截斷（同漂移臂）：大面積事故 > DRIFT_LIMIT 時不可無聲。
+    .limit(DRIFT_LIMIT + 1);
+
+  if (error) {
+    Sentry.captureMessage("reconcile: paid-on-cancelled 稽核查詢失敗", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return false;
+  }
+
+  if ((rows?.length ?? 0) > DRIFT_LIMIT) {
+    summary.paidOnCancelledTruncated = true;
+    Sentry.captureMessage("reconcile: paid-on-cancelled backlog exceeds limit", {
+      level: "error",
+      extra: { limit: DRIFT_LIMIT },
+    });
+  }
+
+  for (const payment of (rows ?? []).slice(0, DRIFT_LIMIT)) {
+    summary.paidOnCancelled += 1;
+    Sentry.captureMessage("reconcile: paid payment on cancelled order", {
+      level: "error",
+      extra: {
+        orderId: payment.order_id,
+        merchantTradeNo: payment.merchant_trade_no,
+      },
+    });
+  }
+  return true;
+}
 
 const INVOICE_SWEEP_LIMIT = 20;
 
@@ -180,10 +438,11 @@ const INVOICE_SWEEP_LIMIT = 20;
 // webhook 那次開立失敗（ECPay 暫時性故障、after() 執行環境被提早回收等）的
 // 自動補開防線；issueInvoiceForOrder 冪等（issued 短路＋GetIssue 判別），
 // 與 webhook／後台補開共用同一支，重跑安全。
+// 回傳 false＝查詢失敗（呼叫端據此讓整支 cron fail-visible 回 500）。
 async function sweepUninvoicedPaidOrders(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   summary: Summary,
-) {
+): Promise<boolean> {
   const { data: uninvoiced, error } = await serviceRole
     .from("orders")
     .select("id")
@@ -197,7 +456,7 @@ async function sweepUninvoicedPaidOrders(
       level: "error",
       extra: { error: error.message },
     });
-    return;
+    return false;
   }
 
   for (const order of uninvoiced ?? []) {
@@ -219,91 +478,7 @@ async function sweepUninvoicedPaidOrders(
     }
     await sleep(THROTTLE_MS);
   }
-}
-
-const DIVERGED_SWEEP_LIMIT = 20;
-
-// T110 分歧兜底：webhook 先翻 payment=paid、再推進訂單（notify/route.ts）；若
-// 推進段的 transition_order_status RPC 因 order_status_log 寫入失敗而 rollback，
-// 會留下 payment=paid 但 order=pending_payment 的分歧。主對帳迴圈以
-// payment.status='pending' 為鍵，撈不到這種「payment 已 paid」的訂單；逾期取消
-// cron 又會把它取消（錢收了、單卻取消的靜默 P0，已在該 cron 加防護跳過）。這裡
-// 主動撈「pending_payment 訂單卻已有 paid payment」的分歧，重跑 ensureOrderPaid
-// 補推進＋補寄漏掉的通知，並以 error 級告警（正常營運絕不該出現）。
-// 兩段查詢（不依賴 FK embed，比照 sweepFailedNotifications）：先撈夠老的
-// pending_payment 訂單，再查哪些已有 paid payment——MIN_AGE 過濾避開「webhook
-// 正在結算中」（payment 剛翻 paid、訂單即將推進的數毫秒窗口）的偽分歧。
-async function sweepDivergedPaidOrders(
-  serviceRole: ReturnType<typeof createServiceRoleClient>,
-  summary: Summary,
-) {
-  const cutoff = new Date(Date.now() - MIN_AGE_MS).toISOString();
-  const { data: pendingOrders, error } = await serviceRole
-    .from("orders")
-    .select("id")
-    .eq("status", "pending_payment")
-    .lt("created_at", cutoff)
-    .order("created_at", { ascending: true })
-    .limit(DIVERGED_SWEEP_LIMIT);
-
-  if (error) {
-    console.error("[ecpay-reconcile] 分歧掃描：pending 訂單查詢失敗", error);
-    Sentry.captureMessage("reconcile: diverged sweep order query failed", {
-      level: "error",
-      extra: { error: error.message },
-    });
-    return;
-  }
-  if (!pendingOrders || pendingOrders.length === 0) return;
-
-  const orderIds = pendingOrders.map((o) => o.id);
-  const { data: paidPayments, error: payError } = await serviceRole
-    .from("payment")
-    .select("order_id")
-    .in("order_id", orderIds)
-    .eq("status", "paid");
-
-  if (payError) {
-    console.error("[ecpay-reconcile] 分歧掃描：payment 查詢失敗", payError);
-    Sentry.captureMessage("reconcile: diverged sweep payment query failed", {
-      level: "error",
-      extra: { error: payError.message },
-    });
-    return;
-  }
-
-  const divergedOrderIds = [
-    ...new Set((paidPayments ?? []).map((p) => p.order_id)),
-  ];
-
-  for (const orderId of divergedOrderIds) {
-    // 異常態：錢已收到但訂單卡 pending_payment。error 級告警（每筆一次）。
-    Sentry.captureMessage(
-      "reconcile: paid payment on pending_payment order — rescuing (T110 divergence)",
-      { level: "error", extra: { orderId } },
-    );
-    try {
-      // ensureOrderPaid 冪等：把 order 從 pending_payment 補推進成 paid（RPC
-      // 內狀態＋稽核 log 同一交易）；log 仍寫不進去時它會 throw，訂單續留
-      // pending，隔日本 sweep 再試。補推進成功才計 rescued。
-      await ensureOrderPaid(serviceRole, orderId, "reconcile-diverged");
-      summary.divergedRescued += 1;
-      // 補寄 webhook 當初沒寄成的確認信（ensureOrderPaid throw 時 settlePaid
-      // 走不到寄信段）。冪等，失敗由 failed-notification sweep 再兜。
-      const notified = await ensureNotificationSent(serviceRole, orderId);
-      if (!notified) {
-        summary.notifyFailed += 1;
-        Sentry.captureMessage("reconcile: notification delivery failed", {
-          level: "warning",
-          extra: { orderId },
-        });
-      }
-    } catch (e) {
-      summary.unexpected += 1;
-      Sentry.captureException(e, { extra: { orderId } });
-    }
-    await sleep(THROTTLE_MS);
-  }
+  return true;
 }
 
 // T89：ECPay 主動對帳。webhook 是即時路徑，這支 cron 是每日一次的最終防線——
@@ -315,7 +490,12 @@ export async function GET(request: Request) {
   const summary: Summary = {
     checked: 0,
     promoted: 0,
+    driftChecked: 0,
+    driftPromoted: 0,
+    driftTruncated: false,
     promotedOnClosedOrder: 0,
+    paidOnCancelled: 0,
+    paidOnCancelledTruncated: false,
     mismatches: 0,
     failed: 0,
     unexpected: 0,
@@ -328,24 +508,6 @@ export async function GET(request: Request) {
     invoicesSwept: 0,
     invoicesIssued: 0,
     invoicesFailed: 0,
-    divergedRescued: 0,
-  };
-
-  // 單筆候選「非預期失敗」的共用出口：計數＋Sentry exception。已知取捨：同一
-  // 筆候選一輪內可能計到 2 次 unexpected（例如②的 CAS {error} 與③的 throw 各
-  // 記一次）——兩個獨立故障本來就是兩個訊號，去重需額外狀態、弊大於利，維持
-  // 雙計（PR #67 review 拍板）。
-  const recordUnexpected = (
-    e: unknown,
-    payment: { order_id: string; merchant_trade_no: string },
-  ) => {
-    summary.unexpected += 1;
-    Sentry.captureException(e, {
-      extra: {
-        orderId: payment.order_id,
-        merchantTradeNo: payment.merchant_trade_no,
-      },
-    });
   };
 
   try {
@@ -354,18 +516,14 @@ export async function GET(request: Request) {
     const maxCreatedAt = new Date(now - MIN_AGE_MS).toISOString();
     const reconcileCutoff = new Date(now - RECONCILE_COOLDOWN_MS).toISOString();
 
-    // PostgREST 的 .or() 語法用句點分隔「欄位.運算子.值」，值裡若含句點／逗號
-    // 等保留字元（ISO timestamp 的毫秒部分就有句點）必須用雙引號包住，否則
-    // 解析會跑掉，導致撈到的候選跟預期不符（曾在 sandbox 端到端驗證中實測到
-    // 這個問題：候選數量對不上、且漏掉了明確符合條件的資料）。
+    // 冷卻過濾字串走 nullOrBefore 單一出處（雙引號包 timestamp 的 PostgREST
+    // 陷阱說明見該 helper 的註解）。
     const { data: candidates, error } = await serviceRole
       .from("payment")
       .select("id, order_id, merchant_trade_no, amount")
       .eq("status", "pending")
       .lt("created_at", maxCreatedAt)
-      .or(
-        `last_reconciled_at.is.null,last_reconciled_at.lt."${reconcileCutoff}"`,
-      )
+      .or(nullOrBefore("last_reconciled_at", reconcileCutoff))
       .order("created_at", { ascending: true })
       .limit(CANDIDATE_LIMIT);
 
@@ -442,7 +600,7 @@ export async function GET(request: Request) {
         }
         // 單筆查詢失敗（含 CheckMacValue 驗證失敗）：記錄並繼續下一筆，
         // 不讓一筆髒資料拖垮整批；last_reconciled_at 仍要寫，避免明天重查同一筆卡死。
-        recordUnexpected(e, payment);
+        recordUnexpected(summary, e, payment);
         await markReconciled(serviceRole, payment.id);
         // 節流不能因為這筆失敗就跳過——連續幾筆壞資料若零間隔連續打
         // ECPay，正是節流機制原本要防止的情況。
@@ -465,9 +623,15 @@ export async function GET(request: Request) {
       await markReconciled(serviceRole, payment.id);
 
       if (result.tradeStatus === "1") {
-        // Number.isFinite 防呆：TradeAmt 格式異常時絕不可誤判為金額相符
-        // （沿用 notify/route.ts 既有寫法）。
-        if (!Number.isFinite(result.tradeAmt)) {
+        // 金額三檢（non-finite／non-positive／mismatch）走 validateSettleAmount
+        // 單一出處（與 notify 兩分支共用，杜絕散落複本失同步），但保留 reconcile
+        // 既有的計數/訊息分流：non-finite→unexpected＋「TradeAmt 格式異常」；
+        // 非吻合（含 0===0 零元）→下方 mismatch 分支交人工。
+        const amountCheck = validateSettleAmount(
+          result.tradeAmt,
+          payment.amount,
+        );
+        if (!amountCheck.ok && amountCheck.reason === "non-finite") {
           summary.unexpected += 1;
           Sentry.captureMessage("reconcile: TradeAmt 格式異常", {
             level: "error",
@@ -476,14 +640,7 @@ export async function GET(request: Request) {
               tradeAmt: result.raw.TradeAmt,
             },
           });
-        } else if (
-          // 金額正數防呆：0 === 0 不得視為吻合——TradeAmt 與 payment.amount 同
-          // 時為 0（建單 bug／異常回應被解析成 0）時，絕不可據此自動改狀態，
-          // 落到下方 mismatch 分支告警交人工。notify 路徑（webhook 端）沒有這
-          // 道對稱防呆，待 T127 順手補上。
-          Number(result.tradeAmt) > 0 &&
-          Number(result.tradeAmt) === Number(payment.amount)
-        ) {
+        } else if (amountCheck.ok) {
           // 單一 try/catch 包住 ①②③：①的 throw 自然跳過②③（候選鍵保留、
           // 冷卻期滿隔日自動重試＝F-014 修正核心）；②走 {error} 解構、不
           // throw；③的 throw 落到同一個 catch。任何單筆失敗都不可中止整批
@@ -553,18 +710,9 @@ export async function GET(request: Request) {
               // 健康搶救訊號分流。不論②結果都要發：② CAS miss＝payment 被
               // 別人翻的，錢一樣收在已關閉訂單上；② {error}＝payment 留
               // pending、隔日再入選再告警，對 P0 錢務問題是催辦不是噪音。
-              // 單次告警漏看的殘餘風險由人工裁決程序承接（ops-runbook §6.1）。
-              summary.promotedOnClosedOrder += 1;
-              Sentry.captureMessage(
-                "reconcile: money received on closed order",
-                {
-                  level: "error",
-                  extra: {
-                    orderId: payment.order_id,
-                    merchantTradeNo: payment.merchant_trade_no,
-                  },
-                },
-              );
+              // 單次告警漏看的殘餘風險由人工裁決程序承接（ops-runbook §6.1）；
+              // 另有 recurring 稽核臂（auditPaidOnCancelledOrders）durable 兜底。
+              recordClosedOrder(summary, payment);
             } else if (orderResult === "promoted") {
               // 對帳路徑真的修正了訂單＝webhook 那條路徑當初失敗過；即使結果
               // 正確，也留一筆告警，方便日後追蹤 webhook 可靠度（呼應 T88）。
@@ -607,17 +755,10 @@ export async function GET(request: Request) {
               // 已知取捨：併發雙跑（手動觸發撞上排程）時 sendOnce 的輸方會讓
               // 這個計數虛報——「false＝未確認送達」是 T88 契約，不為降噪改
               // 弱；實際投遞由 sendOnce 天然去重、sweep 自癒。
-              summary.notifyFailed += 1;
-              Sentry.captureMessage("reconcile: notification delivery failed", {
-                level: "warning",
-                extra: {
-                  orderId: payment.order_id,
-                  merchantTradeNo: payment.merchant_trade_no,
-                },
-              });
+              recordNotifyFailed(summary, payment);
             }
           } catch (e) {
-            recordUnexpected(e, payment);
+            recordUnexpected(summary, e, payment);
           }
         } else {
           // 金額不符：只告警，絕不自動改狀態——對帳的自動修正權限收斂到
@@ -672,17 +813,29 @@ export async function GET(request: Request) {
       await sleep(THROTTLE_MS);
     }
 
-    // T110 分歧兜底：先補推進「payment=paid／order=pending_payment」的分歧
-    // 訂單，讓下方的未開票 sweep 能在同一輪把補推進成 paid 的訂單一起開票。
-    await sweepDivergedPaidOrders(serviceRole, summary);
+    // T127②：漂移臂在主迴圈之後跑——不打 ECPay，主迴圈被 rate limit 中斷
+    // （break）也照跑（理由同下方發票 sweep）。各子臂回 false＝其候選查詢
+    // 失敗；任一失敗就讓整支 cron 回 HTTP 500，讓以 HTTP 狀態判健康的 cron
+    // 監控看得到紅燈（而非把「子臂靜默沒跑」誤看成綠燈）。子臂之間彼此獨立，
+    // 一個查詢失敗不阻斷其餘子臂照跑，故用旗標累積、最後一起判。
+    // （T110 合流裁決：master 的 sweepDivergedPaidOrders 功能被本漂移臂完整
+    // 涵蓋——截斷偵測、殘留 pending 清理、closed 分類皆本臂較完整——已刪除。）
+    let degraded = false;
 
-    await sweepFailedNotifications(serviceRole, summary);
+    degraded = !(await reconcileDriftedOrders(serviceRole, summary)) || degraded;
+
+    // recurring 稽核臂：payment=paid ∧ orders=cancelled 的 durable 復發偵測。
+    degraded =
+      !(await auditPaidOnCancelledOrders(serviceRole, summary)) || degraded;
+
+    degraded = !(await sweepFailedNotifications(serviceRole, summary)) || degraded;
 
     // T42：付款對帳跑完後接著補開發票——即使上面被 rate limit 中斷也照跑
     // （發票 API 是獨立網域與額度，不受金流查詢限速影響）
-    await sweepUninvoicedPaidOrders(serviceRole, summary);
+    degraded =
+      !(await sweepUninvoicedPaidOrders(serviceRole, summary)) || degraded;
 
-    return Response.json(summary);
+    return Response.json(summary, { status: degraded ? 500 : 200 });
   } catch (e) {
     console.error("[ecpay-reconcile] unhandled error", e);
     Sentry.captureException(e);

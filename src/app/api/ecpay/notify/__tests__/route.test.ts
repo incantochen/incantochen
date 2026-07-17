@@ -84,6 +84,8 @@ type DbState = {
   paidPayment: { id: string } | null;
   orderStatus: string | null;
   order: { id: string; total_amount: number } | null;
+  // K14：payment/orders 的 lookup 查詢回 { error }（暫時性 DB 故障，不 throw）。
+  paymentSelectError: boolean;
   throwOnPaymentQuery: boolean;
   orderRaceLost: boolean;
   ordersUpdateError: boolean;
@@ -100,6 +102,7 @@ const db: DbState = {
   paidPayment: null,
   orderStatus: null,
   order: null,
+  paymentSelectError: false,
   throwOnPaymentQuery: false,
   orderRaceLost: false,
   ordersUpdateError: false,
@@ -228,9 +231,16 @@ function makeChain(table: string) {
         // 跟外層用 merchant_trade_no 查 payment 是同一張表、不同查詢，靠最後一次
         // eq 的欄位/值分辨。
         if (chain._lastEq?.col === "status" && chain._lastEq?.val === "paid") {
-          return Promise.resolve({ data: db.paidPayment });
+          return Promise.resolve({ data: db.paidPayment, error: null });
         }
-        return Promise.resolve({ data: db.payment });
+        // 主 lookup（merchant_trade_no 查 payment）：K14 可注入 { error }。
+        if (db.paymentSelectError) {
+          return Promise.resolve({
+            data: null,
+            error: { message: "simulated payment lookup error" },
+          });
+        }
+        return Promise.resolve({ data: db.payment, error: null });
       }
       if (table === "orders") {
         // select 查詢：fallback 分支的訂單查找 / ensureNotificationSent 的狀態確認
@@ -328,6 +338,7 @@ beforeEach(() => {
   db.paidPayment = null;
   db.orderStatus = null;
   db.order = null;
+  db.paymentSelectError = false;
   db.throwOnPaymentQuery = false;
   db.orderRaceLost = false;
   db.ordersUpdateError = false;
@@ -535,6 +546,46 @@ describe("RtnCode≠1（付款失敗）", () => {
     expect(updatesTo("orders")).toHaveLength(0);
     expect(sendOrderConfirmation).not.toHaveBeenCalled();
   });
+
+  it("K5 fallback 失敗回呼（TradeAmt 缺失）→ 用 order.total_amount 建 failed payment（不 insert 0/NaN 撞 CHECK）", async () => {
+    // 無預建 payment（走 fallback）、訂單存在、RtnCode≠1（失敗）、TradeAmt 缺失。
+    db.payment = null;
+    db.order = { id: "o1", total_amount: 25000 };
+    db.orderStatus = "pending_payment";
+
+    const params = { ...BASE_PARAMS, RtnCode: "10100252", RtnMsg: "拒絕交易" };
+    delete (params as Partial<typeof params>).TradeAmt;
+
+    const res = await POST(buildRequest(params));
+
+    expect(await res.text()).toBe("1|OK");
+    // 失敗回呼的金額無意義，改用訂單金額（必為正、過 amount>0 CHECK），
+    // 不會用 0/NaN insert 導致靜默失敗＋ECPay 空轉重送。
+    const insert = insertsTo("payment")[0]?.values as any;
+    expect(insert.status).toBe("failed");
+    expect(insert.amount).toBe(25000);
+  });
+});
+
+describe("K14：lookup 查詢回 { error } 必須當故障處理（非查無資料）", () => {
+  it("payment lookup {error} → 回 0|Internal Error（觸發重送），不誤走 fallback", async () => {
+    db.paymentSelectError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+    // 不因誤判「查無 payment」而 insert 一筆新 payment。
+    expect(insertsTo("payment")).toHaveLength(0);
+  });
+
+  it("fallback 訂單 lookup {error} → 回 0|Internal Error（非 0|Order not found）", async () => {
+    db.payment = null; // 走 fallback
+    db.ordersSelectError = true;
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("0|Internal Error");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -648,6 +699,48 @@ describe("金額核對：TradeAmt 格式異常", () => {
     db.orderStatus = "pending_payment";
 
     const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(updatesTo("payment")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 金額正數防呆（T127③，與 reconcile 對稱）：0===0／負數不得視為吻合
+// ---------------------------------------------------------------------------
+
+describe("金額核對：正數防呆（T127③）", () => {
+  it("正常路徑：TradeAmt=0 且 payment.amount=0（雙零）→ 回 ERR、不更新、不寄信", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 0 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "0" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(updatesTo("payment")).toHaveLength(0);
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("fallback 路徑：TradeAmt=0 且 order.total_amount=0（雙零）→ 回 ERR、不 insert amount=0 的 paid payment、不寄信", async () => {
+    db.payment = null;
+    db.order = { id: "o1", total_amount: 0 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "0" }));
+
+    expect(await res.text()).toBe("0|Amount mismatch");
+    expect(insertsTo("payment")).toHaveLength(0);
+    expect(updatesTo("orders")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("負數 TradeAmt（parseInt 可解析、isFinite 過）即使與記錄金額相等 → 仍擋下", async () => {
+    db.payment = { id: "p1", status: "pending", order_id: "o1", amount: -100 };
+    db.orderStatus = "pending_payment";
+
+    const res = await POST(buildRequest({ ...BASE_PARAMS, TradeAmt: "-100" }));
 
     expect(await res.text()).toBe("0|Amount mismatch");
     expect(updatesTo("payment")).toHaveLength(0);
