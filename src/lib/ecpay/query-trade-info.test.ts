@@ -107,8 +107,8 @@ describe("queryTradeInfo", () => {
     );
   });
 
-  it("429／503 回應 → 拋出 RateLimitError（限流訊號，呼叫端據此中止批次）", async () => {
-    for (const status of [429, 503]) {
+  it("429／503／403 回應 → 拋出 RateLimitError（限流訊號，呼叫端據此中止批次；403 為綠界實測限流碼，見 ops-runbook）", async () => {
+    for (const status of [429, 503, 403]) {
       global.fetch = vi.fn().mockResolvedValue(new Response("", { status }));
 
       await expect(

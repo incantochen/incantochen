@@ -82,13 +82,18 @@ export async function queryTradeInfo(
     body: new URLSearchParams(params).toString(),
   });
 
-  // ECPay 官方文件明確警告此 API 有頻率限制、不建議高頻輪詢；但只有
-  // 429（Too Many Requests）／503（Service Unavailable）才視為限流訊號，
-  // 其餘非 200（如 ECPay 端 500）改標一般錯誤——否則 ECPay 故障會在
-  // Sentry 誤報成「被限流」誤導除錯方向（T99 隨手項）。兩者都會讓呼叫端
-  // 中止本次批次、下次排程再續，保守行為不變，差別只在告警語意。
+  // ECPay 官方文件明確警告此 API 有頻率限制、不建議高頻輪詢。限流訊號有
+  // 三種：429（Too Many Requests）／503（Service Unavailable）／403——
+  // ops-runbook.md §「ECPay 限流」實測綠界擋量時回 403（非 429），漏收會被
+  // 誤標成一般 HTTP 錯誤而不退避。其餘非 200（如 ECPay 端 500）才標一般
+  // 錯誤——否則 ECPay 故障會在 Sentry 誤報成「被限流」誤導除錯方向。兩者
+  // 都會讓呼叫端中止本次批次、下次排程再續，保守行為不變，差別只在告警語意。
   if (!response.ok) {
-    if (response.status === 429 || response.status === 503) {
+    if (
+      response.status === 429 ||
+      response.status === 503 ||
+      response.status === 403
+    ) {
       throw new RateLimitError(`QueryTradeInfo 限流回應：${response.status}`);
     }
     throw new QueryTradeInfoHttpError(response.status);
