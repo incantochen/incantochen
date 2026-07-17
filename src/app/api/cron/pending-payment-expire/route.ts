@@ -108,14 +108,18 @@ export async function GET(request: Request) {
       }
     }
 
-    // fail-visible：整批候選全數失敗（checked>0 且 failed===checked）幾乎必是
-    // 系統性故障（DB timeout／連線池耗盡使每筆 transitionOrder 的守衛查詢都
-    // throw），不是零星的單筆競態——回 500 讓以 HTTP 狀態判健康的 cron 監控
-    // 看得到紅燈（取消守衛下沉 transitionOrder 後，原本批次 paid 查詢 throw→500
-    // 的可見性改由此條件承接；對齊 reconcile 的 degraded→500）。零星單筆失敗
+    // fail-visible：整批候選全數失敗（failed===checked）幾乎必是系統性故障
+    // （DB timeout／連線池耗盡使每筆 transitionOrder 的守衛查詢都 throw），
+    // 不是零星的單筆競態——回 500 讓以 HTTP 狀態判健康的 cron 監控看得到紅燈
+    // （取消守衛下沉 transitionOrder 後，原本批次 paid 查詢 throw→500 的可見性
+    // 改由此條件承接；對齊 reconcile 的 degraded→500）。零星單筆失敗
     // （failed < checked）維持 200，避免一筆髒資料就誤報整批不健康。
+    // checked>1 門檻：單筆候選時 failed===checked 必然成立（1===1），一個暫時性
+    // 錯誤就會被誤判成系統性故障回 500——與上面「零星單筆維持 200」的意圖矛盾。
+    // 要 ≥2 筆全滅才算「系統性」；單筆的系統性故障下一輪自然重試（隔日仍失敗
+    // ＝候選累積，屆時 checked>1 就會亮紅燈）。
     const systemicFailure =
-      summary.checked > 0 && summary.failed === summary.checked;
+      summary.checked > 1 && summary.failed === summary.checked;
     return Response.json(summary, { status: systemicFailure ? 500 : 200 });
   } catch (e) {
     console.error("[pending-payment-expire] unhandled error", e);

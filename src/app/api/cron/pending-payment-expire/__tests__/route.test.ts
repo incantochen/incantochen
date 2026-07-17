@@ -254,5 +254,18 @@ describe("逐筆處理", () => {
     expect(res.status).toBe(500);
     expect(body).toEqual(fullSummary({ checked: 2, failed: 2 }));
   });
+
+  it("單筆候選失敗 → 維持 200（不把 1===1 誤判成系統性故障；checked>1 門檻）", async () => {
+    // 反向驗證：門檻若退回 checked>0，這條會轉紅。單筆的暫時性錯誤不算
+    // 系統性故障，避免一張逾期單踩到一個 blip 就 page on-call。
+    candidates = [{ id: "o1" }];
+    transitionOrder.mockRejectedValue(new Error("暫時性 DB blip"));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual(fullSummary({ checked: 1, failed: 1 }));
+  });
 });
 
