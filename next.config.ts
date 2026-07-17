@@ -22,6 +22,15 @@ function parseSupabaseHostname(): string {
 const supabaseHostname = parseSupabaseHostname();
 
 const nextConfig: NextConfig = {
+  typescript: {
+    // 型別檢查單一出處＝CI 的 `pnpm typecheck`（next typegen + tsc --noEmit，
+    // 涵蓋含測試檔的全 repo；check 為分支保護必要 gate）。preview build 與
+    // PR CI 檢查同一個 commit，故 preview 關掉 build 期型別檢查消除重複、
+    // 加快 preview；production build（master 部署，含直推 master 的 docs
+    // commit 路徑）與本機 build 保留檢查，作為 deploy 前最後防線——
+    // 直推 master 不等 CI，這裡是該路徑唯一的型別防線，不可一併關掉。
+    ignoreBuildErrors: process.env.VERCEL_ENV === "preview",
+  },
   images: {
     remotePatterns: [
       {
