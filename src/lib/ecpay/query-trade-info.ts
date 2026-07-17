@@ -25,9 +25,14 @@ function buildQueryTradeInfoUrl(): string {
 }
 
 export class RateLimitError extends Error {
-  constructor(message: string) {
+  // 觸發限流的 HTTP 狀態碼（429／503／403）。呼叫端據此分流告警：403 可能
+  // 是綠界限流（ops-runbook 實測），也可能是持續性的金鑰／驗章失效，需連續
+  // 計數後升級 error，不可與 429/503 一律當暫時性限流。
+  readonly status?: number;
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "RateLimitError";
+    this.status = status;
   }
 }
 
@@ -94,7 +99,10 @@ export async function queryTradeInfo(
       response.status === 503 ||
       response.status === 403
     ) {
-      throw new RateLimitError(`QueryTradeInfo 限流回應：${response.status}`);
+      throw new RateLimitError(
+        `QueryTradeInfo 限流回應：${response.status}`,
+        response.status,
+      );
     }
     throw new QueryTradeInfoHttpError(response.status);
   }

@@ -92,6 +92,10 @@ export async function proxy(request: NextRequest) {
     Sentry.captureException(e, {
       tags: { area: "proxy-auth", failMode: "fail-soft" },
     });
+    // proxy 非 route handler、無平台 auto-flush 兜底；捕捉後立即 return，
+    // serverless 可能在事件送出前凍結——主動 flush 確保這發告警離開
+    //（§6 serverless 禁 fire-and-forget，比照 get-cart-count 的 fail-soft 路徑）。
+    await Sentry.flush(2000);
   }
 
   // 放在 getUser() 之後：上面的 setAll 會重建 response，太早設會被蓋掉。
@@ -102,6 +106,10 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // 副檔名清單須與 next.config.ts 的靜態 CSP source 對齊（含 ico|avif）：
+    // 這些路徑一律走 next.config 的最小靜態 CSP、不經 proxy，避免同一回應
+    // 同時被 proxy 的 nonce CSP 與 next.config 的 static CSP 各設一份（交集），
+    // 也省下對圖檔白呼叫一次 getUser()。
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|avif)$).*)",
   ],
 };

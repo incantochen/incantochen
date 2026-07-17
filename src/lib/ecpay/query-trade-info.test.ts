@@ -111,9 +111,12 @@ describe("queryTradeInfo", () => {
     for (const status of [429, 503, 403]) {
       global.fetch = vi.fn().mockResolvedValue(new Response("", { status }));
 
-      await expect(
-        queryTradeInfo("INC20260702ABC123XY"),
-      ).rejects.toBeInstanceOf(RateLimitError);
+      const error = await queryTradeInfo("INC20260702ABC123XY").catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(RateLimitError);
+      // #1：帶原始 status，呼叫端據此分流（403 走連續計數升級 error）。
+      expect((error as RateLimitError).status).toBe(status);
     }
   });
 
