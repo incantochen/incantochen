@@ -112,6 +112,7 @@
 - 啟動開發：`pnpm dev`
 - 建置：`pnpm build`
 - 測試：`pnpm test`（vitest，T51 起可用）
+- 型別檢查：`pnpm typecheck`（`next typegen` 生成型別後 `tsc --noEmit`，涵蓋含測試檔的全 repo；CI check 必要 gate，build 僅 preview 關型別檢查，見 PR #74／`next.config.ts`）
 - Lint／格式化：`pnpm lint`
 - 加 shadcn/ui 元件：`pnpm dlx shadcn@latest add <component>`
 - 生成 Supabase 型別：`pnpm supabase gen types typescript`（改 schema 後執行）
