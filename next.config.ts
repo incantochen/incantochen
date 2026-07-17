@@ -60,6 +60,22 @@ const nextConfig: NextConfig = {
             : []),
         ],
       },
+      {
+        // T97 補洞：proxy matcher 排除圖檔／favicon（拿不到每請求 nonce CSP），
+        // 這些路徑原本零 CSP。.svg 被當文件直接開啟時可執行內嵌 script，故給
+        // 一份最小靜態 CSP（script-src 'none'）擋掉。刻意獨立於上面的 "/(.*)"
+        // ——若把 CSP 塞進 "/(.*)" 會連 document 回應也蓋一份靜態 CSP，與 proxy
+        // 的 nonce 版被瀏覽器取交集而廢掉 nonce+strict-dynamic。此 source 只命中
+        // 圖檔副檔名，而這些路徑本就不經 proxy，不衝突。
+        source: "/(.*)\\.(svg|png|jpg|jpeg|gif|webp|ico|avif)",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value:
+              "default-src 'self'; script-src 'none'; frame-ancestors 'none'",
+          },
+        ],
+      },
     ];
   },
 };
