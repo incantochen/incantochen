@@ -9,6 +9,8 @@ import {
   ensureNotificationSent,
   ensureInvoiceIssued,
 } from "@/lib/order/ensure-paid";
+import { findPaidPayment } from "@/lib/order/find-paid-payment";
+import { validateSettleAmount } from "@/lib/ecpay/validate-settle-amount";
 
 const OK = () =>
   new Response("1|OK", {
@@ -63,73 +65,73 @@ export async function POST(request: Request) {
     const serviceRole = createServiceRoleClient();
 
     // 查訂單：MerchantTradeNo = order_no 去 hyphen + 2 字元後綴（T53），
-    // 先查 payment 表以取得 order_id（不再依賴字串解析）
-    const { data: payment } = await serviceRole
+    // 先查 payment 表以取得 order_id（不再依賴字串解析）。
+    // 檢查 { error }：暫時性 DB 故障不會 throw、只回 { error }；漏檢查會把
+    // 「查詢失敗」誤當「查無此 payment」而錯走 fallback 分支（重複 insert、
+    // 靠 23505 收斂），故 error 一律 throw 到外層 catch → 回 Internal Error
+    // 讓 ECPay 重送（CLAUDE.md §6：查詢失敗 ≠ 查無資料）。
+    const { data: payment, error: paymentLookupError } = await serviceRole
       .from("payment")
       .select("id, status, order_id, amount")
       .eq("merchant_trade_no", merchantTradeNo)
       .maybeSingle();
 
+    if (paymentLookupError) {
+      throw new Error(`payment lookup failed: ${paymentLookupError.message}`);
+    }
+
     if (!payment) {
       // pay page 預建失敗的邊緣情況：嘗試從 order_no 倒推（兼容舊格式）
       const orderNo = `${merchantTradeNo.slice(0, 3)}-${merchantTradeNo.slice(3, 11)}-${merchantTradeNo.slice(11, 17)}`;
-      const { data: order } = await serviceRole
+      const { data: order, error: orderLookupError } = await serviceRole
         .from("orders")
         .select("id, status, total_amount")
         .eq("order_no", orderNo)
         .maybeSingle();
 
+      if (orderLookupError) {
+        // 同上：DB 故障不可回「Order not found」（會讓 ECPay 誤判為資料問題、
+        // 燒掉有限重送額度），throw 讓外層回 Internal Error 觸發重送。
+        throw new Error(`order lookup failed: ${orderLookupError.message}`);
+      }
       if (!order) return ERR("Order not found");
 
       // 冪等：已有 paid payment → 確保訂單推進與通知都完成（避免上次執行半路
-      // 失敗卡住），再回 1|OK
-      const { data: paidPayment } = await serviceRole
-        .from("payment")
-        .select("id")
-        .eq("order_id", order.id)
-        .eq("status", "paid")
-        .maybeSingle();
+      // 失敗卡住），再回 1|OK。findPaidPayment 內含 { error } 檢查（會 throw）。
+      const paidPayment = await findPaidPayment(serviceRole, order.id);
 
       if (paidPayment) return await settlePaid(serviceRole, order.id);
 
       const isPaid = params.RtnCode === "1";
       const now = new Date().toISOString();
 
-      // 金額核對（縱深防禦）：ECPay 回傳金額須與訂單金額一致才可標記 paid
-      // Number(...) 轉型：total_amount 為 numeric(12,0)，PostgREST 有時會序列化成字串，
-      // 直接用 !== 比對 number 與 string 永遠不相等，會誤判所有正常付款為金額不符。
-      // Number.isFinite 防呆：TradeAmt 若為空字串／非數字格式，parseInt 回傳 NaN，
-      // 明確擋下並記錄，避免用 NaN 跟任何數字比對都不相等而誤判金額不符。
+      // 金額核對（縱深防禦）：ECPay 回傳金額須與訂單金額一致才可標記 paid。
+      // 三道檢查（non-finite／non-positive／mismatch）收斂在 validateSettleAmount
+      // 單一出處，只在 isPaid 時把關（失敗回呼的 RtnCode≠1 沒有標記 paid 的
+      // 語意，金額不參與核對）。
       const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
-      if (isPaid && !Number.isFinite(tradeAmt)) {
-        console.error("[ecpay/notify] TradeAmt 格式異常", params.TradeAmt);
-        Sentry.captureMessage("[ecpay/notify] TradeAmt 格式異常", {
-          level: "error",
-          extra: { tradeAmt: params.TradeAmt },
-        });
-        return ERR("Amount mismatch");
-      }
-      // T127③：金額正數防呆（與 reconcile 對稱）——0===0 不得視為吻合。
-      // TradeAmt 與訂單金額同時為 0（建單 bug／異常回應被解析成 0）時，絕不可
-      // 據此標記 paid；也順帶擋掉「以 amount=0 insert 一筆 paid payment」的
-      // 髒資料寫入（下方 fallback insert 用 tradeAmt 當 amount）。
-      if (isPaid && tradeAmt <= 0) {
-        Sentry.captureMessage("[ecpay/notify] zero-amount payment anomaly", {
-          level: "error",
-          extra: { merchantTradeNo, tradeAmt },
-        });
-        return ERR("Amount mismatch");
-      }
-      if (isPaid && tradeAmt !== Number(order.total_amount)) {
-        return ERR("Amount mismatch");
+      if (isPaid) {
+        const check = validateSettleAmount(tradeAmt, order.total_amount);
+        if (!check.ok) {
+          if (check.reason !== "mismatch") {
+            Sentry.captureMessage(
+              `[ecpay/notify] ${check.reason} payment amount anomaly`,
+              { level: "error", extra: { merchantTradeNo, tradeAmt } },
+            );
+          }
+          return ERR("Amount mismatch");
+        }
       }
 
-      // 預建 payment 記錄不存在時的 fallback insert
+      // 預建 payment 記錄不存在時的 fallback insert。amount 欄位有 CHECK
+      //（> 0）＋NOT NULL：付款成立用已核對過的 tradeAmt；失敗回呼的 tradeAmt
+      // 無意義（可能缺欄位→0／NaN，會撞 CHECK 讓 insert 靜默失敗、ECPay 空轉
+      // 重送），改用訂單金額（必為正）記錄這筆失敗嘗試。
       const { error: insertError } = await serviceRole.from("payment").insert({
         order_id: order.id,
         merchant_trade_no: merchantTradeNo,
         gateway_trade_no: params.TradeNo ?? null,
-        amount: tradeAmt,
+        amount: isPaid ? tradeAmt : Number(order.total_amount),
         provider: "ecpay",
         status: isPaid ? "paid" : "failed",
         paid_at: isPaid ? now : null,
@@ -157,28 +159,21 @@ export async function POST(request: Request) {
     const isPaid = params.RtnCode === "1";
     const now = new Date().toISOString();
 
-    // 金額核對（縱深防禦）：ECPay 回傳金額須與 payment 記錄金額一致才可標記 paid
-    // Number(...) 轉型原因同上：payment.amount 也是 numeric(12,0)。
-    // Number.isFinite 防呆原因同上。
+    // 金額核對（縱深防禦）：ECPay 回傳金額須與 payment 記錄金額一致才可標記
+    // paid。三道檢查收斂在 validateSettleAmount 單一出處（與 fallback 分支、
+    // reconcile 共用）。
     const tradeAmt = parseInt(params.TradeAmt ?? "0", 10);
-    if (isPaid && !Number.isFinite(tradeAmt)) {
-      console.error("[ecpay/notify] TradeAmt 格式異常", params.TradeAmt);
-      Sentry.captureMessage("[ecpay/notify] TradeAmt 格式異常", {
-        level: "error",
-        extra: { tradeAmt: params.TradeAmt },
-      });
-      return ERR("Amount mismatch");
-    }
-    // T127③：金額正數防呆，理由同 fallback 分支——0===0 不得視為吻合。
-    if (isPaid && tradeAmt <= 0) {
-      Sentry.captureMessage("[ecpay/notify] zero-amount payment anomaly", {
-        level: "error",
-        extra: { merchantTradeNo, tradeAmt },
-      });
-      return ERR("Amount mismatch");
-    }
-    if (isPaid && tradeAmt !== Number(payment.amount)) {
-      return ERR("Amount mismatch");
+    if (isPaid) {
+      const check = validateSettleAmount(tradeAmt, payment.amount);
+      if (!check.ok) {
+        if (check.reason !== "mismatch") {
+          Sentry.captureMessage(
+            `[ecpay/notify] ${check.reason} payment amount anomaly`,
+            { level: "error", extra: { merchantTradeNo, tradeAmt } },
+          );
+        }
+        return ERR("Amount mismatch");
+      }
     }
 
     // UPDATE 既有 payment 記錄（非 INSERT，無 unique constraint 衝突風險）
