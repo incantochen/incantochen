@@ -32,7 +32,7 @@
 
 ## F-002 [P2] 售後申請無限流、無去重：登入客人可灌爆店家信箱與 support_request 表
 
-- 狀態：已轉任務(T93)（使用者 2026-07-08 確認）
+- 狀態：✅ 已修復（PR #70，2026-07-17，squash 30fcf2e）——T93 落地：登入會員維度限流（order-scoped）＋同單 return_defect 去重
 - 位置：`src/app/account/orders/[id]/support/actions.ts:16`（`createSupportRequest`，無 rate limit、無「同單已申請」去重）
 - 失敗情境：擁有一張 paid 訂單的登入會員，反覆呼叫 `createSupportRequest`（UI 重複點擊或直接 script server action）→ 每次都通過擁有權檢查、insert 一列 `support_request` 並 `await sendSupportRequestNotification` 寄一封信給店家。結果：店家信箱被同一張訂單的售後信洗版、`support_request` 表無上限膨脹。相較 T78（匿名可無限建 cart）本路徑需登入＋擁有真實 paid 訂單，濫用門檻較高，故列 P2。
 - 修法：對 `createSupportRequest` 加速率限制（`src/lib/rate-limit.ts` 已有 Upstash 基礎設施，可用 memberId＋orderId 當 key）；或加「同訂單 pending 期間僅允許一筆」的去重（查現有 open 案件即拒新增，引導客人回覆既有信件）。與 T78 同屬「高成本／可灌爆寫入路徑缺限流」（code-checklist G3）。
@@ -80,7 +80,7 @@
 
 ## F-008 [P2] 客人端讀取路徑普遍未檢查 Supabase `{error}`：DB 暫時性故障被誤判為「查無資料」，付款中客人被誤導離開
 
-- 狀態：已轉任務(T95)（使用者 2026-07-08 確認）
+- 狀態：✅ 已修復（PR #70，2026-07-17，squash 30fcf2e）——T95 落地：pay/success/failed 頁＋verify-prices＋read-cart＋get-cart-count＋account 讀取頁全補 {error} 分支（含 F-017 列舉的 account 頁與 support/actions.ts）
 - 位置：`src/app/checkout/pay/page.tsx:21-27`（訂單查詢 error 未檢查→`!order` redirect `/checkout`）；`src/app/checkout/success/page.tsx:16-22`（同模式→redirect `/`）；`src/app/checkout/actions.ts:49-66`（cart／cart_item 查詢→「購物車已空」）；`src/lib/quote/verify-prices.ts:56-64`（product 查詢→「商品已下架或不存在」）；`src/lib/cart/read-cart.ts:23-39`、`src/lib/cart/get-cart-count.ts:11-23`、`src/app/products/[slug]/actions.ts:27-49`（同模式，顯示層）
 - 失敗情境：Supabase 暫時性故障（statement timeout／連線池耗盡）時查詢回 `{ data: null, error }`，這些呼叫點只解構 `data`——與「查無資料」無法區分。最痛的兩點：①客人已建單、正要進 `/checkout/pay` 付款的瞬間 DB 抖動→被 redirect 回 `/checkout`，而購物車已在建單時清空（T75），客人看到空購物車、以為訂單消失；②客人**已付款**回到 `/checkout/success` 時 DB 抖動→被 redirect 回首頁，付款成功卻看不到任何確認，直接聯繫客服或重複下單。`verifyCartPrices` 則會回「商品已下架」的錯誤訊息擋單（方向安全但診斷錯誤）。全部屬 CLAUDE.md §6「SDK 錯誤回傳必檢查」缺陷類別（code-checklist F1）——T68 修了 webhook 側，客人端讀取路徑漏套同一 pattern。金額決策鏈（verifyCartPrices 重算、webhook 金額核對）不受影響，失敗方向都是 fail-closed，故列 P2 而非 P1。
 - 修法：各呼叫點解構並檢查 `error`：頁面層改 render「系統忙碌中，請重新整理」（不可 redirect 走人）；action 層回傳「系統忙碌，請稍後再試」與「購物車已空」區分；`verifyCartPrices` 對 `error` throw「系統忙碌」而非「商品已下架」。與 T79（findOrCreateMember 吞錯）同根因不同位置，建議同批修復。
@@ -96,7 +96,7 @@
 
 ## F-010 [P2] Production CSP `script-src 'unsafe-inline'`：XSS 縱深防禦形同未設防
 
-- 狀態：已轉任務(T97)（使用者 2026-07-08 確認）
+- 狀態：✅ 已修復（PR #70，2026-07-17，squash 30fcf2e）——T97 落地：CSP 改 proxy.ts 每請求 nonce＋strict-dynamic（production 無 unsafe-inline），本機 production build 實測通過
 - 位置：`next.config.ts:8`（`isDev ? ... : "script-src 'self' 'unsafe-inline'"`）
 - 失敗情境：production CSP 的 `script-src` 允許 `'unsafe-inline'`——任何一個 XSS 注入點（現在列管中的 T72/T84 Email 端不受 CSP 管，但未來任何頁面端未跳脫輸出、或第三方套件漏洞）注入的 `<script>` 內聯腳本都會直接執行，CSP 對 XSS 的攔截力為零，只剩 `form-action`／`frame-ancestors` 等其他指令仍有效。T58 當時為了 React/Next inline bootstrap 的相容性妥協，但這讓「CSP 已部署」成為 G1 類「設計了但防不到」的機制——對 XSS 這個主要威脅它是虛設的。
 - 失敗機率低（需先存在另一個 XSS 缺陷才會兌現），屬縱深防禦強化，列 P2、上線前不阻擋。
@@ -113,7 +113,7 @@
 
 ## F-012 [P2-low] 對帳 cron 的 CRON_SECRET 比對非 timing-safe
 
-- 狀態：已轉任務(T99)（使用者 2026-07-08 確認）
+- 狀態：✅ 已修復（PR #70，2026-07-17，squash 30fcf2e）——T99 落地：抽共用 timingSafeEqualStrings（sha256 digest 常數時間比對）涵蓋三支 cron，一併補 F-021 的 timing-safe 缺口
 - 位置：`src/app/api/cron/ecpay-reconcile/route.ts:52-55`（`authHeader !== \`Bearer ${serverEnv.CRON_SECRET}\``）
 - 失敗情境：字串 `!==` 逐字元短路比對，理論上可被 timing attack 逐字元猜出 secret，猜到後可任意觸發對帳批次（打 ECPay 查詢 API 消耗額度、觸發告警噪音；對帳本身冪等、無法竄改金額，故傷害有限）。實務上 HTTPS 網路抖動遠大於字元比較時差、且 secret 為高熵長字串，可利用性極低——列入是因 code-checklist A4 明文「驗證用 timing-safe 比對」，而同 codebase 的 CheckMacValue 驗證已用 timing-safe（不對稱）。
 - 修法：改 `crypto.timingSafeEqual`（先比長度、轉 Buffer），或沿用 `check-mac-value.ts` 既有 timing-safe 工具。一行修改。
@@ -197,6 +197,7 @@
 - 修法：把 T99 的 timing-safe 修法（`crypto.timingSafeEqual`：先比長度、轉 Buffer；或抽一支共用 `verifyCronSecret(request)` helper 供兩支 cron route 共同 import，一次收斂避免第三支 cron 再重演）**一併套用到 `cart-cleanup`**。建議在 **T99 任務範圍與其對應 issue 直接補註「範圍含 cart-cleanup，共兩支 cron route」**，與 ecpay-reconcile 同批一次收斂。抽共用 helper 亦順帶消除「每支 cron 各自手刻 Bearer 比對字面量」的複本失同步風險。
 - 記錄：2026-07-10 首次發現（本輪逐行審 T78／PR #46 新增的 `cart-cleanup/route.ts`，對照 F-012／T99 的 timing-safe 缺口發現同根因擴散到第二支 cron）。
 - 追加（2026-07-13）：本項「抽共用 helper」的修法建議**已部分落地**——三支 cron（`ecpay-reconcile`／`cart-cleanup`／新增第三支 `pending-payment-expire`）現皆改呼叫共用 `src/lib/cron/require-cron-auth.ts:7-12`，消除了各自手刻 Bearer 比對字面量的複本失同步風險（F-021 修法的一半）。**但 timing-safe 的另一半仍未做**：`require-cron-auth.ts:9` 依舊是裸 `authHeader !== \`Bearer ${serverEnv.CRON_SECRET}\``。淨效果：F-012／F-021 的根因（非 timing-safe 比對）不但仍在，且已擴散為三支 cron 共用——好處是現在只需改這一處（`require-cron-auth.ts`）即可一次修好三支。**T99 修法建議更新**：改在 `require-cron-auth.ts`單點套`crypto.timingSafeEqual`（先比長度、轉 Buffer）即涵蓋全部三支 cron；任務範圍註記由「兩支 cron」更新為「共用 helper 一處，涵蓋三支 cron」。依去重不另開新編號，維持 F-021 待確認。
+- 追加（2026-07-17）：✅ **timing-safe 缺口已修復**——PR #70（T99）把 `require-cron-auth.ts` 的裸 `!==` 改為共用 `src/lib/timing-safe-equal.ts` 的 `timingSafeEqualStrings`（sha256 digest 常數時間比對，長度不洩漏），單點涵蓋三支 cron。F-021 的「非 timing-safe」根因就此清除；剩 F-022（cleanup DELETE 只綁 id 的 TOCTOU）仍獨立待確認、不在本批。
 
 ## F-022 [P2-low] cart-cleanup 的 DELETE 只綁 `id`、丟失 `member_id IS NULL`／`updated_at < cutoff` 守衛：SELECT→DELETE 之間被 touch／claim 的車仍被刪（TOCTOU）
 
