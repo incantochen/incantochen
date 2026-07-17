@@ -14,10 +14,12 @@ vi.mock("next/headers", () => ({
 }));
 
 const captureException = vi.fn();
-const flush = vi.fn(async (..._a: unknown[]) => true);
+const flush = vi.fn(async () => true);
 vi.mock("@sentry/nextjs", () => ({
   captureException: (...a: unknown[]) => captureException(...a),
-  flush: (...a: unknown[]) => flush(...a),
+  // 不 spread：真實 Sentry.flush(2000) 的 timeout 引數對 mock 無意義，wrapper
+  // 直接零引數轉呼避免 TS2556（spread 進零參數函式）與未使用參數 lint 警告。
+  flush: () => flush(),
 }));
 
 const state = {
