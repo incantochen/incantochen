@@ -29,6 +29,10 @@ vi.mock("@/lib/order/state-machine", () => ({
 type OrderRow = { id: string };
 
 let candidates: OrderRow[] = [];
+// T110 分歧檢查用：這批候選中「已有 paid payment」的訂單 order_id 清單。
+let paidPaymentOrderIds: string[] = [];
+// 模擬分歧檢查的 payment select 回傳 { error }（暫時性 DB 故障）。
+let paidCheckError: string | null = null;
 let lastFilters: Record<string, unknown> = {};
 // 取消成功後順帶把該訂單的 pending payment 標 failed 的呼叫記錄
 const paymentSweeps: { order_id: unknown }[] = [];
@@ -38,13 +42,43 @@ function makeServiceRole() {
     from: (table: string) => {
       if (table === "payment") {
         const filters: Record<string, unknown> = {};
+        // payment 表被兩種查詢用到：T110 分歧檢查（select .in .eq）與取消後
+        // 的 pending→failed sweep（update .eq .eq），以 op 分流。
+        let op: "select" | "update" | null = null;
         const chain: any = {
-          update: () => chain,
+          select: () => {
+            op = "select";
+            return chain;
+          },
+          update: () => {
+            op = "update";
+            return chain;
+          },
+          in: (col: string, val: unknown) => {
+            filters[col] = val;
+            return chain;
+          },
           eq: (col: string, val: unknown) => {
             filters[col] = val;
             return chain;
           },
           then: (resolve: (v: unknown) => void) => {
+            if (op === "select") {
+              // 分歧檢查：撈候選中已 paid 的 order_id
+              if (paidCheckError) {
+                resolve({ data: null, error: { message: paidCheckError } });
+                return;
+              }
+              const ids = (filters.order_id as string[] | undefined) ?? [];
+              resolve({
+                data: paidPaymentOrderIds
+                  .filter((id) => ids.includes(id))
+                  .map((id) => ({ order_id: id })),
+                error: null,
+              });
+              return;
+            }
+            // 取消後把 pending payment 標 failed 的 sweep
             paymentSweeps.push({ order_id: filters.order_id });
             resolve({ error: null });
           },
@@ -89,6 +123,8 @@ function buildRequest(auth?: string): Request {
 
 beforeEach(() => {
   candidates = [];
+  paidPaymentOrderIds = [];
+  paidCheckError = null;
   lastFilters = {};
   paymentSweeps.length = 0;
   transitionOrder.mockReset();
@@ -114,6 +150,7 @@ describe("認證", () => {
       cancelled: 0,
       skipped: 0,
       failed: 0,
+      diverged: 0,
     });
   });
 });
@@ -134,7 +171,13 @@ describe("逐筆處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
-    expect(body).toEqual({ checked: 1, cancelled: 1, skipped: 0, failed: 0 });
+    expect(body).toEqual({
+      checked: 1,
+      cancelled: 1,
+      skipped: 0,
+      failed: 0,
+      diverged: 0,
+    });
     expect(transitionOrder).toHaveBeenCalledWith(
       "o1",
       "cancelled",
@@ -165,7 +208,13 @@ describe("逐筆處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
-    expect(body).toEqual({ checked: 1, cancelled: 0, skipped: 1, failed: 0 });
+    expect(body).toEqual({
+      checked: 1,
+      cancelled: 0,
+      skipped: 1,
+      failed: 0,
+      diverged: 0,
+    });
   });
 
   it("非預期錯誤 → failed 計數，繼續處理下一筆", async () => {
@@ -177,7 +226,69 @@ describe("逐筆處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
-    expect(body).toEqual({ checked: 2, cancelled: 1, skipped: 0, failed: 1 });
+    expect(body).toEqual({
+      checked: 2,
+      cancelled: 1,
+      skipped: 0,
+      failed: 1,
+      diverged: 0,
+    });
     expect(transitionOrder).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("T110 分歧防護：已收款卻卡 pending_payment 不得逾期取消", () => {
+  it("候選有 paid payment → 跳過取消、diverged 計數、不呼叫 transitionOrder", async () => {
+    candidates = [{ id: "o1" }];
+    paidPaymentOrderIds = ["o1"]; // webhook 已翻 payment=paid，訂單卻卡 pending
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body).toEqual({
+      checked: 1,
+      cancelled: 0,
+      skipped: 0,
+      failed: 0,
+      diverged: 1,
+    });
+    // 錢已收到，絕不可當逾期未付款取消。
+    expect(transitionOrder).not.toHaveBeenCalled();
+    // 沒取消就不會有 pending→failed 的 payment sweep。
+    expect(paymentSweeps).toEqual([]);
+  });
+
+  it("混合批次：分歧單跳過、正常逾期單照常取消", async () => {
+    candidates = [{ id: "o1" }, { id: "o2" }];
+    paidPaymentOrderIds = ["o1"]; // o1 分歧，o2 正常逾期
+    transitionOrder.mockResolvedValue(undefined);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body).toEqual({
+      checked: 2,
+      cancelled: 1,
+      skipped: 0,
+      failed: 0,
+      diverged: 1,
+    });
+    expect(transitionOrder).toHaveBeenCalledTimes(1);
+    expect(transitionOrder).toHaveBeenCalledWith(
+      "o2",
+      "cancelled",
+      expect.anything(),
+    );
+  });
+
+  it("paid-payment 檢查失敗（{error}）→ fail-safe：整批中止 500、不取消任何訂單", async () => {
+    candidates = [{ id: "o1" }];
+    paidCheckError = "connection timeout";
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(res.status).toBe(500);
+    // 無法確認哪些已收款時，寧可整批不動，也不冒誤取消已收款訂單的風險。
+    expect(transitionOrder).not.toHaveBeenCalled();
   });
 });
