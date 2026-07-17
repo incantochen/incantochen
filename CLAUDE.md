@@ -185,7 +185,7 @@
 - **完成後停下回報**：列出改了什麼、產出什麼、驗收結果，**等確認後再進下一個任務**。
 - **commit 規範**：Conventional Commits（`feat:`、`fix:`、`chore:`）。一個任務一支 commit。
 - **開 PR 前先本機審查（2026-07-04 起）**：涉及金流／webhook／auth／訂單／email 的改動，開 PR 前 Claude 先自行跑 `/code-review high`（本機、免費）並修完 findings 再開 PR——把 SDK 錯誤處理這類已知模式（§6 防禦性寫法通則）在本機先攔掉，ultra 額度留給深層問題（PR #30 三輪 ultrareview 的教訓：多數 findings 屬本機審查即可抓到的等級）。
-- **PR 審查（2026-07-03 起）**：Claude 開完 PR 回報時，**必須評估該 diff 是否建議跑 `/code-review ultra <PR#>` 並附理由**。判斷基準採**反向白名單**：只有「純 docs／UI 樣式與文案／測試檔」的 diff 可省略，**其餘一律建議跑**（本專案幾乎每條路徑都碰錢或個資；2026-07-02 審查證實高風險區不只 auth／金流／訂單／migration，還包括 Email 模板、購物車與 guest token、service role action 的擁有權檢查、識別碼格式互轉、next.config 與 env）。ultra 是雲端多代理審查，計費、由**使用者本人**觸發，Claude 無法代跑；建議跑的 PR，findings 修完才 merge。（里程碑層另有 `/dev-review` 全專案審查＋週一四排程，兩者互補不互代。）
+- **PR 審查（2026-07-03 起）**：Claude 開完 PR 回報時，**必須評估該 diff 是否建議跑 `/code-review ultra <PR#>` 並附理由**。判斷基準採**反向白名單**：只有「純 docs／UI 樣式與文案／測試檔」的 diff 可省略，**其餘一律建議跑**（本專案幾乎每條路徑都碰錢或個資；2026-07-02 審查證實高風險區不只 auth／金流／訂單／migration，還包括 Email 模板、購物車與 guest token、service role action 的擁有權檢查、識別碼格式互轉、next.config 與 env）。ultra 是雲端多代理審查，計費、由**使用者本人**觸發，Claude 無法代跑；建議跑的 PR，findings 修完才 merge。（里程碑層另有 `/dev-review` 全專案審查＋週二、五排程；資安地基另有每週三 `/security-foundation` 漂移檢核〔docs/security-foundation.md〕——三者互補不互代。）
 - **不確定就問**：規格、定價邏輯、法規用詞有疑慮時先問，不要自行假設。
 
 ### 各任務自驗收指令
