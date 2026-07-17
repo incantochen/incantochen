@@ -169,6 +169,17 @@ export async function resolvePendingOrderForCart(
       }
       return { kind: "error", error: "建立訂單失敗，請稍後再試" };
     }
+    // 非競態失敗（T110 後含 log 寫入失敗 rollback）擋在結帳咽喉點——必須
+    // 留下遙測，否則持續性故障只會反覆呈現成客人看到的「請稍後再試」，
+    // ops 無從得知營收正在流失。
+    console.error(
+      "[resolvePendingOrderForCart] 舊待付款訂單取消失敗",
+      { orderId: existingPendingOrder.id },
+      e,
+    );
+    Sentry.captureException(e, {
+      extra: { orderId: existingPendingOrder.id },
+    });
     return { kind: "error", error: "建立訂單失敗，請稍後再試" };
   }
 

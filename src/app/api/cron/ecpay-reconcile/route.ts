@@ -168,6 +168,10 @@ type Summary = {
   invoicesSwept: number;
   invoicesIssued: number;
   invoicesFailed: number;
+  // T110 分歧兜底：payment=paid 但 order 仍卡 pending_payment 的訂單被本 sweep
+  // 補推進的筆數。正常營運為 0；非 0 代表 webhook 推進段曾 rollback（見
+  // sweepDivergedPaidOrders）。
+  divergedRescued: number;
 };
 
 const INVOICE_SWEEP_LIMIT = 20;
@@ -217,6 +221,91 @@ async function sweepUninvoicedPaidOrders(
   }
 }
 
+const DIVERGED_SWEEP_LIMIT = 20;
+
+// T110 分歧兜底：webhook 先翻 payment=paid、再推進訂單（notify/route.ts）；若
+// 推進段的 transition_order_status RPC 因 order_status_log 寫入失敗而 rollback，
+// 會留下 payment=paid 但 order=pending_payment 的分歧。主對帳迴圈以
+// payment.status='pending' 為鍵，撈不到這種「payment 已 paid」的訂單；逾期取消
+// cron 又會把它取消（錢收了、單卻取消的靜默 P0，已在該 cron 加防護跳過）。這裡
+// 主動撈「pending_payment 訂單卻已有 paid payment」的分歧，重跑 ensureOrderPaid
+// 補推進＋補寄漏掉的通知，並以 error 級告警（正常營運絕不該出現）。
+// 兩段查詢（不依賴 FK embed，比照 sweepFailedNotifications）：先撈夠老的
+// pending_payment 訂單，再查哪些已有 paid payment——MIN_AGE 過濾避開「webhook
+// 正在結算中」（payment 剛翻 paid、訂單即將推進的數毫秒窗口）的偽分歧。
+async function sweepDivergedPaidOrders(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+) {
+  const cutoff = new Date(Date.now() - MIN_AGE_MS).toISOString();
+  const { data: pendingOrders, error } = await serviceRole
+    .from("orders")
+    .select("id")
+    .eq("status", "pending_payment")
+    .lt("created_at", cutoff)
+    .order("created_at", { ascending: true })
+    .limit(DIVERGED_SWEEP_LIMIT);
+
+  if (error) {
+    console.error("[ecpay-reconcile] 分歧掃描：pending 訂單查詢失敗", error);
+    Sentry.captureMessage("reconcile: diverged sweep order query failed", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return;
+  }
+  if (!pendingOrders || pendingOrders.length === 0) return;
+
+  const orderIds = pendingOrders.map((o) => o.id);
+  const { data: paidPayments, error: payError } = await serviceRole
+    .from("payment")
+    .select("order_id")
+    .in("order_id", orderIds)
+    .eq("status", "paid");
+
+  if (payError) {
+    console.error("[ecpay-reconcile] 分歧掃描：payment 查詢失敗", payError);
+    Sentry.captureMessage("reconcile: diverged sweep payment query failed", {
+      level: "error",
+      extra: { error: payError.message },
+    });
+    return;
+  }
+
+  const divergedOrderIds = [
+    ...new Set((paidPayments ?? []).map((p) => p.order_id)),
+  ];
+
+  for (const orderId of divergedOrderIds) {
+    // 異常態：錢已收到但訂單卡 pending_payment。error 級告警（每筆一次）。
+    Sentry.captureMessage(
+      "reconcile: paid payment on pending_payment order — rescuing (T110 divergence)",
+      { level: "error", extra: { orderId } },
+    );
+    try {
+      // ensureOrderPaid 冪等：把 order 從 pending_payment 補推進成 paid（RPC
+      // 內狀態＋稽核 log 同一交易）；log 仍寫不進去時它會 throw，訂單續留
+      // pending，隔日本 sweep 再試。補推進成功才計 rescued。
+      await ensureOrderPaid(serviceRole, orderId, "reconcile-diverged");
+      summary.divergedRescued += 1;
+      // 補寄 webhook 當初沒寄成的確認信（ensureOrderPaid throw 時 settlePaid
+      // 走不到寄信段）。冪等，失敗由 failed-notification sweep 再兜。
+      const notified = await ensureNotificationSent(serviceRole, orderId);
+      if (!notified) {
+        summary.notifyFailed += 1;
+        Sentry.captureMessage("reconcile: notification delivery failed", {
+          level: "warning",
+          extra: { orderId },
+        });
+      }
+    } catch (e) {
+      summary.unexpected += 1;
+      Sentry.captureException(e, { extra: { orderId } });
+    }
+    await sleep(THROTTLE_MS);
+  }
+}
+
 // T89：ECPay 主動對帳。webhook 是即時路徑，這支 cron 是每日一次的最終防線——
 // 只做「pending→paid 的主動修正＋告警」，範圍刻意不含逾期取消（見 T66）。
 export async function GET(request: Request) {
@@ -239,6 +328,7 @@ export async function GET(request: Request) {
     invoicesSwept: 0,
     invoicesIssued: 0,
     invoicesFailed: 0,
+    divergedRescued: 0,
   };
 
   // 單筆候選「非預期失敗」的共用出口：計數＋Sentry exception。已知取捨：同一
@@ -404,8 +494,10 @@ export async function GET(request: Request) {
             // 以 payment.status='pending' 為鍵，若先翻 payment 再推進訂單，推進
             // 段失敗時候選鍵已被消滅，隔日 cron 永遠選不到這筆——客人已付款、
             // 訂單永久卡 pending_payment、確認信未寄，安全網自身留盲點。
-            // ensureOrderPaid 冪等（orders 條件式 UPDATE CAS），webhook 已推進
-            // 時安全 no-op。promoted 計數掛在①的回傳（見下方分類），計在搶救
+            // ensureOrderPaid 冪等（CAS 走 transition_order_status RPC，狀態
+            // 推進＋稽核 log 同一交易，T110），webhook 已推進時安全 no-op；
+            // log 寫入失敗會 rollback 推進並 throw（落到本 catch，候選鍵保留
+            // 隔日重試）。promoted 計數掛在①的回傳（見下方分類），計在搶救
             // 真正發生那一輪；隔日補翻 payment 的那一輪①回 already-settled、
             // 不再重複計。
             const orderResult = await ensureOrderPaid(
@@ -579,6 +671,10 @@ export async function GET(request: Request) {
 
       await sleep(THROTTLE_MS);
     }
+
+    // T110 分歧兜底：先補推進「payment=paid／order=pending_payment」的分歧
+    // 訂單，讓下方的未開票 sweep 能在同一輪把補推進成 paid 的訂單一起開票。
+    await sweepDivergedPaidOrders(serviceRole, summary);
 
     await sweepFailedNotifications(serviceRole, summary);
 

@@ -109,15 +109,24 @@ export async function ensureOrderPaid(
   orderId: string,
   source: string,
 ): Promise<"promoted" | "already-settled" | "closed" | "indeterminate"> {
-  // 條件式 UPDATE：只有真正搶到這次推進的請求才會拿到 promoted，
+  // 條件式 CAS：只有真正搶到這次推進的請求才會拿到 promoted，
   // 避免兩個近乎同時抵達的重送請求都各自寫入 order_status_log（該表無 unique 約束）。
   // 訂單若已經是 paid（例如上次執行已推進成功、但通知半路失敗），這裡安全地
   // 不做任何事——推進與寄通知是兩件互不依賴、各自冪等的事，見 ensureNotificationSent。
+  // T110：CAS UPDATE + order_status_log INSERT 移進 transition_order_status
+  // RPC 的單一交易——log 寫入失敗整段 rollback 並回 error（下方 throw），
+  // webhook 回 ERR 讓 ECPay 重送重試；不再有「狀態已翻 paid、稽核 log 缺漏」
+  // 的中間態（舊版 log 失敗只記 Sentry、照樣回 promoted）。
   const { data: promoted, error } = await serviceRole
-    .from("orders")
-    .update({ status: "paid" })
-    .eq("id", orderId)
-    .eq("status", "pending_payment")
+    .rpc("transition_order_status", {
+      p_order_id: orderId,
+      p_from: "pending_payment",
+      p_to: "paid",
+      p_is_override: false,
+      p_note: `ECPay ${source}`,
+    })
+    // RPC returns setof orders 整列（含收件人 PII）；這裡只需要三個欄位，
+    // 縮小投影維持與舊版 .select() 相同的最小資料面。
     .select("id, cart_id, created_at")
     .maybeSingle();
 
@@ -164,24 +173,6 @@ export async function ensureOrderPaid(
       return statusError || !current ? "indeterminate" : "closed";
     }
     return "already-settled";
-  }
-
-  const { error: logError } = await serviceRole
-    .from("order_status_log")
-    .insert({
-      order_id: orderId,
-      from_status: "pending_payment",
-      to_status: "paid",
-      note: `ECPay ${source}`,
-      actor_id: null,
-      is_override: false,
-    });
-  if (logError) {
-    console.error("[order_status_log] insert failed", logError);
-    Sentry.captureMessage("[order_status_log] insert failed", {
-      level: "error",
-      extra: { orderId, logError },
-    });
   }
 
   // T75：付款成功才清購物車（下單當下保留，避免付款失敗要重配置）。清車失敗

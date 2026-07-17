@@ -15,13 +15,17 @@ import {
   type OrderStatus,
 } from "../state-machine";
 
-// transitionOrder／adminOverrideStatus 的 CAS 守衛測試共用同一套「orders +
-// order_status_log」mock 骨架，只有 initialStatus／updateMatches 不同。
-const logInsert = vi.fn().mockResolvedValue({ error: null });
+// T110 後兩函式的寫入段都走 transition_order_status RPC（CAS UPDATE + log
+// INSERT 在 DB 端同一交易），mock 骨架共用：orders 只剩前置的狀態查詢，寫入
+// 全看 rpc 的回傳。rpcCall 記錄參數供斷言。
+const rpcCall = vi.fn();
 
+// 三個 knob 互斥使用：rpcErrorMessage（RPC 回 {error}）優先於 updateMatches
+// （CAS 是否搶到，預設 true=搶到）。
 function makeServiceRole(opts: {
   initialStatus: OrderStatus;
-  updateMatches: boolean;
+  updateMatches?: boolean;
+  rpcErrorMessage?: string;
 }) {
   return {
     from: (table: string) => {
@@ -29,31 +33,40 @@ function makeServiceRole(opts: {
         const chain = {
           select: () => chain,
           eq: () => chain,
-          single: () =>
+          maybeSingle: () =>
             Promise.resolve({
               data: { status: opts.initialStatus },
               error: null,
             }),
-          update: () => chain,
-          maybeSingle: () =>
-            Promise.resolve(
-              opts.updateMatches
-                ? { data: { id: "order-1" }, error: null }
-                : { data: null, error: null },
-            ),
         };
         return chain;
       }
-      if (table === "order_status_log") {
-        return { insert: logInsert };
-      }
       throw new Error(`unexpected table ${table}`);
+    },
+    rpc: (name: string, args: Record<string, unknown>) => {
+      if (name !== "transition_order_status") {
+        throw new Error(`unexpected rpc ${name}`);
+      }
+      rpcCall(args);
+      const result = Promise.resolve(
+        opts.rpcErrorMessage
+          ? { data: null, error: { message: opts.rpcErrorMessage } }
+          : (opts.updateMatches ?? true)
+            ? { data: { id: "order-1" }, error: null }
+            : { data: null, error: null },
+      );
+      // 實作鏈 .select("id").maybeSingle()；select 回傳同一 chain。
+      const chain = {
+        select: () => chain,
+        maybeSingle: () => result,
+      };
+      return chain;
     },
   };
 }
 
 beforeEach(() => {
-  logInsert.mockClear();
+  rpcCall.mockClear();
 });
 
 describe("canTransition", () => {
@@ -88,6 +101,12 @@ describe("canTransition", () => {
     }
   });
 
+  it("任何狀態都不得列出自身為合法轉換（自環會讓 RPC 的 from=to 例外從不可達變成可達，且被誤分類為一般錯誤而非競態）", () => {
+    for (const [from, targets] of Object.entries(VALID_TRANSITIONS)) {
+      expect(targets, `${from} 不得自環`).not.toContain(from);
+    }
+  });
+
   it("終止狀態無任何出口", () => {
     const terminals: OrderStatus[] = ["completed", "cancelled", "refunded"];
     const allStatuses = Object.keys(VALID_TRANSITIONS) as OrderStatus[];
@@ -103,7 +122,7 @@ describe("canTransition", () => {
 });
 
 describe("transitionOrder：CAS 守衛", () => {
-  it("併發：cron 判定 pending_payment 期間 webhook 搶先轉 paid → CAS 沒搶到，丟出 OrderTransitionRaceError、不寫 log", async () => {
+  it("併發：cron 判定 pending_payment 期間 webhook 搶先轉 paid → CAS 沒搶到（RPC 回空），丟出 OrderTransitionRaceError", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "pending_payment",
@@ -114,10 +133,10 @@ describe("transitionOrder：CAS 守衛", () => {
     await expect(
       transitionOrder("order-1", "cancelled"),
     ).rejects.toBeInstanceOf(OrderTransitionRaceError);
-    expect(logInsert).not.toHaveBeenCalled();
+    // CAS 沒搶到時不寫 log 的保證已移進 RPC 交易本身（0017），TS 端只驗錯誤分類。
   });
 
-  it("正常轉換：CAS 搶到 → 寫入 order_status_log，from/to 正確", async () => {
+  it("正常轉換：CAS 搶到 → RPC 收到正確的 from/to/note，is_override 為 false", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "pending_payment",
@@ -129,20 +148,33 @@ describe("transitionOrder：CAS 守衛", () => {
       note: "逾期未付款自動取消",
     });
 
-    expect(logInsert).toHaveBeenCalledWith(
+    expect(rpcCall).toHaveBeenCalledWith(
       expect.objectContaining({
-        order_id: "order-1",
-        from_status: "pending_payment",
-        to_status: "cancelled",
-        note: "逾期未付款自動取消",
-        is_override: false,
+        p_order_id: "order-1",
+        p_from: "pending_payment",
+        p_to: "cancelled",
+        p_note: "逾期未付款自動取消",
+        p_is_override: false,
       }),
+    );
+  });
+
+  it("RPC 回傳 error（DB 暫時性故障或 log 寫入失敗 rollback）→ throw，不得靜默", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "pending_payment",
+        rpcErrorMessage: "connection timeout",
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await expect(transitionOrder("order-1", "cancelled")).rejects.toThrow(
+      "訂單狀態更新失敗",
     );
   });
 });
 
 describe("adminOverrideStatus：CAS 守衛（T92／F-007）", () => {
-  it("to === from：拒絕、完全不碰 UPDATE，不寫 log（CAS 守衛在此 edge case 對並發無效，改用前置擋下）", async () => {
+  it("to === from：拒絕、完全不呼叫 RPC（CAS 守衛在此 edge case 對並發無效，改用前置擋下）", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "paid",
@@ -156,10 +188,10 @@ describe("adminOverrideStatus：CAS 守衛（T92／F-007）", () => {
         reason: "測試",
       }),
     ).rejects.toThrow("目標狀態與目前狀態相同");
-    expect(logInsert).not.toHaveBeenCalled();
+    expect(rpcCall).not.toHaveBeenCalled();
   });
 
-  it("併發：兩位管理者近乎同時對同一單送出互斥的 override 目標 → 沒搶到 CAS 的丟出 OrderTransitionRaceError、不寫 log", async () => {
+  it("併發：兩位管理者近乎同時對同一單送出互斥的 override 目標 → 沒搶到 CAS 的丟出 OrderTransitionRaceError", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "paid",
@@ -173,10 +205,9 @@ describe("adminOverrideStatus：CAS 守衛（T92／F-007）", () => {
         reason: "測試",
       }),
     ).rejects.toBeInstanceOf(OrderTransitionRaceError);
-    expect(logInsert).not.toHaveBeenCalled();
   });
 
-  it("正常 override：CAS 搶到 → 寫入 order_status_log，is_override 為 true", async () => {
+  it("正常 override：CAS 搶到 → RPC 收到 is_override true 與 operator/reason", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "paid",
@@ -189,15 +220,31 @@ describe("adminOverrideStatus：CAS 守衛（T92／F-007）", () => {
       reason: "客訴協議退款",
     });
 
-    expect(logInsert).toHaveBeenCalledWith(
+    expect(rpcCall).toHaveBeenCalledWith(
       expect.objectContaining({
-        order_id: "order-1",
-        from_status: "paid",
-        to_status: "refunded",
-        note: "客訴協議退款",
-        actor_id: "admin-1",
-        is_override: true,
+        p_order_id: "order-1",
+        p_from: "paid",
+        p_to: "refunded",
+        p_note: "客訴協議退款",
+        p_actor_id: "admin-1",
+        p_is_override: true,
       }),
     );
+  });
+
+  it("RPC 回傳 error → throw，不得靜默", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "paid",
+        rpcErrorMessage: "connection timeout",
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await expect(
+      adminOverrideStatus("order-1", "refunded", {
+        operatorId: "admin-1",
+        reason: "測試",
+      }),
+    ).rejects.toThrow("訂單狀態更新失敗");
   });
 });

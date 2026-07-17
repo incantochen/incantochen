@@ -151,26 +151,46 @@ const uninvoicedOrders: { id: string }[] = [];
 // 捕捉 sweep 查詢實際帶的過濾條件，斷言只撈 paid＋invoice_status='none'。
 const lastOrdersFilters: Record<string, unknown> = {};
 
-// orders 表被兩個 sweep 用到，查詢形狀不同，以此分流：
+// T110 分歧 sweep 用：pending_payment 訂單清單，及其中已有 paid payment 的
+// order_id 清單。
+let pendingDivergedOrders: { id: string }[] = [];
+let paidDivergedPayments: { order_id: string }[] = [];
+
+// orders 表被三種查詢用到，形狀不同以此分流：
 // T88 通知 sweep 用 .in("id",[...]) 撈訂單狀態 → 回 sweepOrders；
-// T42 發票 sweep 用 .eq×2＋.order＋.limit 撈未開票訂單 → 回 uninvoicedOrders
-// （並側錄 eq 過濾條件供斷言）。
+// T110 分歧 sweep 用 .eq("status","pending_payment").lt().order().limit() →
+//   回 pendingDivergedOrders；
+// T42 發票 sweep 用 .eq("status","paid").eq("invoice_status","none")… →
+//   回 uninvoicedOrders（並側錄 eq 過濾條件供斷言）。
 function makeOrdersChain() {
   let usedIn = false;
+  const filters: Record<string, unknown> = {};
   const chain: any = {
     select: () => chain,
     eq: (col: string, val: unknown) => {
-      lastOrdersFilters[col] = val;
+      filters[col] = val;
       return chain;
     },
     in: () => {
       usedIn = true;
       return chain;
     },
+    lt: () => chain,
     order: () => chain,
     limit: () => chain,
     then: (resolve: (v: unknown) => void) => {
-      resolve({ data: usedIn ? sweepOrders : uninvoicedOrders, error: null });
+      if (usedIn) {
+        resolve({ data: sweepOrders, error: null });
+        return;
+      }
+      if (filters.status === "pending_payment") {
+        resolve({ data: pendingDivergedOrders, error: null });
+        return;
+      }
+      // T42 發票 sweep：側錄過濾條件供斷言。
+      lastOrdersFilters.status = filters.status;
+      lastOrdersFilters.invoice_status = filters.invoice_status;
+      resolve({ data: uninvoicedOrders, error: null });
     },
   };
   return chain;
@@ -205,10 +225,17 @@ function makeSweepChain(rows: unknown[]) {
 function makeChain() {
   const chain: any = {
     _op: "select",
+    _usedIn: false,
     _filters: {} as Record<string, unknown>,
     select: () => chain,
     eq: (col: string, val: unknown) => {
       chain._filters[col] = val;
+      return chain;
+    },
+    // T110 分歧 sweep 的 paid-payment 查詢：.in("order_id",[...]).eq("status","paid")
+    in: (col: string, val: unknown) => {
+      chain._filters[col] = val;
+      chain._usedIn = true;
       return chain;
     },
     lt: (col: string, val: unknown) => {
@@ -244,6 +271,11 @@ function makeChain() {
     },
     then: (resolve: (v: unknown) => void) => {
       if (chain._op === "select") {
+        // T110 分歧 sweep 的 paid-payment 查詢：以 .in + status='paid' 分流。
+        if (chain._usedIn && chain._filters.status === "paid") {
+          resolve({ data: paidDivergedPayments, error: null });
+          return;
+        }
         resolve({ data: candidates, error: null });
         return;
       }
@@ -286,6 +318,8 @@ beforeEach(() => {
   lastOrFilter = undefined;
   failedNotifications = [];
   sweepOrders = [];
+  pendingDivergedOrders = [];
+  paidDivergedPayments = [];
   queryTradeInfo.mockReset();
   // mockReset 而非 mockClear：mockClear 不會清掉前一個測試殘留、未被消耗的
   // mockResolvedValueOnce 佇列，會外洩到下一個測試造成順序相依的 flaky。
@@ -359,6 +393,7 @@ describe("認證", () => {
       invoicesSwept: 0,
       invoicesIssued: 0,
       invoicesFailed: 0,
+      divergedRescued: 0,
     });
   });
 });
@@ -392,6 +427,60 @@ describe("T42 發票補開 sweep", () => {
     const body = await res.json();
     expect(issueInvoiceForOrder).not.toHaveBeenCalled();
     expect(body.invoicesSwept).toBe(0);
+  });
+});
+
+describe("T110 分歧兜底 sweep（payment=paid 但 order 卡 pending_payment）", () => {
+  it("分歧訂單 → 補推進 ensureOrderPaid('reconcile-diverged')、補寄通知、divergedRescued+1、error 告警", async () => {
+    pendingDivergedOrders = [{ id: "o1" }];
+    paidDivergedPayments = [{ order_id: "o1" }]; // webhook 已收款、訂單卻卡 pending
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.divergedRescued).toBe(1);
+    expect(ensureOrderPaid).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+      "reconcile-diverged",
+    );
+    // 補寄 webhook 當初沒寄成的確認信。
+    expect(ensureNotificationSent).toHaveBeenCalledWith(
+      expect.anything(),
+      "o1",
+    );
+    // 異常態：error 級告警。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid payment on pending_payment order — rescuing (T110 divergence)",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("pending_payment 訂單但無 paid payment（正常待付款）→ 不補推進、divergedRescued=0", async () => {
+    pendingDivergedOrders = [{ id: "o1" }];
+    paidDivergedPayments = []; // 沒有 paid payment：正常待付款，非分歧
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.divergedRescued).toBe(0);
+    expect(ensureOrderPaid).not.toHaveBeenCalled();
+  });
+
+  it("補推進失敗（ensureOrderPaid throw，order_status_log 仍寫不進）→ 不計 divergedRescued、unexpected+1、續留 pending 隔日再試", async () => {
+    pendingDivergedOrders = [{ id: "o1" }];
+    paidDivergedPayments = [{ order_id: "o1" }];
+    ensureOrderPaid.mockRejectedValueOnce(
+      new Error("ensureOrderPaid failed: simulated"),
+    );
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.divergedRescued).toBe(0);
+    expect(body.unexpected).toBe(1);
   });
 });
 
