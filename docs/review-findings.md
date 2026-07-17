@@ -80,7 +80,7 @@
 
 ## F-008 [P2] 客人端讀取路徑普遍未檢查 Supabase `{error}`：DB 暫時性故障被誤判為「查無資料」，付款中客人被誤導離開
 
-- 狀態：✅ 已修復（PR #70，2026-07-17，squash 30fcf2e）——T95 落地：pay/success/failed 頁＋verify-prices＋read-cart＋get-cart-count＋account 讀取頁全補 {error} 分支（含 F-017 列舉的 account 頁與 support/actions.ts）
+- 狀態：✅ 已修復（PR #70，2026-07-17，squash 30fcf2e）——T95 落地：pay/success/failed 頁＋verify-prices＋read-cart＋get-cart-count＋account/orders 三頁補 {error} 分支（＋support/actions.ts 擁有權查詢）。⚠️ 更正（2026-07-18）：F-017 僅**部分**隨此批修復——account/orders 三頁已補，但 F-017 另列的 `account/page.tsx`（count）／`account/profile/page.tsx`（member）／`products/[slug]/page.tsx`（PDP）三處不在 PR #70 範圍、仍待修，故 F-017 維持待確認（下方 F-017 條目為準）
 - 位置：`src/app/checkout/pay/page.tsx:21-27`（訂單查詢 error 未檢查→`!order` redirect `/checkout`）；`src/app/checkout/success/page.tsx:16-22`（同模式→redirect `/`）；`src/app/checkout/actions.ts:49-66`（cart／cart_item 查詢→「購物車已空」）；`src/lib/quote/verify-prices.ts:56-64`（product 查詢→「商品已下架或不存在」）；`src/lib/cart/read-cart.ts:23-39`、`src/lib/cart/get-cart-count.ts:11-23`、`src/app/products/[slug]/actions.ts:27-49`（同模式，顯示層）
 - 失敗情境：Supabase 暫時性故障（statement timeout／連線池耗盡）時查詢回 `{ data: null, error }`，這些呼叫點只解構 `data`——與「查無資料」無法區分。最痛的兩點：①客人已建單、正要進 `/checkout/pay` 付款的瞬間 DB 抖動→被 redirect 回 `/checkout`，而購物車已在建單時清空（T75），客人看到空購物車、以為訂單消失；②客人**已付款**回到 `/checkout/success` 時 DB 抖動→被 redirect 回首頁，付款成功卻看不到任何確認，直接聯繫客服或重複下單。`verifyCartPrices` 則會回「商品已下架」的錯誤訊息擋單（方向安全但診斷錯誤）。全部屬 CLAUDE.md §6「SDK 錯誤回傳必檢查」缺陷類別（code-checklist F1）——T68 修了 webhook 側，客人端讀取路徑漏套同一 pattern。金額決策鏈（verifyCartPrices 重算、webhook 金額核對）不受影響，失敗方向都是 fail-closed，故列 P2 而非 P1。
 - 修法：各呼叫點解構並檢查 `error`：頁面層改 render「系統忙碌中，請重新整理」（不可 redirect 走人）；action 層回傳「系統忙碌，請稍後再試」與「購物車已空」區分；`verifyCartPrices` 對 `error` throw「系統忙碌」而非「商品已下架」。與 T79（findOrCreateMember 吞錯）同根因不同位置，建議同批修復。
