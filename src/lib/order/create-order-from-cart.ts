@@ -8,7 +8,11 @@ import {
   invoiceTargetToMeta,
   type InvoiceTargetInput as InvoiceTargetInputType,
 } from "@/lib/order/invoice-meta";
-import { verifyCartPrices, type VerifiedItem } from "@/lib/quote/verify-prices";
+import {
+  verifyCartPrices,
+  PriceVerificationUnavailableError,
+  type VerifiedItem,
+} from "@/lib/quote/verify-prices";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
 import {
   transitionOrder,
@@ -193,6 +197,11 @@ export async function createOrderFromCart(
   try {
     verifiedItems = await verifyCartPrices(serviceRole, cartItems);
   } catch (e) {
+    // DB 暫時性故障（可重試）不是「購物車內容有問題」——不帶 showCartLink，
+    // 免得正常購物車遇到 DB 抖動被叫去「前往購物車調整」（沒東西可改）。
+    if (e instanceof PriceVerificationUnavailableError) {
+      return { ok: false, error: e.message };
+    }
     const msg =
       e instanceof Error ? e.message : "商品資訊有誤，請重新確認後再試";
     return { ok: false, error: msg, showCartLink: true };

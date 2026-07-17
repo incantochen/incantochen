@@ -10,6 +10,7 @@ import {
   resolveOrderOwnership,
 } from "@/lib/order/order-access-token";
 import { RateLimitedNotice } from "../rate-limited-notice";
+import { SystemBusyNotice } from "../system-busy-notice";
 
 export default async function CheckoutFailedPage({
   searchParams,
@@ -36,7 +37,11 @@ export default async function CheckoutFailedPage({
     createClient().then((c) => c.auth.getUser()),
   ]);
 
-  const { data: order } = orderResult;
+  const { data: order, error: orderError } = orderResult;
+
+  // T95（F-008）：查詢失敗 ≠ 查無資料——DB 暫時性故障不可誤判成「沒這張
+  // 訂單」把客人踢回首頁（訂單其實還在，重整即可）。
+  if (orderError) return <SystemBusyNotice />;
 
   if (!order) redirect("/");
 

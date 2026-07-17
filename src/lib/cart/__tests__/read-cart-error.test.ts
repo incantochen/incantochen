@@ -2,7 +2,7 @@
 // T95（F-008）：getCart／getCartCount 對 DB 暫時性故障的行為——
 // getCart throw（交給 /cart error boundary）、getCartCount fail-soft 回 0
 // ＋記 Sentry，兩者都不得把故障渲染成「購物袋是空的」的完全靜默誤報。
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
@@ -14,8 +14,10 @@ vi.mock("next/headers", () => ({
 }));
 
 const captureException = vi.fn();
+const flush = vi.fn(async () => true);
 vi.mock("@sentry/nextjs", () => ({
   captureException: (...a: unknown[]) => captureException(...a),
+  flush: (...a: unknown[]) => flush(...a),
 }));
 
 const state = {
@@ -62,14 +64,26 @@ vi.mock("@/lib/supabase/service-role", () => ({
 import { getCart } from "../read-cart";
 import { getCartCount } from "../get-cart-count";
 
+// get-cart-count 用 module-scope 時間節流（同一故障窗 60s 內只送一發 Sentry）。
+// 該 state 跨測試持續，若兩個 error 測試在同一實時窗內跑，後一個的 capture 會
+// 被前一個節流吃掉。用 fake timer 每個測試往前推 > 60s，隔開節流窗。
+let clock = 1_700_000_000_000;
 beforeEach(() => {
+  vi.useFakeTimers();
+  clock += 120_000;
+  vi.setSystemTime(clock);
   captureException.mockClear();
+  flush.mockClear();
   state.cart = { id: "cart-1" };
   state.cartError = null;
   state.cartItems = [];
   state.cartItemsError = null;
   state.count = 2;
   state.countError = null;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("getCart（T95）", () => {
