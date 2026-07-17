@@ -755,6 +755,24 @@
 
 ---
 
+## 📅 2026-07-18
+
+### 本次作業
+
+#### #T127 / M2 金流 / webhook 側付款成立但訂單卡 pending_payment 盲點（三段修法）（PR #71）
+
+**說明**：webhook 端 settlePaid 先翻 payment=paid 再推進訂單，推進失敗＋ECPay 重送耗盡會停在「payment 已 paid、orders 卡 pending_payment」漂移——主對帳臂候選鍵是 payment=pending，撈不到、不自癒（唯一「錢收了卻無自動警報」的路徑）。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 完成（PR #71 squash merge `4ca7431`，2026-07-18；--admin 合併，因並發 session 未提交的 T129–T133 docs 卡住本機 branch 更新，master 領先的 3 個 commit 皆 account/F-017 修正不碰 T127 任何檔） |
+| 產出     | 取消守衛下沉 `transitionOrder`（`PaidOrderCancelBlockedError`，覆蓋逾期 cron／結帳改單／admin 所有取消路徑）＋TOCTOU 取消後複查；reconcile **漂移臂**（`reconcileDriftedOrders`，撈 payment=paid ∧ orders=pending_payment 冪等推進＋補寄）＋**稽核臂**（`auditPaidOnCancelledOrders`，payment=paid ∧ orders=cancelled 每日 durable 復發偵測）；notify 金額正數防呆（`validateSettleAmount` 單一出處，與 reconcile 對稱，0===0／負數擋下）；新 helper `find-paid-payment.ts`／`mark-pending-payments-failed.ts`；ops-runbook §1.1 失敗矩陣＋§6.1 人工裁決；consecutive-403 Redis 計數 |
+| 更新描述 | 1. 三段修法如上。2. **與 master(T110 RPC 交易化)手動合流**（13 檔衝突）：state-machine 以 `transition_order_status` RPC 為寫入段地基＋移植 T127 守衛（RPC 前）／TOCTOU（RPC 成功後——原子化下 RPC throw＝取消未發生免查）；reconcile 保留 T127 兩臂、刪 T110 `sweepDivergedPaidOrders`（功能被涵蓋）；expire 保留守衛下沉版、刪 T110 批次預查；checkout/pay 取聯集（T127 `findPaidPayment` 單一出處＋master T95 `SystemBusyNotice`）。3. 合流後跑 `/code-review max`（5 完全冷啟動獨立 finder 近似 ultra，因 ultra 額度用完）：修死碼（合流殘留 `_usedIn`）＋systemicFailure 單筆候選誤判 500（`checked>0`→`checked>1`＋反向驗證測試）；驗證後判非缺陷：refunded durable 缺口（cancelled-only 是正確設計——`uq_payment_one_paid_per_order` 擋雙付、T47 未落地故 refunded+paid 為正常態，納入會每日噪音；code/doc 一致）、逾期競態告警（ensure-paid.ts:167 內部當天即發 error，D 之 finding 推翻）。4. 驗收：566 tests／tsc／lint 全綠。 |
+| 待辦     | T128（summary rateLimited/httpAborted 併 abortReason，P3）；T129–T133（並發 session 登記的 dev-review findings，與本任務無關） |
+| 依賴     | T107（reconcile cron）、T110（RPC 交易化，合流基底） |
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```
