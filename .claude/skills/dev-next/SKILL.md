@@ -59,8 +59,9 @@ description: 開發迴圈的實作與結案階段（下一個任務, next task, 
 2. `docs/tasks.csv`：該任務（含批次成員）狀態改「完成」，說明補「✅ 完成（日期）：一句話摘要＋PR 編號」
 3. GitHub issues：若 PR 未帶 `Closes #NN` 自動關閉，補 `gh issue close #NN --comment "已於 PR #MM 修復"`
 4. `docs/review-findings.md`：對應 F 項狀態改「已修復」附 PR 編號；若修的是 T 任務也更新回歸狀態區
-5. 以上為 docs 變更，commit 直接推 master（`docs(tasks): close T## ...`）
-6. 回報：已結案清單＋依挑任務規則預告下一個候選任務
+5. `docs/security-foundation.md`：merge 的 PR 若動到資安地基（RLS／service role 擁有權／guest token／驗價／cron 驗證／timing-safe／webhook 冪等／email escape／CSP／IP 信任／限流／{error} 檢查），**同步增修對應不變式條目**（新防線加條目、錨點變更改錨點）——清單過時＝每週漂移檢核失效
+6. 以上為 docs 變更，commit 直接推 master（`docs(tasks): close T## ...`）
+7. 回報：已結案清單＋依挑任務規則預告下一個候選任務
 
 ## 護欄
 
