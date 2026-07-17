@@ -14,7 +14,7 @@ vi.mock("next/headers", () => ({
 }));
 
 const captureException = vi.fn();
-const flush = vi.fn(async () => true);
+const flush = vi.fn(async (..._a: unknown[]) => true);
 vi.mock("@sentry/nextjs", () => ({
   captureException: (...a: unknown[]) => captureException(...a),
   flush: (...a: unknown[]) => flush(...a),
