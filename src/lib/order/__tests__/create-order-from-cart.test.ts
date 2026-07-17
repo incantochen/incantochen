@@ -19,18 +19,30 @@ vi.mock("@/lib/quote/verify-prices", () => ({
   PriceVerificationUnavailableError,
 }));
 
-const { transitionOrder, OrderTransitionRaceError } = vi.hoisted(() => {
-  class OrderTransitionRaceError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = "OrderTransitionRaceError";
+const { transitionOrder, OrderTransitionRaceError, PaidOrderCancelBlockedError } =
+  vi.hoisted(() => {
+    class OrderTransitionRaceError extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = "OrderTransitionRaceError";
+      }
     }
-  }
-  return { transitionOrder: vi.fn(), OrderTransitionRaceError };
-});
+    class PaidOrderCancelBlockedError extends Error {
+      constructor(orderId: string) {
+        super(`訂單已有已收款 payment，不得取消：${orderId}`);
+        this.name = "PaidOrderCancelBlockedError";
+      }
+    }
+    return {
+      transitionOrder: vi.fn(),
+      OrderTransitionRaceError,
+      PaidOrderCancelBlockedError,
+    };
+  });
 vi.mock("@/lib/order/state-machine", () => ({
   transitionOrder: (...a: unknown[]) => transitionOrder(...a),
   OrderTransitionRaceError,
+  PaidOrderCancelBlockedError,
 }));
 
 import {
@@ -408,6 +420,37 @@ describe("resolvePendingOrderForCart", () => {
       RECIPIENT,
     );
 
+    expect(result).toMatchObject({ kind: "error" });
+  });
+
+  it("舊單其實已收款（守衛擋下取消）→ error、絕不建新單（防雙重扣款）", async () => {
+    // 收件資訊已變更 → 走取消舊單分支；但舊單是 webhook 側卡單（payment=paid／
+    // orders 仍 pending_payment），transitionOrder 的取消守衛丟
+    // PaidOrderCancelBlockedError。此時絕不可回 proceed 建新單，否則客人為同一批
+    // 商品付第二次錢。
+    state.existingPendingOrder = {
+      id: "order-old",
+      order_no: "INC-PAID-STUCK",
+      created_at: "2026-07-09T00:00:00+00:00",
+      member_id: "member-1",
+      recipient_name: "舊收件人",
+      recipient_phone: "0900000000",
+      zip_code: "100",
+      shipping_address: "舊地址",
+    };
+    transitionOrder.mockRejectedValue(
+      new PaidOrderCancelBlockedError("order-old"),
+    );
+
+    const result = await resolvePendingOrderForCart(
+      makeServiceRole(),
+      "cart-1",
+      "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
+      "member-1",
+    );
+
+    // 不建新單（非 proceed）、不 reuse（收件資訊已變不可交出舊單）：回 error。
     expect(result).toMatchObject({ kind: "error" });
   });
 

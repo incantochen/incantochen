@@ -5,6 +5,11 @@ vi.mock("@/lib/supabase/service-role", () => ({
   createServiceRoleClient: vi.fn(),
 }));
 
+const sentryCaptureMessage = vi.fn();
+vi.mock("@sentry/nextjs", () => ({
+  captureMessage: (...args: unknown[]) => sentryCaptureMessage(...args),
+}));
+
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
   canTransition,
@@ -12,21 +17,32 @@ import {
   adminOverrideStatus,
   VALID_TRANSITIONS,
   OrderTransitionRaceError,
+  PaidOrderCancelBlockedError,
   type OrderStatus,
 } from "../state-machine";
 
 // T110 後兩函式的寫入段都走 transition_order_status RPC（CAS UPDATE + log
 // INSERT 在 DB 端同一交易），mock 骨架共用：orders 只剩前置的狀態查詢，寫入
-// 全看 rpc 的回傳。rpcCall 記錄參數供斷言。
+// 全看 rpc 的回傳；payment 表供取消守衛的 findPaidPayment（T127）。
+// rpcCall 記錄參數供斷言。
 const rpcCall = vi.fn();
 
-// 三個 knob 互斥使用：rpcErrorMessage（RPC 回 {error}）優先於 updateMatches
+type PaidResult = {
+  data: { id: string } | null;
+  error: { message: string } | null;
+};
+
+// knob 互斥使用：rpcErrorMessage（RPC 回 {error}）優先於 updateMatches
 // （CAS 是否搶到，預設 true=搶到）。
 function makeServiceRole(opts: {
   initialStatus: OrderStatus;
   updateMatches?: boolean;
   rpcErrorMessage?: string;
+  // 取消守衛的 findPaidPayment 依序回傳（第 1 次＝pre-guard、第 2 次＝post-cancel
+  // 再查）。預設兩次都「查無 paid」。
+  paidResults?: PaidResult[];
 }) {
+  const paidQueue = [...(opts.paidResults ?? [])];
   return {
     from: (table: string) => {
       if (table === "orders") {
@@ -38,6 +54,15 @@ function makeServiceRole(opts: {
               data: { status: opts.initialStatus },
               error: null,
             }),
+        };
+        return chain;
+      }
+      if (table === "payment") {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: () =>
+            Promise.resolve(paidQueue.shift() ?? { data: null, error: null }),
         };
         return chain;
       }
@@ -67,6 +92,7 @@ function makeServiceRole(opts: {
 
 beforeEach(() => {
   rpcCall.mockClear();
+  sentryCaptureMessage.mockClear();
 });
 
 describe("canTransition", () => {
@@ -170,6 +196,94 @@ describe("transitionOrder：CAS 守衛", () => {
     await expect(transitionOrder("order-1", "cancelled")).rejects.toThrow(
       "訂單狀態更新失敗",
     );
+  });
+});
+
+describe("transitionOrder：取消守衛（有 paid payment 不得取消）", () => {
+  it("pre-guard：訂單已有 paid payment → 丟 PaidOrderCancelBlockedError、不 UPDATE、不寫 log", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "pending_payment",
+        updateMatches: true,
+        // 第 1 次（pre-guard）就查到 paid。
+        paidResults: [{ data: { id: "pay-1" }, error: null }],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await expect(
+      transitionOrder("order-1", "cancelled"),
+    ).rejects.toBeInstanceOf(PaidOrderCancelBlockedError);
+    // 守衛在 RPC 之前擋下：訂單沒被取消、log 沒寫（T110 後兩者同一交易）。
+    expect(rpcCall).not.toHaveBeenCalled();
+  });
+
+  it("TOCTOU：pre-guard 沒查到、cancel 後才查到 paid → 仍取消＋寫 log，另發 P0 告警", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "pending_payment",
+        updateMatches: true,
+        // 第 1 次（pre-guard）查無、第 2 次（post-cancel 再查）才命中。
+        paidResults: [
+          { data: null, error: null },
+          { data: { id: "pay-1" }, error: null },
+        ],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await transitionOrder("order-1", "cancelled");
+
+    // 取消已完成（RPC 有呼叫；T110 後狀態＋log 同一交易）。
+    expect(rpcCall).toHaveBeenCalledWith(
+      expect.objectContaining({ p_to: "cancelled" }),
+    );
+    // 錢收在剛取消的訂單上 → P0 告警（走 §6.1 人工裁決）。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "transitionOrder: money received on order cancelled during transition",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("Conv2：post-cancel 再查 {error} → 降級 warning、不影響已完成的取消", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "pending_payment",
+        updateMatches: true,
+        paidResults: [
+          { data: null, error: null },
+          { data: null, error: { message: "connection timeout" } },
+        ],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await transitionOrder("order-1", "cancelled");
+
+    // 取消照常完成。
+    expect(rpcCall).toHaveBeenCalledWith(
+      expect.objectContaining({ p_to: "cancelled" }),
+    );
+    // 再查失敗只降級 warning，不升 P0、不 throw。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "transitionOrder: post-cancel paid check failed",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("非取消轉換（paid→in_production）不觸發取消守衛（不查 payment）", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "paid",
+        updateMatches: true,
+        // 故意不給 paidResults：若守衛誤觸發會 shift 到預設 null，但更重要的是
+        // 這條轉換根本不該查 payment——用 log 有寫、無告警間接確認正常完成。
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await transitionOrder("order-1", "in_production");
+
+    expect(rpcCall).toHaveBeenCalledWith(
+      expect.objectContaining({ p_to: "in_production" }),
+    );
+    expect(sentryCaptureMessage).not.toHaveBeenCalled();
   });
 });
 
