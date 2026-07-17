@@ -406,6 +406,7 @@ describe("認證", () => {
       driftTruncated: false,
       promotedOnClosedOrder: 0,
       paidOnCancelled: 0,
+      paidOnCancelledTruncated: false,
       mismatches: 0,
       failed: 0,
       unexpected: 0,
@@ -1057,8 +1058,8 @@ describe("T127② 漂移臂（webhook 側卡單：payment=paid／orders=pending_
       col: "paid_at",
       opts: { ascending: true, nullsFirst: true },
     });
-    // 限量必須明示（否則 PostgREST 預設回上限筆數，截斷偵測也失準）。
-    expect(driftQueryCapture!.limit).toBe(20);
+    // 限量＝DRIFT_LIMIT+1：多撈一筆以精準偵測截斷（>20 才代表真有 backlog）。
+    expect(driftQueryCapture!.limit).toBe(21);
   });
 
   it("ensureOrderPaid 拋例外 → unexpected +1、批次繼續（本臂 idempotent，不蓋冷卻章）", async () => {
@@ -1192,8 +1193,9 @@ describe("T127② 漂移臂（webhook 側卡單：payment=paid／orders=pending_
     ).toBe(false);
   });
 
-  it("#10 撈到滿批 DRIFT_LIMIT → driftTruncated=true＋warning 告警", async () => {
-    driftCandidates = Array.from({ length: 20 }, (_, i) => ({
+  it("#10 撈到超過 DRIFT_LIMIT（+1）→ driftTruncated=true＋warning、只處理前 DRIFT_LIMIT 筆", async () => {
+    // 多撈一筆偵測截斷：回 21 筆代表真有 backlog（>20）。
+    driftCandidates = Array.from({ length: 21 }, (_, i) => ({
       id: `p${i}`,
       order_id: `o${i}`,
       merchant_trade_no: `M${i}`,
@@ -1203,9 +1205,29 @@ describe("T127② 漂移臂（webhook 側卡單：payment=paid／orders=pending_
     const body = await res.json();
 
     expect(body.driftTruncated).toBe(true);
+    // 本輪只處理前 20 筆，多撈的第 21 筆留待隔日。
+    expect(body.driftChecked).toBe(20);
     expect(sentryCaptureMessage).toHaveBeenCalledWith(
       "reconcile: drift backlog may exceed limit",
       expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("#10 恰好 DRIFT_LIMIT 筆（無 backlog）→ driftTruncated=false、不誤發 backlog 告警", async () => {
+    driftCandidates = Array.from({ length: 20 }, (_, i) => ({
+      id: `p${i}`,
+      order_id: `o${i}`,
+      merchant_trade_no: `M${i}`,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.driftTruncated).toBe(false);
+    expect(body.driftChecked).toBe(20);
+    expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
+      "reconcile: drift backlog may exceed limit",
+      expect.anything(),
     );
   });
 
@@ -1256,6 +1278,24 @@ describe("#3 recurring 稽核臂（payment=paid ∧ orders=cancelled）", () => 
     expect(res.status).toBe(500);
     expect(sentryCaptureMessage).toHaveBeenCalledWith(
       "reconcile: paid-on-cancelled 稽核查詢失敗",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("撈到超過 DRIFT_LIMIT（+1）→ paidOnCancelledTruncated=true＋error 告警、只計前 DRIFT_LIMIT 筆", async () => {
+    auditCandidates = Array.from({ length: 21 }, (_, i) => ({
+      id: `p${i}`,
+      order_id: `o${i}`,
+      merchant_trade_no: `M${i}`,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.paidOnCancelledTruncated).toBe(true);
+    expect(body.paidOnCancelled).toBe(20);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid-on-cancelled backlog exceeds limit",
       expect.objectContaining({ level: "error" }),
     );
   });

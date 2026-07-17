@@ -6,6 +6,7 @@ import {
   OrderTransitionRaceError,
   PaidOrderCancelBlockedError,
 } from "@/lib/order/state-machine";
+import { markPendingPaymentsFailed } from "@/lib/order/mark-pending-payments-failed";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
 
 // serverless function 最長執行時間：整批候選逐筆 transitionOrder（含守衛查詢）
@@ -73,24 +74,11 @@ export async function GET(request: Request) {
         });
         summary.cancelled += 1;
 
-        // 訂單取消後順手把它的 pending payment 標成 failed：否則這些死掉的
-        // pending row 會永遠留在 ecpay-reconcile 的候選清單裡（依 created_at
-        // 升序排最前面），累積約 30 筆就把每日對帳批次整批塞滿，真正卡住的
-        // 新付款反而輪不到檢查。失敗只告警，不影響取消本身。
-        const { error: paymentSweepError } = await serviceRole
-          .from("payment")
-          .update({ status: "failed" })
-          .eq("order_id", order.id)
-          .eq("status", "pending");
-        if (paymentSweepError) {
-          Sentry.captureMessage(
-            "pending-payment-expire: payment sweep failed",
-            {
-              level: "warning",
-              extra: { orderId: order.id, error: paymentSweepError.message },
-            },
-          );
-        }
+        // 訂單取消後順手把它的 pending payment 標成 failed（與 reconcile 漂移臂
+        // 共用單一出處 markPendingPaymentsFailed）：否則這些死掉的 pending row
+        // 會永遠留在 ecpay-reconcile 的候選清單裡，累積約 30 筆就把每日對帳批次
+        // 整批塞滿，真正卡住的新付款反而輪不到檢查。失敗只告警，不影響取消本身。
+        await markPendingPaymentsFailed(serviceRole, order.id);
       } catch (e) {
         if (e instanceof PaidOrderCancelBlockedError) {
           // webhook 側卡單：錢已收、訂單還在 pending_payment，守衛擋下取消。
@@ -118,7 +106,15 @@ export async function GET(request: Request) {
       }
     }
 
-    return Response.json(summary);
+    // fail-visible：整批候選全數失敗（checked>0 且 failed===checked）幾乎必是
+    // 系統性故障（DB timeout／連線池耗盡使每筆 transitionOrder 的守衛查詢都
+    // throw），不是零星的單筆競態——回 500 讓以 HTTP 狀態判健康的 cron 監控
+    // 看得到紅燈（取消守衛下沉 transitionOrder 後，原本批次 paid 查詢 throw→500
+    // 的可見性改由此條件承接；對齊 reconcile 的 degraded→500）。零星單筆失敗
+    // （failed < checked）維持 200，避免一筆髒資料就誤報整批不健康。
+    const systemicFailure =
+      summary.checked > 0 && summary.failed === summary.checked;
+    return Response.json(summary, { status: systemicFailure ? 500 : 200 });
   } catch (e) {
     console.error("[pending-payment-expire] unhandled error", e);
     Sentry.captureException(e);

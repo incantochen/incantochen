@@ -226,7 +226,7 @@ describe("逐筆處理", () => {
     expect(paymentSweeps).toEqual([{ order_id: "o2" }]);
   });
 
-  it("非預期錯誤 → failed 計數，繼續處理下一筆", async () => {
+  it("非預期錯誤 → failed 計數，繼續處理下一筆（零星單筆失敗維持 200）", async () => {
     candidates = [{ id: "o1" }, { id: "o2" }];
     transitionOrder
       .mockRejectedValueOnce(new Error("DB 連線失敗"))
@@ -235,7 +235,21 @@ describe("逐筆處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     const body = await res.json();
 
+    // failed(1) < checked(2)：零星單筆，不誤報整批不健康。
+    expect(res.status).toBe(200);
     expect(body).toEqual(fullSummary({ checked: 2, cancelled: 1, failed: 1 }));
     expect(transitionOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it("整批候選全數失敗（系統性故障）→ 回 500（fail-visible，取代原批次 paid 查詢 throw）", async () => {
+    // 守衛查詢在 transitionOrder 內：DB 故障時每筆都 throw → failed===checked。
+    candidates = [{ id: "o1" }, { id: "o2" }];
+    transitionOrder.mockRejectedValue(new Error("DB 連線池耗盡"));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toEqual(fullSummary({ checked: 2, failed: 2 }));
   });
 });

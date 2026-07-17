@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildAioParams } from "@/lib/ecpay/aio-payment";
 import { generateMerchantTradeNo } from "@/lib/ecpay/merchant-trade-no";
+import { findPaidPayment } from "@/lib/order/find-paid-payment";
 import { serverEnv } from "@/lib/env.server";
 import { getClientIp } from "@/lib/get-client-ip";
 import {
@@ -232,13 +233,13 @@ export default async function CheckoutPayPage({
     // 發新號前最後一道防呆：若這張訂單已有 paid payment（webhook 正在處理中、
     // orders.status 還沒推進的極窄窗口），絕不能再發新交易序號讓客人二次付款
     // ——導去成功頁（ensureOrderPaid 冪等，稍後 webhook 會把訂單狀態補齊）。
-    const { data: paidPayment, error: paidCheckError } = await serviceRole
-      .from("payment")
-      .select("id")
-      .eq("order_id", order.id)
-      .eq("status", "paid")
-      .maybeSingle();
-    if (paidCheckError) {
+    // findPaidPayment 內含 { error } 檢查（會 throw）：查詢失敗時本頁沿用寬鬆
+    // 語意導回結帳頁重試。redirect() 內部以 throw 實作，故成功頁導向必須放在
+    // try 外，否則會被 catch 誤攔成「查詢失敗」。
+    let paidPayment: { id: string } | null;
+    try {
+      paidPayment = await findPaidPayment(serviceRole, order.id);
+    } catch {
       redirect("/checkout");
     }
     if (paidPayment) {
