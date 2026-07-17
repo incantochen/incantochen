@@ -8,10 +8,14 @@ const shortcutClass =
 export default async function AccountPage() {
   const user = await requireUser()
   const supabase = await createClient()
-  const { count } = await supabase
+  const { count, error } = await supabase
     .from("orders")
     .select("*", { count: "exact", head: true })
     .eq("member_id", user.id)
+
+  // §6／F-017：查詢失敗 ≠ 查無訂單——DB 暫時性故障不可誤顯示「無訂單」而把
+  // 「查看訂單」捷徑藏起來。throw 交 account/error.tsx 顯示系統忙碌。
+  if (error) throw error
 
   const hasOrders = (count ?? 0) > 0
 
