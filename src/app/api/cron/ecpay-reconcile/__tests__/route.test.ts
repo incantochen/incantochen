@@ -244,7 +244,6 @@ function makeSweepChain(rows: unknown[]) {
 function makeChain() {
   const chain: any = {
     _op: "select",
-    _usedIn: false,
     _filters: {} as Record<string, unknown>,
     _ors: [] as string[],
     select: (cols?: string) => {
@@ -257,7 +256,6 @@ function makeChain() {
     },
     in: (col: string, val: unknown) => {
       chain._filters[col] = val;
-      chain._usedIn = true;
       return chain;
     },
     lt: (col: string, val: unknown) => {
