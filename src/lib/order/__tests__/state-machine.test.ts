@@ -5,6 +5,11 @@ vi.mock("@/lib/supabase/service-role", () => ({
   createServiceRoleClient: vi.fn(),
 }));
 
+const sentryCaptureMessage = vi.fn();
+vi.mock("@sentry/nextjs", () => ({
+  captureMessage: (...args: unknown[]) => sentryCaptureMessage(...args),
+}));
+
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
   canTransition,
@@ -12,17 +17,25 @@ import {
   adminOverrideStatus,
   VALID_TRANSITIONS,
   OrderTransitionRaceError,
+  PaidOrderCancelBlockedError,
   type OrderStatus,
 } from "../state-machine";
 
 // transitionOrder／adminOverrideStatus 的 CAS 守衛測試共用同一套「orders +
-// order_status_log」mock 骨架，只有 initialStatus／updateMatches 不同。
+// order_status_log + payment」mock 骨架，只有 initialStatus／updateMatches 與
+// 取消守衛的 payment 查詢結果（findPaidPayment）不同。
 const logInsert = vi.fn().mockResolvedValue({ error: null });
+
+type PaidResult = { data: { id: string } | null; error: { message: string } | null };
 
 function makeServiceRole(opts: {
   initialStatus: OrderStatus;
   updateMatches: boolean;
+  // 取消守衛的 findPaidPayment 依序回傳（第 1 次＝pre-guard、第 2 次＝post-cancel
+  // 再查）。預設兩次都「查無 paid」。
+  paidResults?: PaidResult[];
 }) {
+  const paidQueue = [...(opts.paidResults ?? [])];
   return {
     from: (table: string) => {
       if (table === "orders") {
@@ -44,6 +57,15 @@ function makeServiceRole(opts: {
         };
         return chain;
       }
+      if (table === "payment") {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: () =>
+            Promise.resolve(paidQueue.shift() ?? { data: null, error: null }),
+        };
+        return chain;
+      }
       if (table === "order_status_log") {
         return { insert: logInsert };
       }
@@ -54,6 +76,7 @@ function makeServiceRole(opts: {
 
 beforeEach(() => {
   logInsert.mockClear();
+  sentryCaptureMessage.mockClear();
 });
 
 describe("canTransition", () => {
@@ -138,6 +161,94 @@ describe("transitionOrder：CAS 守衛", () => {
         is_override: false,
       }),
     );
+  });
+});
+
+describe("transitionOrder：取消守衛（有 paid payment 不得取消）", () => {
+  it("pre-guard：訂單已有 paid payment → 丟 PaidOrderCancelBlockedError、不 UPDATE、不寫 log", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "pending_payment",
+        updateMatches: true,
+        // 第 1 次（pre-guard）就查到 paid。
+        paidResults: [{ data: { id: "pay-1" }, error: null }],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await expect(
+      transitionOrder("order-1", "cancelled"),
+    ).rejects.toBeInstanceOf(PaidOrderCancelBlockedError);
+    // 守衛在 UPDATE 之前擋下：訂單沒被取消、log 沒寫。
+    expect(logInsert).not.toHaveBeenCalled();
+  });
+
+  it("TOCTOU：pre-guard 沒查到、cancel 後才查到 paid → 仍取消＋寫 log，另發 P0 告警", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "pending_payment",
+        updateMatches: true,
+        // 第 1 次（pre-guard）查無、第 2 次（post-cancel 再查）才命中。
+        paidResults: [
+          { data: null, error: null },
+          { data: { id: "pay-1" }, error: null },
+        ],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await transitionOrder("order-1", "cancelled");
+
+    // 取消已完成（log 有寫）。
+    expect(logInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ to_status: "cancelled" }),
+    );
+    // 錢收在剛取消的訂單上 → P0 告警（走 §6.1 人工裁決）。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "transitionOrder: money received on order cancelled during transition",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("Conv2：post-cancel 再查 {error} → 降級 warning、不影響已完成的取消", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "pending_payment",
+        updateMatches: true,
+        paidResults: [
+          { data: null, error: null },
+          { data: null, error: { message: "connection timeout" } },
+        ],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await transitionOrder("order-1", "cancelled");
+
+    // 取消照常完成。
+    expect(logInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ to_status: "cancelled" }),
+    );
+    // 再查失敗只降級 warning，不升 P0、不 throw。
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "transitionOrder: post-cancel paid check failed",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("非取消轉換（paid→in_production）不觸發取消守衛（不查 payment）", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "paid",
+        updateMatches: true,
+        // 故意不給 paidResults：若守衛誤觸發會 shift 到預設 null，但更重要的是
+        // 這條轉換根本不該查 payment——用 log 有寫、無告警間接確認正常完成。
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await transitionOrder("order-1", "in_production");
+
+    expect(logInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ to_status: "in_production" }),
+    );
+    expect(sentryCaptureMessage).not.toHaveBeenCalled();
   });
 });
 

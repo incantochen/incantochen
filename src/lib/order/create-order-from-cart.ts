@@ -13,6 +13,7 @@ import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
 import {
   transitionOrder,
   OrderTransitionRaceError,
+  PaidOrderCancelBlockedError,
 } from "@/lib/order/state-machine";
 import type { Json } from "@/types/database.types";
 import { z } from "zod";
@@ -155,6 +156,16 @@ export async function resolvePendingOrderForCart(
           : "購物車內容已變更，舊待付款訂單自動取消（重新結帳）",
     });
   } catch (e) {
+    if (e instanceof PaidOrderCancelBlockedError) {
+      // 舊待付款訂單其實已收到款（webhook 側卡單，payment=paid／orders 仍
+      // pending_payment），守衛擋下取消。絕不可建新單——否則客人會為同一批
+      // 商品付第二次錢（雙重扣款），舊單的錢還卡在已取消狀態。回錯誤請客人
+      // 稍候（reconcile 漂移臂隔日會把舊單推進成 paid、補寄確認信）或聯繫客服。
+      return {
+        kind: "error",
+        error: "您有一筆已付款的訂單正在處理中，請稍候再試或聯繫客服",
+      };
+    }
     if (e instanceof OrderTransitionRaceError) {
       // 舊單剛好被其他流程動過（多半是 webhook 轉 paid）。同會員且收件資訊
       // 也沒變時才沿用它的單號——呼叫端導頁後該頁會依最新狀態決定去向

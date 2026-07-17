@@ -1,7 +1,9 @@
 import "server-only";
+import * as Sentry from "@sentry/nextjs";
 
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { type OrderStatus, VALID_TRANSITIONS } from "@/lib/order/order-status";
+import { findPaidPayment } from "@/lib/order/find-paid-payment";
 
 export type { OrderStatus };
 export { VALID_TRANSITIONS };
@@ -13,6 +15,18 @@ export class OrderTransitionRaceError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "OrderTransitionRaceError";
+  }
+}
+
+// 「訂單已有已收款 payment，不得取消」的守衛被觸發時拋出。取消不可逆、且會
+// 觸發 T66 生命週期後續——錢已收在訂單上卻被取消，是唯一「錢收了卻可能靜默
+// 消失」的路徑。這條 invariant 集中在 transitionOrder（所有取消路徑的必經
+// 之地），呼叫端據此 instanceof 分流：逾期 cron 計 paidConflict＋告警、結帳
+// 流程回錯誤不建新單（防雙重扣款）、admin 導去退款流程。
+export class PaidOrderCancelBlockedError extends Error {
+  constructor(orderId: string) {
+    super(`訂單已有已收款 payment，不得取消：${orderId}`);
+    this.name = "PaidOrderCancelBlockedError";
   }
 }
 
@@ -47,6 +61,15 @@ export async function transitionOrder(
     throw new OrderTransitionRaceError(`非法狀態轉換：${from} → ${to}`);
   }
 
+  // 取消守衛（所有取消路徑的必經之地）：錢已收在訂單上就絕不取消。webhook 側
+  // 卡單（payment=paid／orders 仍 pending_payment，見 ops-runbook §1.1 第④類）
+  // 交給 reconcile 漂移臂隔日冪等推進，不可被逾期取消／改單／admin 誤取消而
+  // 造成「錢在已取消訂單上」＋（結帳流程）重新建單雙重扣款。
+  if (to === "cancelled") {
+    const paidBefore = await findPaidPayment(supabase, orderId);
+    if (paidBefore) throw new PaidOrderCancelBlockedError(orderId);
+  }
+
   const { data: updated, error: updateError } = await supabase
     .from("orders")
     .update({ status: to })
@@ -58,6 +81,33 @@ export async function transitionOrder(
   if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
   if (!updated) {
     throw new OrderTransitionRaceError(`訂單狀態已被其他流程異動：${orderId}`);
+  }
+
+  // TOCTOU 補洞：pre-guard 查完之後、CAS 取消 commit 之前的毫秒窄窗內 webhook
+  // 才把 payment 翻 paid（且該次 ensureOrderPaid 失敗＋ECPay 重送耗盡）——主
+  // 對帳臂（鍵 payment=pending）與漂移臂（鍵 orders=pending_payment）都撈不到。
+  // 取消 commit「之後」再查一次即偵測到；放在 log insert 之前，即使 log 寫入
+  // 失敗（下方 throw）也已發過告警。偵測即可（修復走 ops-runbook §6.1 人工
+  // 裁決）；durable 兜底＝reconcile 每日 recurring 稽核臂（payment=paid ∧
+  // orders=cancelled）。查詢失敗只降級 warning，不影響已完成的取消。
+  if (to === "cancelled") {
+    try {
+      const paidAfter = await findPaidPayment(supabase, orderId);
+      if (paidAfter) {
+        Sentry.captureMessage(
+          "transitionOrder: money received on order cancelled during transition",
+          { level: "error", extra: { orderId } },
+        );
+      }
+    } catch (e) {
+      Sentry.captureMessage("transitionOrder: post-cancel paid check failed", {
+        level: "warning",
+        extra: {
+          orderId,
+          error: e instanceof Error ? e.message : String(e),
+        },
+      });
+    }
   }
 
   const { error: logError } = await supabase.from("order_status_log").insert({

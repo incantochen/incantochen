@@ -4,8 +4,14 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
   transitionOrder,
   OrderTransitionRaceError,
+  PaidOrderCancelBlockedError,
 } from "@/lib/order/state-machine";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
+
+// serverless function 最長執行時間：整批候選逐筆 transitionOrder（含守衛查詢）
+// ＋pending payment sweep，最壞情況遠低於此，設 300s 純為避免平台預設過低時
+// 中途被砍（比照 reconcile route）。
+export const maxDuration = 300;
 
 const PENDING_PAYMENT_TTL_MS = 72 * 60 * 60 * 1000;
 // 比照 ecpay-reconcile 的 CANDIDATE_LIMIT：避免首次上線 backlog 或排程中斷
@@ -17,11 +23,10 @@ type Summary = {
   cancelled: number;
   skipped: number;
   failed: number;
-  // T127①：候選訂單已有 paid payment（webhook 側卡單漂移），取消被擋下的筆數。
+  // 候選訂單已有 paid payment（webhook 側卡單漂移），取消被 transitionOrder
+  // 守衛擋下的筆數（T127①）。TOCTOU 窄窗的偵測與告警已下沉到 transitionOrder
+  // （取消後再查），本 summary 不再單獨計 paidAfterCancel。
   paidConflict: number;
-  // TOCTOU 補洞：取消後才發現 payment 已 paid（快照後、cancel 前的窄窗競態）
-  // ——錢收在剛被取消的訂單上，走 §6.1 人工裁決。
-  paidAfterCancel: number;
 };
 
 // T66：待付款訂單逾期（72 小時，以 orders.created_at 為固定時鐘，不因重新產生
@@ -39,7 +44,6 @@ export async function GET(request: Request) {
     skipped: 0,
     failed: 0,
     paidConflict: 0,
-    paidAfterCancel: 0,
   };
 
   try {
@@ -56,54 +60,14 @@ export async function GET(request: Request) {
 
     if (error) throw new Error(`候選查詢失敗: ${error.message}`);
 
-    // T127①：取消前先確認候選訂單沒有 paid payment。webhook 側卡單（payment
-    // 已 paid、訂單卡 pending_payment，見 ops-runbook §1.1 第④類）的錢已經
-    // 收到，絕不可被逾期取消——這種漂移交給 ecpay-reconcile 的漂移臂（T127②）
-    // 隔日冪等推進。一次批次查詢，避免逐筆 round-trip。
-    const candidateIds = (candidates ?? []).map((o) => o.id);
-    const paidOrderIds = new Set<string>();
-    if (candidateIds.length > 0) {
-      const { data: paidPayments, error: paidQueryError } = await serviceRole
-        .from("payment")
-        .select("order_id")
-        .in("order_id", candidateIds)
-        .eq("status", "paid");
-
-      if (paidQueryError) {
-        // fail-safe：無法確認「有沒有已收款」就整批不取消——寧可晚一天取消，
-        // 不可誤取消已付款訂單（取消不可逆、且會觸發 T66 生命週期後續）。
-        // 作法沿用上方候選查詢的 throw：走外層 catch＝Sentry captureException
-        // ＋HTTP 500。刻意不回 200／不動 failed 計數——回 200 會讓 Vercel cron
-        // 監控（以 HTTP 狀態判健康）把「整批被跳過」誤看成綠燈，且把 failed 的
-        // 語意從「單筆 transition 失敗」污染成「整批未檢查」，破壞
-        // cancelled+skipped+failed+paidConflict ≤ checked 不變式。
-        throw new Error(
-          `paid-payment guard 查詢失敗: ${paidQueryError.message}`,
-        );
-      }
-      for (const p of paidPayments ?? []) paidOrderIds.add(p.order_id);
-    }
-
     for (const order of candidates ?? []) {
       summary.checked += 1;
 
-      if (paidOrderIds.has(order.id)) {
-        // webhook 側卡單：錢已收、訂單還在 pending_payment。skip 取消（連帶
-        // 不掃 payment），P0 告警——這筆由 reconcile 漂移臂（T127②）自癒。
-        // 殘餘競態（本批次查詢之後、cancel 之前 webhook 才翻 paid）由取消後
-        // 的 post-cancel paid 再查（見下方）補偵測，不在這裡加鎖。
-        summary.paidConflict += 1;
-        Sentry.captureMessage(
-          "pending-payment-expire: paid payment exists on expiring order, skip cancel (webhook-side stuck order)",
-          {
-            level: "error",
-            extra: { orderId: order.id },
-          },
-        );
-        continue;
-      }
-
       try {
+        // 取消守衛（有 paid payment 就不准取消）與 TOCTOU 偵測都下沉在
+        // transitionOrder 內。webhook 側卡單會在守衛處被擋下 →
+        // PaidOrderCancelBlockedError；此處只負責計數＋告警，實際自癒交給
+        // reconcile 漂移臂隔日冪等推進。
         await transitionOrder(order.id, "cancelled", {
           note: "逾期未付款自動取消",
         });
@@ -127,41 +91,20 @@ export async function GET(request: Request) {
             },
           );
         }
-
-        // post-cancel paid 再查（T127① 的 TOCTOU 補洞）：批次快照之後、cancel
-        // 之前 webhook 才翻 payment=paid、且該次 ensureOrderPaid 失敗＋ECPay
-        // 重送恰好耗盡的窄窗，會產生「payment=paid／orders=cancelled」——主對帳
-        // 臂（鍵 payment=pending）與漂移臂（鍵 orders=pending_payment）都撈不
-        // 到、之後也沒有 webhook 會再來觸發 closed 告警＝完全無聲。取消「之後」
-        // 再查一次即完備：flip 在查之前→這裡抓到；flip 在查之後→同一次 webhook
-        // 呼叫接著跑 ensureOrderPaid 必撞 cancelled→closed P0（兩訊號互補，
-        // 無縫隙）。偵測即可（修復走 ops-runbook §6.1 人工裁決，同第⑤類）；
-        // 查詢失敗只降級告警，不影響已完成的取消。
-        const { data: paidAfter, error: paidAfterError } = await serviceRole
-          .from("payment")
-          .select("id")
-          .eq("order_id", order.id)
-          .eq("status", "paid")
-          .maybeSingle();
-        if (paidAfterError) {
+      } catch (e) {
+        if (e instanceof PaidOrderCancelBlockedError) {
+          // webhook 側卡單：錢已收、訂單還在 pending_payment，守衛擋下取消。
+          // P0 告警——這筆由 reconcile 漂移臂隔日自癒。
+          summary.paidConflict += 1;
           Sentry.captureMessage(
-            "pending-payment-expire: post-cancel paid check failed",
-            {
-              level: "warning",
-              extra: { orderId: order.id, error: paidAfterError.message },
-            },
-          );
-        } else if (paidAfter) {
-          summary.paidAfterCancel += 1;
-          Sentry.captureMessage(
-            "pending-payment-expire: money received on order cancelled this run (race window), manual adjudication required",
+            "pending-payment-expire: paid payment exists on expiring order, skip cancel (webhook-side stuck order)",
             {
               level: "error",
               extra: { orderId: order.id },
             },
           );
+          continue;
         }
-      } catch (e) {
         // webhook 剛好搶先把訂單轉成 paid（或轉成其他任何非 pending_payment
         // 狀態）：不論是敗在 CAS 守衛還是更早的 canTransition 檢查，都是候選
         // 查詢之後才發生的良性競態，不算錯誤、不進 Sentry（否則每次良性競態
