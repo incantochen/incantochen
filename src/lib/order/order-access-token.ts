@@ -1,7 +1,8 @@
 import "server-only";
 
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac } from "crypto";
 import { serverEnv } from "@/lib/env.server";
+import { timingSafeEqualStrings } from "@/lib/timing-safe-equal";
 
 // T73：/checkout/success、/checkout/pay、/checkout/failed 三頁只憑 URL 上的
 // order_no 查訂單，本身沒有擁有權欄位可查（訂單成立後 cart 可能已被 T75
@@ -34,8 +35,8 @@ export function orderAccessCookieOptions(orderNo: string) {
   };
 }
 
-// 比照 ecpay/check-mac-value.ts 的 verifyCheckMacValue：timingSafeEqual 對長度
-// 不同的 buffer 會直接 throw，先做長度檢查再進常數時間比對。
+// 簽章比對走共用 timingSafeEqualStrings（sha256 digest 常數時間比對），
+// 與 ecpay/check-mac-value.ts、cron/require-cron-auth.ts 同一出處。
 export function isValidOrderAccessCookie(
   cookieValue: string | undefined,
   orderNo: string,
@@ -53,10 +54,7 @@ export function isValidOrderAccessCookie(
   }
 
   const signature = cookieValue.slice(separatorIndex + 1);
-  const expected = Buffer.from(sign(orderNo, issuedAt));
-  const actual = Buffer.from(signature);
-  if (expected.length !== actual.length) return false;
-  return timingSafeEqual(expected, actual);
+  return timingSafeEqualStrings(sign(orderNo, issuedAt), signature);
 }
 
 export type OrderOwnership = {
