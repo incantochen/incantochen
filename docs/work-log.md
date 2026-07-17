@@ -737,6 +737,24 @@
 
 ---
 
+## 📅 2026-07-17
+
+### 本次作業
+
+#### #T110 / M2 訂單 / 訂單狀態＋稽核 log 寫入交易化（transition_order_status RPC）（PR #72）
+
+**說明**：T92 code-review 衍生——transitionOrder／adminOverrideStatus／ensureOrderPaid 三處手刻的「fetch 現況 → CAS UPDATE orders → INSERT order_status_log」序列已分歧，且 CAS 成功但 log INSERT 失敗時「狀態已變、稽核記錄永久缺漏」。合流到單一 Postgres function 消滅此中間態。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 完成（PR #72 squash merge `80ac3c7`，2026-07-17） |
+| 產出     | migration 0017（`transition_order_status`，UPDATE orders＋INSERT order_status_log 單一交易；revoke 匿名執行＋釘 search_path；**已套雲端 prod**）；`state-machine.ts`（`execTransitionRpc`／`fetchCurrentStatus` 共用寫入段，統一三處分歧的錯誤處理）；`ensure-paid.ts`（CAS 改走 RPC，log 失敗語意由「只記 Sentry 照樣 promoted」改為 rollback＋throw）；呼叫端遙測補強（admin actions／resolvePendingOrderForCart／webhook catch）；`ops-runbook.md §1`（T110 失敗語意＋「動 order_status_log 前必讀」預防措施）；**分歧防護**（`pending-payment-expire` guard＋`ecpay-reconcile` `sweepDivergedPaidOrders`）；測試 504 全綠 |
+| 更新描述 | 1. 核心：兩段寫入包進 RPC 的單一交易，任一失敗整段 rollback；ensure-paid 的 log 失敗改 rollback＋throw（webhook 回 ERR 觸發 ECPay 重送、對帳隔日重試）。2. 驗證：兩輪本機 `/code-review max`（10 角度＋獨立 sweep agent）＋雲端 SQL 三態實測（miss→空集合／from=to→raise／hit→原子寫一列後 rollback）＋live smoke test 走**真實 PostgREST** 驗 `transitionOrder` 與 `adminOverrideStatus` 兩路徑的 `.rpc().select().maybeSingle()` round-trip（測試單 INC-20260717-87T7FM，狀態正確推進＋每次剛好一列稽核）。3. **max review 獨立 finder 抓到的系統性缺口**：webhook 先翻 payment=paid 再推進訂單，T110 後推進段 rollback 會留 payment=paid／order=pending_payment 分歧——主對帳以 payment=pending 為鍵撈不到、逾期取消 cron 又會取消＝「錢收了、單卻取消、無告警」的靜默 P0（舊版此情境只是稽核缺漏、訂單仍 paid）。修法：`pending-payment-expire` 取消前批次排除已收款訂單（跳過＋P0 告警，paid 檢查失敗則 fail-safe 整批中止）＋`ecpay-reconcile` 新增 `sweepDivergedPaidOrders` 主動補推進＋補寄漏掉的通知。4. 驗收：504 tests／tsc／lint 全綠；migration 0017 先 push 雲端再 merge（依規則）。 |
+| 待辦     | 完整 sandbox webhook→settle 端到端由 T106 E2E 套件覆蓋（本任務以 admin 兩路徑 smoke test 驗過 RPC 層即足） |
+| 依賴     | T92（PR #53 code-review） |
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```

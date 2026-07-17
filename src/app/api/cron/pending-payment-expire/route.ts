@@ -27,6 +27,8 @@ type Summary = {
   // 候選訂單已有 paid payment（webhook 側卡單漂移），取消被 transitionOrder
   // 守衛擋下的筆數（T127①）。TOCTOU 窄窗的偵測與告警已下沉到 transitionOrder
   // （取消後再查），本 summary 不再單獨計 paidAfterCancel。
+  // （T110 合流裁決：master 的批次 paid 預查＋diverged 計數被本守衛涵蓋——
+  // 守衛下沉後覆蓋所有取消路徑，非僅本 cron——已刪除。）
   paidConflict: number;
 };
 

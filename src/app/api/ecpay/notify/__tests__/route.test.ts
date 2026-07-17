@@ -71,8 +71,9 @@ vi.mock("@/lib/notification/send-once", () => ({
 }));
 
 // service role mock：以「呼叫記錄器」記下所有 update/insert，供斷言副作用。
-// orders 表的 status 用單一事實來源 db.orderStatus 追蹤，並在模擬的條件式
-// UPDATE 命中時真的「改掉」，讓後續 ensureNotificationSent 的查詢讀得到最新狀態。
+// orders 表的 status 用單一事實來源 db.orderStatus 追蹤，並在模擬的
+// transition_order_status RPC（T110）CAS 命中時真的「改掉」，讓後續
+// ensureNotificationSent 的查詢讀得到最新狀態。
 type DbState = {
   payment: {
     id: string;
@@ -115,6 +116,68 @@ const recorded: { table: string; op: string; values?: unknown }[] = [];
 function makeServiceRole() {
   return {
     from: (table: string) => makeChain(table),
+    // T110：ensureOrderPaid 的 CAS 推進＋order_status_log 寫入改走
+    // transition_order_status RPC（DB 端單一交易）。mock 沿用 db.* 旗標模擬
+    // 原條件式 UPDATE 的三種結果（error／race lost／搶到並翻狀態），並以與
+    // 舊實作相同的 table/op 記進 recorded——既有 updatesTo("orders")／
+    // insertsTo("order_status_log") 斷言因此零改動。
+    rpc: (name: string, args: Record<string, unknown>) => {
+      if (name !== "transition_order_status") {
+        throw new Error(`unexpected rpc ${name}`);
+      }
+      recorded.push({
+        table: "orders",
+        op: "update",
+        values: { status: args.p_to },
+      });
+      const chain = {
+        // 實作鏈 .select("id, cart_id, created_at").maybeSingle()。
+        select: () => chain,
+        maybeSingle: () => {
+          // ordersUpdateError 模擬 Supabase 回傳 { error }（暫時性 DB 故障或
+          // RPC 內 log 寫入失敗 rollback，不會 throw）——呼叫端必須自己檢查
+          // 並轉成 throw。
+          if (db.ordersUpdateError) {
+            return Promise.resolve({
+              data: null,
+              error: { message: "simulated update error" },
+            });
+          }
+          // orderRaceLost 模擬「RPC 送出前，狀態已被別的請求搶先改掉」
+          // → CAS 沒搶到，RPC 回空集合、交易內不寫 log。
+          if (db.orderRaceLost) {
+            return Promise.resolve({ data: null, error: null });
+          }
+          if (db.orderStatus === args.p_from) {
+            db.orderStatus = args.p_to as string; // 模擬 RPC 真的把狀態改掉
+            recorded.push({
+              table: "order_status_log",
+              op: "insert",
+              values: {
+                order_id: args.p_order_id,
+                from_status: args.p_from,
+                to_status: args.p_to,
+                note: args.p_note ?? null,
+                actor_id: args.p_actor_id ?? null,
+                is_override: args.p_is_override,
+              },
+            });
+            // 與實際 RPC 契約同形（.select 投影後三欄位）：cart_id null →
+            // 不觸發 T75 清車分支（本套件不驗清車，ensure-paid.test.ts 涵蓋）。
+            return Promise.resolve({
+              data: {
+                id: "promoted",
+                cart_id: null,
+                created_at: "2026-07-01T00:00:00.000Z",
+              },
+              error: null,
+            });
+          }
+          return Promise.resolve({ data: null, error: null });
+        },
+      };
+      return chain;
+    },
   };
 }
 
@@ -180,26 +243,9 @@ function makeChain(table: string) {
         return Promise.resolve({ data: db.payment, error: null });
       }
       if (table === "orders") {
-        if (chain._op === "update") {
-          // ensureOrderPaid 的條件式 UPDATE...WHERE status='pending_payment'：
-          // ordersUpdateError 模擬 Supabase 回傳 { error }（暫時性 DB 故障，
-          // 非網路層失敗，不會 throw）——ensureOrderPaid 必須自己檢查並轉成 throw。
-          if (db.ordersUpdateError) {
-            return Promise.resolve({
-              data: null,
-              error: { message: "simulated update error" },
-            });
-          }
-          // orderRaceLost 模擬「這次 UPDATE 送出前，狀態已被別的請求搶先改掉」。
-          if (db.orderRaceLost)
-            return Promise.resolve({ data: null, error: null });
-          if (db.orderStatus === "pending_payment") {
-            db.orderStatus = "paid"; // 模擬 UPDATE 真的把狀態改掉
-            return Promise.resolve({ data: { id: "promoted" }, error: null });
-          }
-          return Promise.resolve({ data: null, error: null });
-        }
         // select 查詢：fallback 分支的訂單查找 / ensureNotificationSent 的狀態確認
+        // （T110 後 orders 的 UPDATE 已移進 transition_order_status RPC，
+        //  makeChain 只剩查詢路徑）。
         // ordersSelectError 模擬同上，用於 ensureNotificationSent 的錯誤處理測試。
         if (db.ordersSelectError) {
           return Promise.resolve({
@@ -703,7 +749,8 @@ describe("金額核對：正數防呆（T127③）", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 並發保護：ensureOrderPaid 的條件式 UPDATE（T68 review round 2/3）
+// 並發保護：ensureOrderPaid 的 CAS（T68 review round 2/3；T110 起走
+// transition_order_status RPC）
 // ---------------------------------------------------------------------------
 
 describe("並發：ensureOrderPaid 沒搶到推進（已被其他並發請求搶先完成）", () => {
@@ -790,11 +837,13 @@ describe("T74 競態：payment 被付款頁標成 failed 後 webhook 才抵達",
 // ---------------------------------------------------------------------------
 // ensureOrderPaid / ensureNotificationSent 需檢查 Supabase 的 { error }
 // （ultrareview 第二輪 bug_002：暫時性 DB 錯誤不會 throw，只回傳 { error }，
-// 若不檢查會被誤判為「沒符合更新條件」而靜默跳過，讓 webhook 錯誤回 1|OK）
+// 若不檢查會被誤判為「沒符合更新條件」而靜默跳過，讓 webhook 錯誤回 1|OK。
+// T110 起 ensureOrderPaid 的 CAS 走 transition_order_status RPC，{ error }
+// 亦涵蓋「log 寫入失敗整段 rollback」）
 // ---------------------------------------------------------------------------
 
 describe("ensureOrderPaid / ensureNotificationSent 的 Supabase 錯誤處理", () => {
-  it("ensureOrderPaid 的條件式 UPDATE 回傳 { error }（非 throw）→ 回 0|Internal Error，不靜默跳過", async () => {
+  it("ensureOrderPaid 的 transition RPC 回傳 { error }（非 throw）→ 回 0|Internal Error，不靜默跳過", async () => {
     db.payment = { id: "p1", status: "pending", order_id: "o1", amount: 25000 };
     db.orderStatus = "pending_payment";
     db.ordersUpdateError = true;

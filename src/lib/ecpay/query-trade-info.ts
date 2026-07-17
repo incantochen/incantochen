@@ -25,9 +25,27 @@ function buildQueryTradeInfoUrl(): string {
 }
 
 export class RateLimitError extends Error {
-  constructor(message: string) {
+  // 觸發限流的 HTTP 狀態碼（429／503／403）。呼叫端據此分流告警：403 可能
+  // 是綠界限流（ops-runbook 實測），也可能是持續性的金鑰／驗章失效，需連續
+  // 計數後升級 error，不可與 429/503 一律當暫時性限流。
+  readonly status?: number;
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "RateLimitError";
+    this.status = status;
+  }
+}
+
+// T99 隨手項：非 429/503 的 HTTP 層失敗（如 ECPay 端 5xx）。與 RateLimitError
+// 同為「中止整批、下次排程再續」的語意——HTTP 層失敗是系統性的，若當單筆
+// 失敗處理會把整批候選蓋上冷卻戳記、白白延後重試——但告警分開標示，
+// 避免 Sentry 把 ECPay 故障誤報成「被限流」。
+export class QueryTradeInfoHttpError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`QueryTradeInfo 非 200 回應：${status}`);
+    this.name = "QueryTradeInfoHttpError";
+    this.status = status;
   }
 }
 
@@ -69,10 +87,24 @@ export async function queryTradeInfo(
     body: new URLSearchParams(params).toString(),
   });
 
-  // ECPay 官方文件明確警告此 API 有頻率限制、不建議高頻輪詢；非 200 視為
-  // 限流訊號，由呼叫端中止本次批次，下次排程再繼續，而不是當成單筆查詢失敗略過。
+  // ECPay 官方文件明確警告此 API 有頻率限制、不建議高頻輪詢。限流訊號有
+  // 三種：429（Too Many Requests）／503（Service Unavailable）／403——
+  // ops-runbook.md §「ECPay 限流」實測綠界擋量時回 403（非 429），漏收會被
+  // 誤標成一般 HTTP 錯誤而不退避。其餘非 200（如 ECPay 端 500）才標一般
+  // 錯誤——否則 ECPay 故障會在 Sentry 誤報成「被限流」誤導除錯方向。兩者
+  // 都會讓呼叫端中止本次批次、下次排程再續，保守行為不變，差別只在告警語意。
   if (!response.ok) {
-    throw new RateLimitError(`QueryTradeInfo 非 200 回應：${response.status}`);
+    if (
+      response.status === 429 ||
+      response.status === 503 ||
+      response.status === 403
+    ) {
+      throw new RateLimitError(
+        `QueryTradeInfo 限流回應：${response.status}`,
+        response.status,
+      );
+    }
+    throw new QueryTradeInfoHttpError(response.status);
   }
 
   const text = await response.text();

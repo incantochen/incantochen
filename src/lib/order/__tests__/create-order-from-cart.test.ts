@@ -8,9 +8,15 @@ vi.mock("next/cache", () => ({
   revalidatePath: (p: string) => revalidatePath(p),
 }));
 
-const verifyCartPrices = vi.fn();
+const { verifyCartPrices, PriceVerificationUnavailableError } = vi.hoisted(
+  () => ({
+    verifyCartPrices: vi.fn(),
+    PriceVerificationUnavailableError: class PriceVerificationUnavailableError extends Error {},
+  }),
+);
 vi.mock("@/lib/quote/verify-prices", () => ({
   verifyCartPrices: (...a: unknown[]) => verifyCartPrices(...a),
+  PriceVerificationUnavailableError,
 }));
 
 const { transitionOrder, OrderTransitionRaceError, PaidOrderCancelBlockedError } =
@@ -481,10 +487,26 @@ describe("伺服器端驗價（T41 紅線）", () => {
     expect(rpcCalls()).toHaveLength(0);
   });
 
-  it("驗價拋錯（商品下架）→ 回錯誤、不建單", async () => {
+  it("驗價拋錯（商品下架）→ 回錯誤＋showCartLink、不建單", async () => {
     verifyCartPrices.mockRejectedValue(new Error("商品已下架"));
     const result = await callCreateOrderFromCart();
-    expect(result).toMatchObject({ ok: false, error: "商品已下架" });
+    // 內容問題（下架／設定損壞）帶 showCartLink，引導客人去購物車調整。
+    expect(result).toMatchObject({
+      ok: false,
+      error: "商品已下架",
+      showCartLink: true,
+    });
+    expect(rpcCalls()).toHaveLength(0);
+  });
+
+  it("驗價 transient 故障（PriceVerificationUnavailableError）→ 回錯誤但不帶 showCartLink、不建單（C3）", async () => {
+    verifyCartPrices.mockRejectedValue(
+      new PriceVerificationUnavailableError("系統忙碌，請稍後再試"),
+    );
+    const result = await callCreateOrderFromCart();
+    // DB 暫時性故障可重試，不是購物車內容有問題——不可叫客人去調整購物車。
+    expect(result).toEqual({ ok: false, error: "系統忙碌，請稍後再試" });
+    expect((result as { showCartLink?: true }).showCartLink).toBeUndefined();
     expect(rpcCalls()).toHaveLength(0);
   });
 

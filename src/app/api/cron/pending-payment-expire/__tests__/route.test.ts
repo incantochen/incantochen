@@ -75,6 +75,8 @@ function makeServiceRole() {
     from: (table: string) => {
       if (table === "payment") {
         const filters: Record<string, unknown> = {};
+        // payment 表只剩取消後 pending→failed sweep 一種形狀（取消前防呆與
+        // post-cancel 再查都已下沉到 transitionOrder，本檔 mock 掉）。
         const chain: any = {
           update: () => chain,
           eq: (col: string, val: unknown) => {
@@ -253,3 +255,4 @@ describe("逐筆處理", () => {
     expect(body).toEqual(fullSummary({ checked: 2, failed: 2 }));
   });
 });
+

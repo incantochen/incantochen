@@ -10,6 +10,7 @@ import {
   resolveOrderOwnership,
 } from "@/lib/order/order-access-token";
 import { RateLimitedNotice } from "../rate-limited-notice";
+import { SystemBusyNotice } from "../system-busy-notice";
 import { OrderStatusCheck } from "./order-status-check";
 
 export default async function CheckoutSuccessPage({
@@ -40,7 +41,10 @@ export default async function CheckoutSuccessPage({
     createClient().then((c) => c.auth.getUser()),
   ]);
 
-  const { data: order } = orderResult;
+  const { data: order, error: orderError } = orderResult;
+  // T95（F-008）：查詢失敗 ≠ 查無資料——已付款客人在成功頁遇到 DB 暫時性
+  // 故障，不可被 redirect 回首頁（看起來像訂單消失），停在原地請他重整。
+  if (orderError) return <SystemBusyNotice />;
   if (!order) redirect("/");
 
   // T73：非擁有者（cookie 缺席／不符，且未以自己的帳號登入）不顯示 email，

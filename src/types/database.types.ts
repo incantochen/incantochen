@@ -824,6 +824,44 @@ export type Database = {
         Args: { p_pov_id: string };
         Returns: number;
       };
+      transition_order_status: {
+        Args: {
+          p_actor_id?: string;
+          p_from: Database["public"]["Enums"]["order_status"];
+          p_is_override: boolean;
+          p_note?: string;
+          p_order_id: string;
+          p_to: Database["public"]["Enums"]["order_status"];
+        };
+        Returns: {
+          cart_id: string | null;
+          consent_at: string | null;
+          created_at: string;
+          custom_consent: boolean;
+          id: string;
+          invoice_meta: Json | null;
+          invoice_no: string | null;
+          invoice_status: Database["public"]["Enums"]["invoice_status"];
+          member_id: string;
+          order_no: string;
+          recipient_name: string;
+          recipient_phone: string;
+          shipping_address: string;
+          shipping_fee: number;
+          status: Database["public"]["Enums"]["order_status"];
+          subtotal: number;
+          total_amount: number;
+          tracking_no: string | null;
+          updated_at: string;
+          zip_code: string | null;
+        }[];
+        SetofOptions: {
+          from: "*";
+          to: "orders";
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
+      };
     };
     Enums: {
       invoice_status: "none" | "issued" | "allowance" | "voided";

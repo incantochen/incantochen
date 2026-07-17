@@ -61,6 +61,13 @@ order by created_at;
    接著到 `/admin/orders/[id]` 用 **Admin Override** 把訂單改為 `paid`（reason 填「webhook 遺失，依綠界後台交易 <TradeNo> 人工對帳」）——用後台而非 SQL，稽核 log 才完整。
 4. 確認信未寄的話 → 見 §4。
 
+> ℹ️ **T110 之後的失敗語意**：訂單狀態推進與 `order_status_log` 稽核寫入已交易化（`transition_order_status` RPC）——log 寫不進去時**整筆推進會 rollback 並回錯誤**（webhook 回 0|ERR 觸發 ECPay 重送、對帳隔日重試），不再出現「狀態已變但稽核缺漏」。反面代價：若 `order_status_log` 本身持續寫入失敗（如未來 migration 的約束／trigger 回歸），**所有**狀態推進（webhook／對帳／後台按鈕）會同時失敗——Sentry 看到大量「訂單狀態更新失敗」時先查該表，不要當一般 DB 抖動處理。
+>
+> 🛡️ **降低此風險的實務（動 `order_status_log` 前必讀）**：
+> 1. **任何改動 `order_status_log` 的 migration**（加 CHECK／NOT NULL／trigger、改 RLS、增刪欄位）**先在 staging 實跑一輪真實狀態轉換**（沙盒 webhook 結算 ＋ 後台改一筆狀態），確認 INSERT 仍寫得進去再上正式。關鍵認知：`create function`／套 migration「成功」**不代表** RPC 內的 INSERT 跑得動——函式體不在套用當下執行，型別／約束錯誤只在**被呼叫時**才浮現（T110 的 RPC 即靠此程序在雲端以 miss／raise／hit+rollback 三態驗過）。
+> 2. **為 Sentry 設 P0 告警規則**，命中訊息 `ensureOrderPaid failed`／`訂單狀態更新失敗`／`transition_order_status`：這類事件語意已從「稽核小瑕疵」升級為「訂單流程全線中斷」，不可淹沒在一般錯誤流裡（此告警觸發＝結帳／付款／後台履約可能同時停擺，需即刻查 `order_status_log`）。
+> 3. **`order_status_log` 維持極簡 append-only**（現況：`text`／`uuid`／`bool`／`timestamptz`，除 `order_id`／`actor_id` 兩個 FK 外無其他約束）。要加任何會讓 INSERT 可能失敗的約束前，先評估是否值得用「全線狀態推進」當賭注——多數稽核性欄位驗證應放在應用層或非阻塞的事後檢查，而非這條交易關鍵路徑上。
+>
 > ℹ️ **T107 之後的正常漂移態**：自動對帳的推進順序是「先 orders、payment 翻 paid 留最後」（失敗時保留候選鍵供隔日重試），故可能短暫看到「`orders.status='paid'` 但 `payment.status='pending'`」——這是自癒中（隔日 cron 的 CAS 會補翻），**勿**誤判成異常手動改。連續兩天以上仍漂移才依上述步驟處理。本節 §8 的「先 payment 再 orders」是**人工修復**的權威同步順序，與自動對帳的重試鍵保留是兩回事，不衝突。
 
 ### 1.1 對帳各失敗點的實際體驗與自癒時間（T107 使用者體驗矩陣）

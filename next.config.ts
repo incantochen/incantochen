@@ -3,19 +3,9 @@ import { withSentryConfig } from "@sentry/nextjs";
 import { env } from "./src/lib/env";
 import { MAX_IMAGE_FILE_SIZE } from "./src/lib/storage/constants";
 
-const isDev = process.env.NODE_ENV !== "production";
-
-const csp = [
-  "default-src 'self'",
-  isDev
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-    : "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.supabase.co",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io",
-  "form-action 'self' https://payment-stage.ecpay.com.tw https://payment.ecpay.com.tw",
-  "frame-ancestors 'none'",
-].join("; ");
+// T97：CSP 已搬到 src/proxy.ts（nonce 需每請求新產，靜態 headers() 做不到），
+// 這裡不可再設 Content-Security-Policy——瀏覽器對多個 CSP header 取交集，
+// 會把 proxy 的 nonce 版廢掉。其餘 security headers 仍由本檔負責。
 
 // next/image 只允許本專案的 Supabase Storage 公開圖（不用 *.supabase.co 萬用字元）；
 // hostname 由集中 env 模組（§2 規範）導出，換專案不需改碼。缺 env 時 env.ts 在
@@ -60,7 +50,6 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
-          { key: "Content-Security-Policy", value: csp },
           ...(process.env.NODE_ENV === "production"
             ? [
                 {
@@ -69,6 +58,22 @@ const nextConfig: NextConfig = {
                 },
               ]
             : []),
+        ],
+      },
+      {
+        // T97 補洞：proxy matcher 排除圖檔／favicon（拿不到每請求 nonce CSP），
+        // 這些路徑原本零 CSP。.svg 被當文件直接開啟時可執行內嵌 script，故給
+        // 一份最小靜態 CSP（script-src 'none'）擋掉。刻意獨立於上面的 "/(.*)"
+        // ——若把 CSP 塞進 "/(.*)" 會連 document 回應也蓋一份靜態 CSP，與 proxy
+        // 的 nonce 版被瀏覽器取交集而廢掉 nonce+strict-dynamic。此 source 只命中
+        // 圖檔副檔名，而這些路徑本就不經 proxy，不衝突。
+        source: "/(.*)\\.(svg|png|jpg|jpeg|gif|webp|ico|avif)",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value:
+              "default-src 'self'; script-src 'none'; frame-ancestors 'none'",
+          },
         ],
       },
     ];

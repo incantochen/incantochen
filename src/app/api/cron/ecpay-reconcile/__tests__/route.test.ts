@@ -32,13 +32,41 @@ vi.mock("@/lib/env.server", () => ({
 // query-trade-info 已在 src/lib/ecpay/query-trade-info.test.ts 獨立覆蓋；這裡
 // 當依賴邊界整個 mock 掉，讓這支測試專注在 reconcile route 自己的決策邏輯上。
 // vi.mock 工廠會被 hoist 到檔案最上方，故用 vi.hoisted 讓內部參照的變數安全初始化。
-const { queryTradeInfo, RateLimitError } = vi.hoisted(() => {
-  class RateLimitError extends Error {}
-  return { queryTradeInfo: vi.fn(), RateLimitError };
-});
+const { queryTradeInfo, RateLimitError, QueryTradeInfoHttpError } = vi.hoisted(
+  () => {
+    // status 對齊真實 RateLimitError（#1）：403 走連續計數升級路徑。
+    class RateLimitError extends Error {
+      constructor(
+        message?: string,
+        readonly status?: number,
+      ) {
+        super(message);
+      }
+    }
+    class QueryTradeInfoHttpError extends Error {
+      constructor(readonly status: number) {
+        super(`QueryTradeInfo 非 200 回應：${status}`);
+      }
+    }
+    return { queryTradeInfo: vi.fn(), RateLimitError, QueryTradeInfoHttpError };
+  },
+);
 vi.mock("@/lib/ecpay/query-trade-info", () => ({
   queryTradeInfo: (...args: unknown[]) => queryTradeInfo(...(args as [string])),
   RateLimitError,
+  QueryTradeInfoHttpError,
+}));
+
+// #1：reconcile 用 @/lib/redis 做連續-403 計數；mock incr/del 供斷言與 fail-open。
+const { redisIncr, redisDel } = vi.hoisted(() => ({
+  redisIncr: vi.fn(),
+  redisDel: vi.fn(),
+}));
+vi.mock("@/lib/redis", () => ({
+  redis: {
+    incr: (...a: unknown[]) => redisIncr(...a),
+    del: (...a: unknown[]) => redisDel(...a),
+  },
 }));
 
 // ensureOrderPaid / ensureNotificationSent 的行為已在
@@ -153,26 +181,35 @@ const uninvoicedOrders: { id: string }[] = [];
 // 捕捉 sweep 查詢實際帶的過濾條件，斷言只撈 paid＋invoice_status='none'。
 const lastOrdersFilters: Record<string, unknown> = {};
 
-// orders 表被兩個 sweep 用到，查詢形狀不同，以此分流：
+// orders 表被兩種查詢用到，形狀不同以此分流：
 // T88 通知 sweep 用 .in("id",[...]) 撈訂單狀態 → 回 sweepOrders；
-// T42 發票 sweep 用 .eq×2＋.order＋.limit 撈未開票訂單 → 回 uninvoicedOrders
-// （並側錄 eq 過濾條件供斷言）。
+// T42 發票 sweep 用 .eq("status","paid").eq("invoice_status","none")… →
+//   回 uninvoicedOrders（並側錄 eq 過濾條件供斷言）。
 function makeOrdersChain() {
   let usedIn = false;
+  const filters: Record<string, unknown> = {};
   const chain: any = {
     select: () => chain,
     eq: (col: string, val: unknown) => {
-      lastOrdersFilters[col] = val;
+      filters[col] = val;
       return chain;
     },
     in: () => {
       usedIn = true;
       return chain;
     },
+    lt: () => chain,
     order: () => chain,
     limit: () => chain,
     then: (resolve: (v: unknown) => void) => {
-      resolve({ data: usedIn ? sweepOrders : uninvoicedOrders, error: null });
+      if (usedIn) {
+        resolve({ data: sweepOrders, error: null });
+        return;
+      }
+      // T42 發票 sweep：側錄過濾條件供斷言。
+      lastOrdersFilters.status = filters.status;
+      lastOrdersFilters.invoice_status = filters.invoice_status;
+      resolve({ data: uninvoicedOrders, error: null });
     },
   };
   return chain;
@@ -207,6 +244,7 @@ function makeSweepChain(rows: unknown[]) {
 function makeChain() {
   const chain: any = {
     _op: "select",
+    _usedIn: false,
     _filters: {} as Record<string, unknown>,
     _ors: [] as string[],
     select: (cols?: string) => {
@@ -215,6 +253,11 @@ function makeChain() {
     },
     eq: (col: string, val: unknown) => {
       chain._filters[col] = val;
+      return chain;
+    },
+    in: (col: string, val: unknown) => {
+      chain._filters[col] = val;
+      chain._usedIn = true;
       return chain;
     },
     lt: (col: string, val: unknown) => {
@@ -358,6 +401,10 @@ beforeEach(() => {
   sendOnce.mockReset();
   sendOnce.mockResolvedValue(true);
   sentryCaptureMessage.mockClear();
+  redisIncr.mockReset();
+  redisIncr.mockResolvedValue(1);
+  redisDel.mockReset();
+  redisDel.mockResolvedValue(1);
   uninvoicedOrders.length = 0;
   for (const key of Object.keys(lastOrdersFilters)) {
     delete lastOrdersFilters[key];
@@ -394,6 +441,11 @@ describe("認證", () => {
     expect(res.status).toBe(401);
   });
 
+  it("Authorization 長度相同但內容錯誤 → 401（timing-safe 比對路徑，T99）", async () => {
+    const res = await GET(buildRequest("Bearer test-cron-secreX"));
+    expect(res.status).toBe(401);
+  });
+
   it("Authorization 正確但無候選 → 200，摘要全 0", async () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     expect(res.status).toBe(200);
@@ -415,6 +467,7 @@ describe("認證", () => {
       sweepSent: 0,
       sweepStillFailing: 0,
       rateLimited: false,
+      httpAborted: false,
       invoicesSwept: 0,
       invoicesIssued: 0,
       invoicesFailed: 0,
@@ -453,6 +506,7 @@ describe("T42 發票補開 sweep", () => {
     expect(body.invoicesSwept).toBe(0);
   });
 });
+
 
 describe("單筆候選：TradeStatus=1", () => {
   it("金額吻合 → 標記 paid、呼叫 ensureOrderPaid('reconcile')、寫 last_reconciled_at", async () => {
@@ -965,6 +1019,104 @@ describe("queryTradeInfo 拋例外", () => {
     expect(body.rateLimited).toBe(true);
     expect(body.checked).toBe(1);
     expect(queryTradeInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("403 連續達門檻（incr≥3）→ 升級 error 級告警、點名疑似憑證失效（#1）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(
+      new RateLimitError("QueryTradeInfo 限流回應：403", 403),
+    );
+    redisIncr.mockResolvedValueOnce(3);
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.rateLimited).toBe(true);
+    expect(redisIncr).toHaveBeenCalledWith("reconcile:consecutive-403");
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("疑似 ECPay 金鑰"),
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("403 未達門檻（incr=1）→ 維持 warning，不升級（#1）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(
+      new RateLimitError("QueryTradeInfo 限流回應：403", 403),
+    );
+    redisIncr.mockResolvedValueOnce(1);
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("rate limited (403)"),
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("Redis 掛（incr throw）→ fail-open 當第一次、warning、對帳不崩（#1）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(
+      new RateLimitError("QueryTradeInfo 限流回應：403", 403),
+    );
+    redisIncr.mockRejectedValueOnce(new Error("redis down"));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(res.status).toBe(200);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("rate limited (403)"),
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("有任一筆成功回應 → 清除連續-403 計數，且每次排程至多一次（#1）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+      { id: "p2", order_id: "o2", merchant_trade_no: "M2", amount: 25000 },
+    ];
+    queryTradeInfo
+      .mockResolvedValueOnce({
+        tradeStatus: "1",
+        tradeAmt: 25000,
+        tradeNo: "T1",
+        raw: { TradeStatus: "1" },
+      })
+      .mockResolvedValueOnce({
+        tradeStatus: "1",
+        tradeAmt: 25000,
+        tradeNo: "T2",
+        raw: { TradeStatus: "1" },
+      });
+
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(redisDel).toHaveBeenCalledWith("reconcile:consecutive-403");
+    expect(redisDel).toHaveBeenCalledTimes(1);
+  });
+
+  it("QueryTradeInfoHttpError（ECPay 5xx）→ 同樣中止整批，但不標 rateLimited（T99）", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+      { id: "p2", order_id: "o2", merchant_trade_no: "M2", amount: 25000 },
+    ];
+    queryTradeInfo.mockRejectedValueOnce(new QueryTradeInfoHttpError(500));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.httpAborted).toBe(true);
+    expect(body.rateLimited).toBe(false);
+    expect(body.checked).toBe(1);
+    // 中止路徑不得蓋冷卻戳記，下次排程要能原樣重撈同一筆。
+    expect(queryTradeInfo).toHaveBeenCalledTimes(1);
+    expect(ensureOrderPaid).not.toHaveBeenCalled();
   });
 
   it("一般例外（如驗章失敗）→ 該筆記為 unexpected 並繼續下一筆", async () => {

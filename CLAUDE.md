@@ -156,7 +156,7 @@
 - **卡號不落地**：信用卡資訊全程交給綠界。
 - **金流冪等**：Webhook＋主動對帳 API 共用冪等鎖；逾時 ≠ 失敗；重付前先查是否已付款。
 - **登入防護**：magic link 落地頁需使用者再按一次才消耗 token；token 高熵／單次／短效。
-- ✅ **T58 應用層安全防護（2026-06-27）**：Security headers（X-Frame-Options/nosniff/Referrer-Policy/Permissions-Policy/CSP/HSTS）已加入 `next.config.ts`。**CSP 注意**：`script-src` 在 dev 環境含 `unsafe-eval`（React dev mode 需要），production build 自動移除；上線前用 securityheaders.com 掃 staging URL 確認。登入 email 改用 `z.string().email()` + `trim().toLowerCase()`；OTP 速率限制（Upstash Redis）：requestOtp 雙重 IP+email 限制，verifyOtpCode IP 限制 30 req/min；IP 取得 fallback：`cf-connecting-ip → x-forwarded-for → x-real-ip → null`（null 時跳過 IP limit 避免共用 bucket 誤鎖）。
+- ✅ **T58 應用層安全防護（2026-06-27；T97 更新）**：Security headers（X-Frame-Options/nosniff/Referrer-Policy/Permissions-Policy/HSTS）在 `next.config.ts`。**CSP 例外**：T97（F-010）起 CSP 改由 `src/proxy.ts` 每請求動態產生（nonce＋strict-dynamic，production；dev 用 unsafe-inline/unsafe-eval）——`next.config.ts` 不再設 CSP（多份 CSP header 瀏覽器取交集會廢掉 nonce 版），僅補圖檔／favicon 等不經 proxy 之靜態路徑的最小 CSP（`script-src 'none'`）。⚠️ nonce 依賴每頁動態渲染，改任何頁為靜態前先確認（見 proxy.ts 註解）。上線前用 securityheaders.com 掃 staging URL 確認。登入 email 改用 `z.string().email()` + `trim().toLowerCase()`；OTP 速率限制（Upstash Redis）：requestOtp 雙重 IP+email 限制，verifyOtpCode IP 限制 30 req/min；IP 取得 fallback（`src/lib/get-client-ip.ts`）：`x-vercel-forwarded-for → x-forwarded-for（取最左值）→ null`（null 時跳過 IP limit 避免共用 bucket 誤鎖；非 Vercel 環境 XFF 可偽造，屬已知接受取捨，掛 Cloudflare 時須把 cf-connecting-ip 調回首位）。
 
 **🧠 寫程式的思考系統（2026-07-04 起）**：動手寫任何程式碼前**必讀 [`docs/coding-system.md`](docs/coding-system.md)**——逆向推理（每個外部呼叫的四問）、系統性思考（狀態機／並發／重試迴路）、PR 前檢核清單、真實 bug 案例庫。本節下方的通則是它的摘要；完整思考步驟與 checklist 以該檔為準。
 

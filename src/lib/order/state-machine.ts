@@ -34,26 +34,72 @@ export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return VALID_TRANSITIONS[from].includes(to);
 }
 
+// 讀取現況共用段：把「查詢失敗」與「查無此單」分開回報——transient DB 錯誤
+// 誤報成「訂單不存在」會誤導呼叫端跳過重試（T110 review）。
+async function fetchCurrentStatus(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+): Promise<OrderStatus> {
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select("status")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (error) throw new Error(`訂單查詢失敗：${error.message}`);
+  if (!order) throw new Error(`訂單不存在：${orderId}`);
+  return order.status as OrderStatus;
+}
+
+// 寫入段唯一出處（T110）：CAS UPDATE + order_status_log INSERT 在
+// transition_order_status RPC 的單一交易內完成，任一段失敗整段 rollback——
+// 消滅「狀態已變、稽核 log 缺漏」的中間態。transitionOrder 與
+// adminOverrideStatus 共用本 helper，避免錯誤處理再度分歧（T110 的根因）。
+// p_note／p_actor_id 在 RPC 端 default null；undefined 的 key 會被
+// JSON.stringify 丟棄，等同省略。.select("id") 縮小回傳投影——RPC 本身
+// returns setof orders 整列（含收件人 PII），呼叫端只需要 CAS 是否命中。
+async function execTransitionRpc(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  args: {
+    orderId: string;
+    from: OrderStatus;
+    to: OrderStatus;
+    isOverride: boolean;
+    note?: string;
+    actorId?: string;
+  },
+): Promise<void> {
+  const { data: updated, error } = await supabase
+    .rpc("transition_order_status", {
+      p_order_id: args.orderId,
+      p_from: args.from,
+      p_to: args.to,
+      p_is_override: args.isOverride,
+      p_note: args.note,
+      p_actor_id: args.actorId,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw new Error(`訂單狀態更新失敗：${error.message}`);
+  if (!updated) {
+    throw new OrderTransitionRaceError(
+      `訂單狀態已被其他流程異動：${args.orderId}`,
+    );
+  }
+}
+
 // 正常流程：受狀態機約束。
-// 讀取現有狀態 → canTransition 驗證 → UPDATE orders → INSERT order_status_log。
+// 讀取現有狀態 → canTransition 驗證 → transition_order_status RPC（T110：
+// CAS UPDATE orders + INSERT order_status_log 在 DB 端同一交易內完成，任一段
+// 失敗整段 rollback——消滅「狀態已變、稽核 log 缺漏」的中間態）。
 export async function transitionOrder(
   orderId: string,
   to: OrderStatus,
   options?: { note?: string; actorId?: string },
 ): Promise<void> {
   const supabase = createServiceRoleClient();
-
-  const { data: order, error: fetchError } = await supabase
-    .from("orders")
-    .select("status")
-    .eq("id", orderId)
-    .single();
-
-  if (fetchError || !order) {
-    throw new Error(`訂單不存在：${orderId}`);
-  }
-
-  const from = order.status as OrderStatus;
+  const from = await fetchCurrentStatus(supabase, orderId);
 
   if (!canTransition(from, to)) {
     // 呼叫端（尤其是 cron／webhook）挑選候選當下 status 符合預期，但真正執行
@@ -61,35 +107,32 @@ export async function transitionOrder(
     throw new OrderTransitionRaceError(`非法狀態轉換：${from} → ${to}`);
   }
 
-  // 取消守衛（所有取消路徑的必經之地）：錢已收在訂單上就絕不取消。webhook 側
-  // 卡單（payment=paid／orders 仍 pending_payment，見 ops-runbook §1.1 第④類）
-  // 交給 reconcile 漂移臂隔日冪等推進，不可被逾期取消／改單／admin 誤取消而
-  // 造成「錢在已取消訂單上」＋（結帳流程）重新建單雙重扣款。
+  // 取消守衛（所有取消路徑的必經之地，T127）：錢已收在訂單上就絕不取消。
+  // webhook 側卡單（payment=paid／orders 仍 pending_payment，見 ops-runbook
+  // §1.1 第④類）交給 reconcile 漂移臂隔日冪等推進，不可被逾期取消／改單／
+  // admin 誤取消而造成「錢在已取消訂單上」＋（結帳流程）重新建單雙重扣款。
   if (to === "cancelled") {
     const paidBefore = await findPaidPayment(supabase, orderId);
     if (paidBefore) throw new PaidOrderCancelBlockedError(orderId);
   }
 
-  const { data: updated, error: updateError } = await supabase
-    .from("orders")
-    .update({ status: to })
-    .eq("id", orderId)
-    .eq("status", from)
-    .select("id")
-    .maybeSingle();
+  await execTransitionRpc(supabase, {
+    orderId,
+    from,
+    to,
+    isOverride: false,
+    note: options?.note,
+    actorId: options?.actorId,
+  });
 
-  if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
-  if (!updated) {
-    throw new OrderTransitionRaceError(`訂單狀態已被其他流程異動：${orderId}`);
-  }
-
-  // TOCTOU 補洞：pre-guard 查完之後、CAS 取消 commit 之前的毫秒窄窗內 webhook
-  // 才把 payment 翻 paid（且該次 ensureOrderPaid 失敗＋ECPay 重送耗盡）——主
-  // 對帳臂（鍵 payment=pending）與漂移臂（鍵 orders=pending_payment）都撈不到。
-  // 取消 commit「之後」再查一次即偵測到；放在 log insert 之前，即使 log 寫入
-  // 失敗（下方 throw）也已發過告警。偵測即可（修復走 ops-runbook §6.1 人工
-  // 裁決）；durable 兜底＝reconcile 每日 recurring 稽核臂（payment=paid ∧
-  // orders=cancelled）。查詢失敗只降級 warning，不影響已完成的取消。
+  // TOCTOU 補洞（T127）：pre-guard 查完之後、RPC 取消 commit 之前的毫秒窄窗
+  // 內 webhook 才把 payment 翻 paid（且該次 ensureOrderPaid 失敗＋ECPay 重送
+  // 耗盡）——主對帳臂（鍵 payment=pending）與漂移臂（鍵 orders=pending_payment）
+  // 都撈不到。取消 commit「之後」再查一次即偵測到。T110 交易化後狀態＋log
+  // 同一交易：RPC throw＝整筆 rollback＝取消沒發生，故只在 RPC 成功後複查。
+  // 偵測即可（修復走 ops-runbook §6.1 人工裁決）；durable 兜底＝reconcile
+  // 每日 recurring 稽核臂（payment=paid ∧ orders=cancelled）。查詢失敗只降級
+  // warning，不影響已完成的取消。
   if (to === "cancelled") {
     try {
       const paidAfter = await findPaidPayment(supabase, orderId);
@@ -109,17 +152,6 @@ export async function transitionOrder(
       });
     }
   }
-
-  const { error: logError } = await supabase.from("order_status_log").insert({
-    order_id: orderId,
-    from_status: from,
-    to_status: to,
-    note: options?.note ?? null,
-    actor_id: options?.actorId ?? null,
-    is_override: false,
-  });
-
-  if (logError) throw new Error(`狀態 log 寫入失敗：${logError.message}`);
 }
 
 // Admin override：繞過狀態機，可將訂單改為任意狀態。
@@ -130,18 +162,7 @@ export async function adminOverrideStatus(
   options: { operatorId: string; reason: string },
 ): Promise<void> {
   const supabase = createServiceRoleClient();
-
-  const { data: order, error: fetchError } = await supabase
-    .from("orders")
-    .select("status")
-    .eq("id", orderId)
-    .single();
-
-  if (fetchError || !order) {
-    throw new Error(`訂單不存在：${orderId}`);
-  }
-
-  const from = order.status as OrderStatus;
+  const from = await fetchCurrentStatus(supabase, orderId);
 
   // to === from 時 SET 不會改動 WHERE 用到的 status 欄位，CAS 守衛在 Postgres
   // READ COMMITTED 下會失效（EvalPlanQual 重新檢查條件仍會命中，CLAUDE.md
@@ -152,32 +173,17 @@ export async function adminOverrideStatus(
     throw new Error(`目標狀態與目前狀態相同（${to}），無需覆寫`);
   }
 
-  // Override 語意仍是「任意目標」（不受 VALID_TRANSITIONS 約束），但加上
-  // .eq("status", from) 條件式守衛確保雙擊或兩位管理者近乎同時對同一單送出
+  // Override 語意仍是「任意目標」（不受 VALID_TRANSITIONS 約束），但 RPC 內
+  // 的 status = p_from 條件式守衛確保雙擊或兩位管理者近乎同時對同一單送出
   // 互斥的 override 目標時只有一筆會成功、只寫一筆 order_status_log——否則
   // 兩者都會通過（本來就不檢查 canTransition）、都寫入稽核記錄，產生同一單
   // 被記成兩段矛盾轉換的財務稽核缺口（T92／F-007）。
-  const { data: updated, error: updateError } = await supabase
-    .from("orders")
-    .update({ status: to })
-    .eq("id", orderId)
-    .eq("status", from)
-    .select("id")
-    .maybeSingle();
-
-  if (updateError) throw new Error(`訂單狀態更新失敗：${updateError.message}`);
-  if (!updated) {
-    throw new OrderTransitionRaceError(`訂單狀態已被其他流程異動：${orderId}`);
-  }
-
-  const { error: logError } = await supabase.from("order_status_log").insert({
-    order_id: orderId,
-    from_status: from,
-    to_status: to,
+  await execTransitionRpc(supabase, {
+    orderId,
+    from,
+    to,
+    isOverride: true,
     note: options.reason,
-    actor_id: options.operatorId,
-    is_override: true,
+    actorId: options.operatorId,
   });
-
-  if (logError) throw new Error(`稽核 log 寫入失敗：${logError.message}`);
 }
