@@ -59,16 +59,21 @@ function makeServiceRole() {
           return chain;
         },
         limit: () => chain,
-        maybeSingle: async () =>
-          table === "orders"
+        maybeSingle: async () => {
+          // 記錄一次讀取（op:"select"）——讓「限流未通過→不打任何 DB」的測試
+          // 真正驗到 reads=0（限流檢查若被挪到查詢後，recorded 會非空、測試變紅）。
+          recorded.push({ table, op: "select", filters });
+          return table === "orders"
             ? { data: state.order, error: state.orderError }
-            : { data: null, error: null },
+            : { data: null, error: null };
+        },
         single: async () =>
           state.insertError
             ? { data: null, error: state.insertError }
             : { data: { id: "sr-1" }, error: null },
         then: (resolve: (v: any) => void) => {
-          // await chain（select…in…limit 的去重查詢）走這裡
+          // await chain（select…eq…in…limit 的去重查詢）走這裡；同樣記一次讀取。
+          recorded.push({ table, op: "select", filters });
           resolve({ data: state.existingRequests, error: state.existingError });
         },
       };
@@ -102,12 +107,24 @@ describe("createSupportRequest（T93 限流＋同單去重）", () => {
     const result = await createSupportRequest(ORDER_ID, VALID_DESC);
 
     expect(result).toEqual({ ok: true });
-    expect(rateLimitCalls).toEqual([USER_ID]);
-    const insert = recorded.find((r) => r.table === "support_request");
+    // C13：限流 key 改 order-scoped（user+order 複合）。
+    expect(rateLimitCalls).toEqual([`${USER_ID}:${ORDER_ID}`]);
+    // reads 現在也入列，find 需明確挑 insert（否則會先命中去重的 select）。
+    const insert = recorded.find(
+      (r) => r.table === "support_request" && r.op === "insert",
+    );
     expect(insert?.values).toMatchObject({
       order_id: ORDER_ID,
       member_id: USER_ID,
       request_type: "return_defect",
+    });
+    // C4：去重查詢必須限定 request_type=return_defect（admin 的
+    // repair_maintenance 不擋客人瑕疵回報）。
+    const dedupeSelect = recorded.find(
+      (r) => r.table === "support_request" && r.op === "select",
+    );
+    expect(dedupeSelect?.filters).toContainEqual({
+      eq: ["request_type", "return_defect"],
     });
     expect(sendSupportRequestNotification).toHaveBeenCalledWith("sr-1");
   });

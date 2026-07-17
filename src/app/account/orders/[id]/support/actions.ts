@@ -33,9 +33,13 @@ export async function createSupportRequest(
     };
   }
 
-  // T93（F-002）：登入會員維度限流，擋 UI 重複點擊與 script 直呼灌爆
-  // 店家信箱／support_request 表；放在 DB 查詢前，被限流的請求不耗 DB。
-  const withinLimit = await checkSupportRequestRateLimit(user.id);
+  // T93（F-002）：限流擋 UI 重複點擊與 script 直呼灌爆店家信箱／
+  // support_request 表；放在 DB 查詢前，被限流的請求不耗 DB。
+  // C13：改 order-scoped（user+order 複合 key）——同會員對「不同訂單」的
+  // 申請額度互不影響，避免一筆訂單多送幾次就把整個帳號其他訂單一起鎖掉。
+  const withinLimit = await checkSupportRequestRateLimit(
+    `${user.id}:${idResult.data}`,
+  );
   if (!withinLimit) {
     return { ok: false, error: "操作過於頻繁，請稍後再試" };
   }
@@ -61,13 +65,16 @@ export async function createSupportRequest(
     return { ok: false, error: "此訂單目前無法申請售後" };
   }
 
-  // T93 同單去重：同訂單已有處理中案件（pending／in_progress）即拒新增，
-  // 引導客人等候回覆或直接回信補充。check-then-act 在併發下非嚴格保證
-  //（§6），但這裡防的是灌爆而非帳務不變式，上方限流已擋速率，可接受。
+  // T93 同單去重：同訂單已有處理中的「瑕疵回報」（return_defect，
+  // pending／in_progress）即拒新增。C4：必須限定 request_type=return_defect
+  // ——admin 手動建的 repair_maintenance 不該擋客人自助送出瑕疵回報。
+  // check-then-act 在併發下非嚴格保證（§6），但這裡防的是灌爆而非帳務
+  // 不變式，上方限流已擋速率，可接受。
   const { data: existing, error: existingError } = await serviceRole
     .from("support_request")
     .select("id")
     .eq("order_id", order.id)
+    .eq("request_type", "return_defect")
     .in("status", ["pending", "in_progress"])
     .limit(1);
 
