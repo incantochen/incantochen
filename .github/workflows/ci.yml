@@ -23,6 +23,17 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 型別檢查單一出處（next typegen 先生成 next-env.d.ts／路由型別，
+      # tsc --noEmit 涵蓋含測試檔的全 repo）；build 期檢查僅 preview 關閉，
+      # 見 next.config.ts typescript 區塊。
+      # dummy env：typegen 載入 next.config → src/lib/env.ts fail-fast 需要
+      # 這兩個變數存在（僅供 config 解析，不做任何真實連線；比照 vitest
+      # 對 env 模組的 mock 精神）。
+      - run: pnpm typecheck
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://dummy.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy
+
       - run: pnpm lint
 
       - run: pnpm test
