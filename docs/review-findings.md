@@ -155,19 +155,19 @@
 
 ## F-017 [P2] Supabase `{error}` 忽略根因延伸至會員 account 讀取頁與商品詳情頁（T95「7 處」列舉未涵蓋，同型「同根因多點、修法只覆蓋一部分」）
 
-- 狀態：✅ 已修復（2026-07-18）——列舉位置全數收斂：account/orders 三頁＋support/actions.ts 由 **PR #70** 補；account/page.tsx（count）＋account/profile/page.tsx（member）由 **PR #73** 補；products/[slug]/page.tsx 於本項撰寫（07-08）後已改 `maybeSingle`＋`error` throw（更早修，現況非本項所述 `.single()`）
+- 狀態：✅ 已修復（2026-07-18）——列舉位置全數收斂：account/orders 三頁＋support/actions.ts 由 **PR #70** 補；account/page.tsx（count）＋account/profile/page.tsx（member）由 **PR #73** 補；products/[slug]/page.tsx 於本項撰寫（07-08）後已改 `maybeSingle`＋`error` throw（更早修，現況非本項所述 `.single()`）。⚠️ 唯一未收斂：`products/[slug]/actions.ts:42-51`（product）／`:54-67`（product_option）兩處查詢（見下方 2026-07-09 追加）2026-07-18 實測仍忽略 `error`——已與 F-020 同檔轉 **T130／issue #76**（不影響本項頁面清單的結案）。
 - 位置：`src/app/account/orders/[id]/page.tsx:29`（`.single()` 只取 `data`，`!order`→`notFound()`；同檔 `:38-57` 的 `Promise.all` 讀 order_item／order_status_log／support_request 亦忽略 error）；`src/app/account/orders/page.tsx:11`（`{ data: orders }`）；`src/app/account/orders/[id]/support/page.tsx:27`＋`:36`（order＋requests 查詢）；`src/app/account/page.tsx:11`（`{ count }`）；`src/app/account/profile/page.tsx:8`（`{ data: member }`）；`src/app/products/[slug]/page.tsx:27`（`.single()`，`!product`→`notFound()`）
 - 失敗情境：這些會員自助頁與公開 PDP 的查詢一律只解構 `data`、丟棄 `error`——與 F-008/T95 完全同一根本原因（CLAUDE.md §6「SDK 錯誤回傳必檢查」／code-checklist F1），但 **T95 的任務描述明列「pay／success 頁、createOrder、verify-prices、cart 讀取共 7 處」，這幾頁不在其列舉內**。Supabase 暫時性故障（statement timeout／連線池耗盡）時查詢回 `{ data: null, error }`，這裡把「查詢失敗」誤判成「查無資料」。最痛的一點：①**會員在 `/account/orders/[id]` 檢視自己一張真實已付款訂單**的瞬間 DB 抖動→`.single()` 回 error→`!order`→`notFound()`→會員看到「找不到此訂單」404 頁，誤以為訂單憑空消失、轉而重複下單或找客服（自癒需重新整理但客人不會知道）。其餘變體：②`/account/orders` 列表頁抖動→顯示「目前沒有訂單，去逛逛…」（訂單全消失的錯覺）；③`/account` 首頁 count 抖動→`hasOrders=false`→隱藏「查看訂單」捷徑改顯示「無訂單」；④PDP `/products/[slug]` 抖動→`notFound()`→把「商品暫時查不到」誤呈成「商品不存在」，可搜尋引擎誤收 404；⑤`/account/profile` 抖動→姓名欄回空字串（危害最低）。全部方向 fail-safe（不外洩、不遺失、重新整理即復原），故列 P2；但與 F-006（T73 漏 pay/failed）、F-001（T72 漏第三支寄信程式）完全同型——**T95 若僅照「7 處」字面修，這幾頁會被靜默留下、下輪審查必重新撞見**。
 - 修法：把 T95 的 `{error}` 檢查修法**一併套用到本清單各頁**——頁面層對 `error` 非 null 時 render「系統忙碌中，請重新整理」而**非** `notFound()`／空狀態（避免把暫時性故障呈現成「訂單／商品不存在」）；`Promise.all` 的三支子查詢同理逐一檢查。建議在 **T95 的任務範圍與 issue #36 直接補註「範圍含 account 讀取頁（orders 列表／訂單詳情／support／account 首頁 count／profile）與 PDP，共 6 檔」**，與現有 7 處同批一次收斂，避免二次施工。與 T79（findOrCreateMember 吞錯）同根因。
 - 記錄：2026-07-08 首次發現（覆蓋輪替首次逐行審 account 頁面四支＋support/page＋products/[slug]/page；對照 T95 的「7 處」列舉發現這批會員自助讀取路徑未被涵蓋）。
 
-> **追加（2026-07-09）**：T70／PR #45 本機 `/code-review high` review 發現 `src/app/products/[slug]/actions.ts:29-34`（`product` 查詢）與 `:40-49`（`product_option` 查詢）同樣只解構 `data`、未檢查 `error`，與本項同一根因（CLAUDE.md §6）。同函式內的 `cart` insert 已於 T70 補上 `error` 檢查，這兩處未動、屬 pre-existing。建議併入 T95／issue #36 範圍一併處理，避免第三輪審查再次撞見。
+> **追加（2026-07-09）**：T70／PR #45 本機 `/code-review high` review 發現 `src/app/products/[slug]/actions.ts:29-34`（`product` 查詢）與 `:40-49`（`product_option` 查詢）同樣只解構 `data`、未檢查 `error`，與本項同一根因（CLAUDE.md §6）。同函式內的 `cart` insert 已於 T70 補上 `error` 檢查，這兩處未動、屬 pre-existing。**（2026-07-18 更新）** PR #70／#73 的 F-017 結案未涵蓋這兩處，實測仍在；已與 F-020 同檔轉 **T130／issue #76**（使用者 2026-07-18 確認）。
 
 > **追加（2026-07-10）**：本輪覆蓋輪替補審 `src/app/account/orders/[id]/support/actions.ts`（`createSupportRequest`，最後審查 2026-07-02），發現 `:37-41` 的訂單擁有權 SELECT（`const { data: order } = await serviceRole.from("orders").select("id, member_id, status")…maybeSingle()`）同樣只解構 `data`、未檢查 `error`，與本項及 F-008／T95 同一根因（CLAUDE.md §6「SDK 錯誤回傳必檢查」）。失敗情境：登入會員對自己一張真實 paid 訂單送出售後申請的瞬間 DB 抖動（statement timeout／連線池耗盡）→查詢回 `{data:null,error}`→被判 `!order`→回「找不到訂單」，會員誤以為訂單消失、無法提交瑕疵回報（fail-closed、重新整理即復原，故仍 P2）。這是 mutation action 內的讀取，非 F-017 原列舉的「讀取頁」，但屬同一 T95 群集；建議在 **T95／issue #36 範圍補記本檔**，與 pay/success/createOrder/verify-prices/cart 讀取＋account 讀取頁＋PDP＋products/actions.ts 一次收斂。同檔其餘防護正確（`requireUser`＋`member_id===user.id` 擁有權重查＋`canRequestSupport` 狀態守衛＋插入 `{error}` 檢查皆到位；售後限流／去重缺口另見 F-002／T93）。
 
 ## F-018 [P2-low] T70 PR review：`23505` 錯誤碼字面量在 4 個檔案重複、`CREATE UNIQUE INDEX` 未用 `CONCURRENTLY`
 
-- 狀態：待確認
+- 狀態：已轉任務(T132／issue #78)（使用者 2026-07-18 確認）
 - 位置：`src/app/products/[slug]/actions.ts:110`（新增的第 4 個字面量，另 3 處為 `src/lib/notification/send-once.ts:114`、`src/app/checkout/actions.ts:177`、`src/app/api/ecpay/notify/route.ts:112`）；`supabase/migrations/0008_cart_guest_token_unique.sql:6`
 - 失敗情境：Postgres unique_violation 錯誤碼 `"23505"` 目前在四個獨立檔案各自手刻字面量比對，與 F-009／F-015「識別碼格式互轉單一出處」同型——若比對邏輯需調整（如需一併攔 exclusion violation、加 log），須四處同步修改，任一遺漏會讓該呼叫點的衝突處理悄悄失效。另外，`0008` 是本專案第一支對「已有資料的正式表」新增 index 的 migration（`0001` 的 index 皆建於初始空表），未加 `CONCURRENTLY`、建置期間對 `cart` 持 ACCESS EXCLUSIVE 鎖；目前資料量小風險可忽略，但尚未建立「何時該用 CONCURRENTLY」的慣例，日後若在更大的表重演相同寫法，可能造成部署窗口延遲尖峰。
 - 修法：（1）抽一個共用常數（如 `PG_UNIQUE_VIOLATION = "23505"`）供四處 import；（2）之後對已有資料的正式表加 index，優先評估 `CREATE INDEX CONCURRENTLY`（需注意 Supabase migration 交易包裹限制，可能需拆成不在單一 transaction 內執行）。兩項皆非阻塞性，可併入下次同類任務或獨立小型清理任務處理。
@@ -175,7 +175,7 @@
 
 ## F-019 [P2-low] T70 的 unique 約束修法未涵蓋「首次訪客」雙擊情境：guest_token cookie 尚不存在時，併發請求各自產生不同 token
 
-- 狀態：待確認
+- 狀態：已轉任務(T133／issue #79)（使用者 2026-07-18 確認）——列 P3（架構層、機率極低），與 T81／proxy guest_token 預簽工作耦合可一併評估
 - 位置：`src/app/products/[slug]/actions.ts:92-99`（`guestToken` 於 cookie 不存在時以 `crypto.randomUUID()` 產生，此邏輯為 T70 修改前後皆相同、未變動）
 - 失敗情境：T70 的 partial unique index 只保護「併發請求已共用同一 guest_token」的情境（如同一分頁雙擊、已有 cookie 的雙分頁）。對於**完全沒有 cookie 的首次訪客**近乎同時雙擊「加入購物車」或開兩個分頁操作，兩個 server action 各自讀到空 cookie、各自呼叫 `crypto.randomUUID()` 產生**不同**的 token，兩筆 insert 因 token 不同都不會撞到 unique 約束，於是仍會產生兩筆 cart（各自掛一個 cart_item），最終只有一個 `Set-Cookie` 存活在瀏覽器，另一筆 cart／商品對客人來說「憑空消失」——這正是 T70 標題所指「雙擊、雙分頁」情境的其中一個子情境，未被本次修法涵蓋。此為 T70 修改前既已存在的行為（非本次引入的退化），本次 review 才首次明確點出。
 - 修法：尚待設計；可能方向包含在頁面首次載入時（如 `src/proxy.ts`）就預先簽發 guest_token cookie，讓「加入購物車」永遠不是第一個設定 cookie 的動作，消除競爭窗口。屬於架構層調整，不建議倉促帶入既有 PR，需要獨立評估。
@@ -183,7 +183,7 @@
 
 ## F-020 [P2] addToCart get-or-create 採 insert-first，與 T70 教訓（coding-system §3.2 明列 addToCart 應 read-first）相反：回頭客每次加車都先觸發一次註定失敗的 INSERT
 
-- 狀態：待確認
+- 狀態：已轉任務(T130／issue #76)（使用者 2026-07-18 確認）——與 F-017 殘留（products/[slug]/actions.ts 兩處 `{error}`）同檔，併一支任務／PR 收
 - 位置：`src/app/products/[slug]/actions.ts:101-124`（無條件先 `INSERT cart(guest_token=X)` → 撞 `23505` → 落 `:113` 分支 reselect）；對照 `docs/coding-system.md §3.2`（2026-07-09 T70 教訓，明列「addToCart——回頭客重複加車是常態」屬 **read-first** 案例）；T70 tasks.csv 列已記 `addToCart 改 insert-then-23505-retry`。
 - 失敗情境：回頭客（已有 `guest_token` cookie 且該 token 已有一筆 cart）呼叫 `addToCart`——**這是購物車最常見的操作**：不只是隔日再訪，更常見的是「同一次逛街連加第 2、3、N 件」，第 1 件建立 cart 後，後續每一件都走到此路徑。每次 `addToCart` 都會無條件執行 `:101` 的 `INSERT INTO cart(guest_token=X)`，因該 token 的 cart 已存在，**必定違反 `uq_cart_guest_token` 觸發 `23505`**，才落入 `:113` 重查取回既有 cart。淨結果：全站最高頻的購物車寫入操作，每次都付出 **2 次 DB round trip（一次註定失敗的 INSERT ＋一次 SELECT）而非 1 次 SELECT**，並在 Postgres 端每次寫一筆 `unique_violation` 到 log、留下一個失敗 INSERT 的 dead tuple。這正是 §3.2 驗收判準「hot path 是否避免了『可預期但沒有價值』的資料庫 round trip」所指的浪費——而 §3.2 自己就把 addToCart 明列為 read-first 案例（「回頭客重複加車是常態」）。合併的程式（PR #45，commit 早於 §3.2 教訓寫成）從未回頭對齊該教訓，形成「文件（教訓）與程式相反」的狀態。正確性不受影響（partial unique 約束＋23505 retry 仍保 race-safe），純屬效率／一致性，故 P2。與 F-019（同屬 T70 get-or-create 設計）相關但根因不同：F-019 是「首次訪客 token 尚未存在時的競態未涵蓋」，本項是「已選定的並發策略在 hot path 上選錯形態」。
 - 修法：把 `addToCart` 的 get-or-create 改為 **read-first**——先 `SELECT cart WHERE guest_token=X` 命中即用（hot path 一次 round trip）；miss 才 `INSERT`；`INSERT` 撞 `23505`（真正的併發建立競態）再 reselect。保留 `uq_cart_guest_token` 作為競態兜底。如此常態路徑降回單次 SELECT，且與 §3.2 記載的教訓一致。**替代方案**：若刻意保留 insert-first（如程式簡潔優先、流量小到無感），依 §3.2「讓它是決策不是慣性」把理由寫進 T70／PR，並同步修正 §3.2 目前把 addToCart 列為 read-first 的範例（否則文件與程式互相矛盾）。工作量 ≤0.25 天，可與 T78（cart 限流／清理，同檔同模組）或 T81 同批處理。
@@ -191,7 +191,7 @@
 
 ## F-021 [P2-low] 新 cron `/api/cron/cart-cleanup` 的 CRON_SECRET 比對非 timing-safe：與 F-012／T99（ecpay-reconcile）同根因、第二支 cron route
 
-- 狀態：待確認
+- 狀態：✅ 已修復（隨 T99／PR #70）——2026-07-18 使用者確認結案、不另開任務。`src/lib/cron/require-cron-auth.ts:15` 現已改用共用 `timingSafeEqualStrings`（sha256 digest 常數時間比對、長度不洩漏），單點涵蓋三支 cron（見下方 2026-07-17 追加行）。
 - 位置：`src/app/api/cron/cart-cleanup/route.ts:16-19`（`authHeader !== \`Bearer ${serverEnv.CRON_SECRET}\``，字串 `!==` 短路比對）
 - 失敗情境：與 F-012／T99 完全同一根本原因（code-checklist **A4「驗證用 timing-safe 比對」**），只是換一支 cron route。字串 `!==` 逐字元短路比對理論上可被 timing attack 逐字元猜出 `CRON_SECRET`，猜到後可任意觸發訪客車清理批次（本身冪等、單次上限 500，無法竄改金額或多刪 member 車〔member_id 目前恆為 null 另見 F-022〕，故傷害有限）。實務可利用性極低（HTTPS 網路抖動遠大於字元比較時差、secret 高熵），但屬「**同根因、多點、修法只覆蓋一點**」型缺陷（同 F-001／F-006／F-017）：**T99 的任務描述只點名 `ecpay-reconcile` 這一支 cron，而 `cart-cleanup` 是 T99 開票（2026-07-07）之後才由 T78（PR #46）新增的第二支 cron**——若 T99 只照字面修 ecpay-reconcile，這支會被靜默留下、下輪審查必重新撞見。同 codebase 的 `check-mac-value.ts:54` 早已用 `timingSafeEqual`，兩支 cron 的 Bearer 比對卻仍是裸 `!==`（不對稱）。
 - 修法：把 T99 的 timing-safe 修法（`crypto.timingSafeEqual`：先比長度、轉 Buffer；或抽一支共用 `verifyCronSecret(request)` helper 供兩支 cron route 共同 import，一次收斂避免第三支 cron 再重演）**一併套用到 `cart-cleanup`**。建議在 **T99 任務範圍與其對應 issue 直接補註「範圍含 cart-cleanup，共兩支 cron route」**，與 ecpay-reconcile 同批一次收斂。抽共用 helper 亦順帶消除「每支 cron 各自手刻 Bearer 比對字面量」的複本失同步風險。
@@ -201,7 +201,7 @@
 
 ## F-022 [P2-low] cart-cleanup 的 DELETE 只綁 `id`、丟失 `member_id IS NULL`／`updated_at < cutoff` 守衛：SELECT→DELETE 之間被 touch／claim 的車仍被刪（TOCTOU）
 
-- 狀態：待確認
+- 狀態：已轉任務(T131／issue #77)（使用者 2026-07-18 確認）——列 P3，建議 T81 前先補
 - 位置：`src/app/api/cron/cart-cleanup/route.ts:47-51`（`.from("cart").delete().in("id", ids)`——DELETE 僅以 SELECT 階段撈到的 `ids` 過濾，未重新套用候選 SELECT `:30-36` 的 `.is("member_id", null)` 與 `.lt("updated_at", cutoff)` 兩個條件）
 - 失敗情境：清理採「先 SELECT 候選 id（`member_id IS NULL` 且 `updated_at < now-90d`）→ 再依 id DELETE」兩步（為規避 PostgREST `.delete().order().limit()` 的 42703，方向正確）。但第二步 DELETE **不重新驗證** 候選當初入選的條件，兩步之間非原子——若某候選車在 SELECT 與 DELETE 的空窗被改動，仍會被以 id 刪掉：①**updated_at race**：一台剛好卡在 90 天邊界、被選為候選的訪客車，其擁有者在空窗內回站 `addToCart`／改量／移除→`touchCartUpdatedAt` 把 `updated_at` 推新（車已「復活」），但 DELETE 只認 id、照刪不誤，客人剛加的商品憑空消失。②**member_id claim（行為連鎖，隨 T81 兌現）**：T81（登入時把 guest cart 併入會員 cart、會設 `cart.member_id`）一旦落地，一台 90 天未動的訪客車被選為候選後，擁有者在空窗內登入→`member_id` 被設上（不再是訪客車），但 DELETE 仍照 id 刪掉會員剛併入的車。對照 `ecpay-reconcile` 的 promotion 用條件式 CAS（`.eq("status","pending")`）守住「入選條件在 mutation 當下仍成立」，本 DELETE 沒有等價守衛——屬 code-checklist **B2（狀態守衛缺失）／不對稱#7（SELECT 端的過濾條件，DELETE 端沒跟上）**。當前狀態機率可忽略（空窗為毫秒級、需 90 天棄置車在該毫秒回站，且 member_id 目前恆 null、情境②尚未兌現），故列 P2-low；價值在「與 codebase 既有 CAS 紀律一致」＋「T81 落地前先補起，免得屆時同檔改兩次」。附帶：`cart-cleanup` 目前無任何自動化測試（`ecpay-reconcile` 有 `route.test.ts`），這類守衛缺口正是測試該攔的類型。
 - 修法：把候選條件一併加回 DELETE，成為 guarded delete——`.delete().in("id", ids).is("member_id", null).lt("updated_at", cutoff).select("id")`；空窗內被 touch／claim 的車因不再符合條件而自動存活，`deleted` 計數亦如實反映真正刪除數。一行擴充、行為更正確、零額外成本。可與 F-021 同批（同檔）；補一支 cart-cleanup route 測試涵蓋「候選在 DELETE 前被 touch 應存活」。
@@ -217,7 +217,7 @@
 
 ## F-024 [P2] T42 統編／手機條碼驗證 API 在限流與購物車讀取之前呼叫：未認證即可無限打 ECPay 發票驗證端點＋把本站當成統編→公司名／條碼歸戶查詢 oracle
 
-- 狀態：待確認
+- 狀態：已轉任務(T129／issue #75)（使用者 2026-07-18 確認）——升級 P1／🚀 上線前修（未認證外部 API 放大＋個資 oracle，靠近 P1 邊界）
 - 位置：`src/app/checkout/actions.ts:74-84`（`checkCompanyIdentifier`／`checkBarcode` 對 ECPay 發出外部驗證請求）——位於 cart 讀取（`:96` 起）**之前**、且訪客限流 `checkCheckoutGuestRateLimit`（`:180`，僅 guest 分支）**之前**；驗證實作 `src/lib/ecpay/invoice/validate.ts:16-57`（打 `/B2CInvoice/GetCompanyNameByTaxID`＋`/B2CInvoice/CheckBarcode`）
 - 失敗情境：`createOrder` server action 為訪客結帳入口（無需登入即可呼叫，只要載入過 `/checkout` 取得 action id＋同源）。schema 通過後，若 `invoiceTarget` 為 `company`／`mobile_barcode`，`:74-84` 立刻對 ECPay 發票 API 發一次外部驗證請求——**這一步跑在 cart 讀取之前（連購物車是否有商品都還沒查），也跑在任何限流之前**（唯一的訪客限流 `checkCheckoutGuestRateLimit` 在 `:180` 的 guest 分支、位置在後；登入分支完全無限流）。攻擊者載入結帳頁後以腳本反覆 POST `createOrder`（購物車可為空），每次帶一個格式合法但任意的 8 碼統編（或 `/` 開頭 8 碼條碼）＋`invoiceTarget:"company"`，即觸發一次未受限流的外部 ECPay 驗證呼叫。三重危害：①**未認證外部 API 放大**——以攻擊者可控速率消耗商家 ECPay 發票 API 額度，可能觸發 ECPay 端對本商家的節流／封鎖，反過來讓真實客人結帳時的統編／條碼驗證失效；②**查詢 oracle**——`GetCompanyNameByTaxID` 成功時回傳 `CompanyName`，等於把本站變成「未認證、無限次、任意統編→公司名」查詢代理，`CheckBarcode` 則洩漏任一手機條碼是否已歸戶，皆借用商家 ECPay 帳號憑證代打；③每次呼叫持住一個 serverless function 最長 `INVOICE_API_TIMEOUT_MS=15s`（`invoice-client.ts:15`），輕度資源／成本放大。驗證本身 fail-open（ECPay 故障不擋單）故不累積壞資料，失敗方向安全，列 P2；但屬未上線前對外開放的未認證放大＋個資（公司名）oracle，靠近 P1 邊界、建議上線前修，升級與否由使用者裁決。屬 code-checklist **G3（高成本／可灌爆的匿名路徑缺限流）＋信任邊界#2（未認證路徑觸發昂貴外部呼叫且無節流）**；與 T71 的 `checkCheckoutGuestRateLimit`（同檔、但位置在後且僅 guest 分支）為同檔不同缺口——T71 的限流無法涵蓋 `:74-84`（在它之前執行），屬 T42 新引入。
 - 修法：在 `checkCompanyIdentifier`／`checkBarcode` 呼叫**之前**加一道以 IP 為 key 的限流（沿用 `src/lib/rate-limit.ts` Upstash 基礎設施，新增專屬 prefix 的 limiter，或把 `checkCheckoutGuestRateLimit` 這類 IP 限流上移到驗證前），並且（更好是兩者都做）把發票驗證改到「確認 cart 非空」之後才執行——沒有真實購買意圖的請求不該能點燃外部 ECPay 呼叫。門檻可抓緊（一般客人一次結帳只驗個位數次）。
