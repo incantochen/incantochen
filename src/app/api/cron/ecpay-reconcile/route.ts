@@ -6,8 +6,13 @@ import {
   ensureNotificationSent,
 } from "@/lib/order/ensure-paid";
 import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
-import { queryTradeInfo, RateLimitError } from "@/lib/ecpay/query-trade-info";
+import {
+  queryTradeInfo,
+  RateLimitError,
+  QueryTradeInfoHttpError,
+} from "@/lib/ecpay/query-trade-info";
 import { requireCronAuth } from "@/lib/cron/require-cron-auth";
+import { redis } from "@/lib/redis";
 import { sendOnce } from "@/lib/notification/send-once";
 import { NOTIFICATION_SENDERS } from "@/lib/notification/senders";
 import type { OrderStatus } from "@/lib/order/order-status";
@@ -24,6 +29,12 @@ const MIN_AGE_MS = 10 * 60 * 1000;
 const RECONCILE_COOLDOWN_MS = 20 * 60 * 60 * 1000;
 const THROTTLE_MS = 400;
 const SWEEP_LIMIT = 20;
+
+// 連續 403 計數（跨排程持久化於 Redis）。ECPay 限流實測回 403（ops-runbook），
+// 但持續性 403 也可能是金鑰／CheckMacValue 失效——偶發 403 當限流退避即可，
+// 連續 N 次都撈不到任何一筆成功回應才升級 error，避免對正常節流狂告警。
+const CONSECUTIVE_403_KEY = "reconcile:consecutive-403";
+const CONSECUTIVE_403_ERROR_THRESHOLD = 3;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -151,6 +162,9 @@ type Summary = {
   sweepSent: number;
   sweepStillFailing: number;
   rateLimited: boolean;
+  // T99：HTTP 層失敗（ECPay 5xx 等，非限流）導致的整批中止，與 rateLimited
+  // 分開標示——語意不同（對方故障 vs 我方打太快），Sentry 告警也分流。
+  httpAborted: boolean;
   invoicesSwept: number;
   invoicesIssued: number;
   invoicesFailed: number;
@@ -310,6 +324,7 @@ export async function GET(request: Request) {
     sweepSent: 0,
     sweepStillFailing: 0,
     rateLimited: false,
+    httpAborted: false,
     invoicesSwept: 0,
     invoicesIssued: 0,
     invoicesFailed: 0,
@@ -356,6 +371,10 @@ export async function GET(request: Request) {
 
     if (error) throw new Error(`候選查詢失敗: ${error.message}`);
 
+    // 本次排程只要有任一筆 queryTradeInfo 成功回應（證明金鑰正常），就把
+    // 連續-403 計數歸零一次；flag 避免每筆成功都打一次 redis.del。
+    let reconcile403Reset = false;
+
     for (const payment of candidates ?? []) {
       summary.checked += 1;
 
@@ -365,13 +384,60 @@ export async function GET(request: Request) {
       } catch (e) {
         if (e instanceof RateLimitError) {
           summary.rateLimited = true;
-          Sentry.captureMessage("reconcile: rate limited, aborting batch", {
-            level: "warning",
-            extra: {
-              merchantTradeNo: payment.merchant_trade_no,
-              error: e.message,
+          if (e.status === 403) {
+            // 403 可能是綠界限流（ops-runbook 實測），也可能是持續性的金鑰／
+            // CheckMacValue 失效。連續計數：本次 +1，達門檻升級 error 點名
+            // 「疑似憑證失效」，否則維持 warning，避免對偶發節流狂告警。
+            let consecutive = 1;
+            try {
+              consecutive = await redis.incr(CONSECUTIVE_403_KEY);
+            } catch {
+              // Redis 掛：fail-open，當第一次處理（不升級、不讓對帳崩）。
+            }
+            const escalate = consecutive >= CONSECUTIVE_403_ERROR_THRESHOLD;
+            Sentry.captureMessage(
+              escalate
+                ? "reconcile: 連續 403，疑似 ECPay 金鑰／CheckMacValue 失效（非限流），請查憑證"
+                : "reconcile: rate limited (403), aborting batch",
+              {
+                level: escalate ? "error" : "warning",
+                extra: {
+                  merchantTradeNo: payment.merchant_trade_no,
+                  status: 403,
+                  consecutive,
+                  error: e.message,
+                },
+              },
+            );
+          } else {
+            // 429／503：明確的暫時性限流／服務不可用，維持 warning、不計數。
+            Sentry.captureMessage("reconcile: rate limited, aborting batch", {
+              level: "warning",
+              extra: {
+                merchantTradeNo: payment.merchant_trade_no,
+                status: e.status,
+                error: e.message,
+              },
+            });
+          }
+          break;
+        }
+        // T99：非限流的 HTTP 層失敗（ECPay 5xx 等）同樣中止整批（系統性
+        // 故障，逐筆硬跑只會把候選蓋上冷卻戳記、延後自癒），但告警不再
+        // 誤標「被限流」。這條路徑不寫 last_reconciled_at，下次排程原樣重試。
+        if (e instanceof QueryTradeInfoHttpError) {
+          summary.httpAborted = true;
+          Sentry.captureMessage(
+            "reconcile: QueryTradeInfo HTTP error, aborting batch",
+            {
+              level: "error",
+              extra: {
+                merchantTradeNo: payment.merchant_trade_no,
+                status: e.status,
+                error: e.message,
+              },
             },
-          });
+          );
           break;
         }
         // 單筆查詢失敗（含 CheckMacValue 驗證失敗）：記錄並繼續下一筆，
@@ -382,6 +448,16 @@ export async function GET(request: Request) {
         // ECPay，正是節流機制原本要防止的情況。
         await sleep(THROTTLE_MS);
         continue;
+      }
+
+      // 有成功回應＝金鑰正常，清掉連續-403 計數（每次排程至多一次）。
+      if (!reconcile403Reset) {
+        reconcile403Reset = true;
+        try {
+          await redis.del(CONSECUTIVE_403_KEY);
+        } catch {
+          // fail-open：清不掉頂多下次多留一格，不影響對帳主流程。
+        }
       }
 
       // 不論後續分支結果如何，先記錄查過的時間，避免同一筆在冷卻期

@@ -26,35 +26,48 @@ export default async function OrderDetailPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const { data: order } = await supabase
+  // maybeSingle（非 single）：0 筆回 {data:null,error:null}，error 只在真正
+  // 的 DB 故障時才非 null——才能把「查無此訂單」（notFound）與「查詢失敗」
+  // （throw→account/error.tsx 顯示系統忙碌）分開（§6）。
+  const { data: order, error: orderError } = await supabase
     .from("orders")
     .select("*")
     .eq("id", id)
     .eq("member_id", user.id)
-    .single();
+    .maybeSingle();
 
+  if (orderError) throw orderError;
   if (!order) notFound();
 
-  const [{ data: items }, { data: logs }, { data: supportRequests }] =
-    await Promise.all([
-      supabase
-        .from("order_item")
-        .select(
-          "id, product_id, product_name_snapshot, quantity, unit_price_snapshot, config_snapshot",
-        )
-        .eq("order_id", id)
-        .order("created_at"),
-      supabase
-        .from("order_status_log")
-        .select("from_status, to_status, created_at")
-        .eq("order_id", id)
-        .order("created_at"),
-      supabase
-        .from("support_request")
-        .select("id, request_type, status, created_at")
-        .eq("order_id", id)
-        .order("created_at", { ascending: false }),
-    ]);
+  const [
+    { data: items, error: itemsError },
+    { data: logs, error: logsError },
+    { data: supportRequests, error: supportError },
+  ] = await Promise.all([
+    supabase
+      .from("order_item")
+      .select(
+        "id, product_id, product_name_snapshot, quantity, unit_price_snapshot, config_snapshot",
+      )
+      .eq("order_id", id)
+      .order("created_at"),
+    supabase
+      .from("order_status_log")
+      .select("from_status, to_status, created_at")
+      .eq("order_id", id)
+      .order("created_at"),
+    supabase
+      .from("support_request")
+      .select("id, request_type, status, created_at")
+      .eq("order_id", id)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  // §6：任一子查詢 DB 故障都 throw——不可靜默把訂單渲染成沒有品項／無狀態
+  // 紀錄的殘缺畫面。
+  if (itemsError || logsError || supportError) {
+    throw itemsError ?? logsError ?? supportError;
+  }
 
   const status = order.status as OrderStatus;
   const eligibleForSupport = canRequestSupport(status);

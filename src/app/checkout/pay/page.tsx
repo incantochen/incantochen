@@ -16,6 +16,7 @@ import {
   resolveOrderOwnership,
 } from "@/lib/order/order-access-token";
 import { RateLimitedNotice } from "../rate-limited-notice";
+import { SystemBusyNotice } from "../system-busy-notice";
 import { EcpayAutoSubmit } from "@/components/ecpay-auto-submit";
 
 // T74：pending payment 超過此時限視為放棄，換發新交易序號（而非無限期復用
@@ -26,12 +27,14 @@ function isPaymentFresh(createdAt: string): boolean {
   return Date.now() - new Date(createdAt).getTime() < STALE_PAYMENT_MS;
 }
 
+// 回傳 merchantTradeNo；insert 失敗（DB 暫時性故障）回 null，呼叫端據此改
+// 顯示 <SystemBusyNotice />——付款中的客人不可被 redirect 踢回結帳頁（T95）。
 async function createPendingPayment(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
   orderNo: string,
   totalAmount: number,
-) {
+): Promise<string | null> {
   const merchantTradeNo = generateMerchantTradeNo(orderNo);
   const { data: inserted, error } = await serviceRole
     .from("payment")
@@ -45,7 +48,7 @@ async function createPendingPayment(
     .select("id, created_at")
     .single();
   if (error || !inserted) {
-    redirect("/checkout");
+    return null;
   }
 
   // 併發防護：沒有 DB 層級的 unique 約束擋「同一張訂單只能有一筆 pending
@@ -111,12 +114,22 @@ export default async function CheckoutPayPage({
   // session）。限流改到解析擁有權「之後」只對非擁有者施加（見下方 #3），
   // 故不再放進這批平行查詢。
   const [orderResult, cookieStore, userResult] = await Promise.all([
-    serviceRole.from("orders").select("*").eq("order_no", orderNo).maybeSingle(),
+    serviceRole
+      .from("orders")
+      .select("*")
+      .eq("order_no", orderNo)
+      .maybeSingle(),
     cookies(),
     createClient().then((c) => c.auth.getUser()),
   ]);
 
-  const { data: order } = orderResult;
+  const { data: order, error: orderError } = orderResult;
+
+  // T95（F-008）：查詢失敗 ≠ 查無資料——DB 暫時性故障（timeout／連線池
+  // 耗盡）不可誤判成「沒這張訂單」把付款中的客人踢回結帳頁。
+  if (orderError) {
+    return <SystemBusyNotice />;
+  }
 
   if (!order) {
     redirect("/checkout");
@@ -176,7 +189,10 @@ export default async function CheckoutPayPage({
   // 但 pending 超過 STALE_PAYMENT_MS 視為放棄（T74）：舊 row 標記 failed，換發新序號。
   // 兩個查詢互不依賴（都只靠 order.id），平行送出減少這個高延遲敏感頁面
   // 多等一趟 round trip 的時間。
-  const [{ data: orderItems }, { data: existingPending }] = await Promise.all([
+  const [
+    { data: orderItems, error: orderItemsError },
+    { data: existingPending, error: existingPendingError },
+  ] = await Promise.all([
     serviceRole
       .from("order_item")
       .select("quantity, product_name_snapshot, product:product_id ( name )")
@@ -190,6 +206,12 @@ export default async function CheckoutPayPage({
       .limit(1)
       .maybeSingle(),
   ]);
+
+  // T95（F-008）：兩個查詢任一 {error} 都停下——existingPending 讀取失敗若
+  // 照走 else 分支，會在「其實已有新鮮 pending payment」時多發一筆交易序號。
+  if (orderItemsError || existingPendingError) {
+    return <SystemBusyNotice />;
+  }
 
   if (!orderItems || orderItems.length === 0) {
     redirect("/checkout");
@@ -220,7 +242,8 @@ export default async function CheckoutPayPage({
         .select("id")
         .maybeSingle();
       if (error) {
-        redirect("/checkout");
+        // T95（F-008）：DB 暫時性故障不可把付款中的客人踢回結帳頁。
+        return <SystemBusyNotice />;
       }
       if (!markedFailed) {
         // 沒搶到：這筆 payment 已經被 webhook 處理過（很可能剛好轉 paid）。
@@ -239,18 +262,24 @@ export default async function CheckoutPayPage({
       .eq("status", "paid")
       .maybeSingle();
     if (paidCheckError) {
-      redirect("/checkout");
+      // T95（F-008）：DB 暫時性故障不可把付款中的客人踢回結帳頁。
+      return <SystemBusyNotice />;
     }
     if (paidPayment) {
       redirect(`/checkout/success?order=${orderNo}`);
     }
 
-    merchantTradeNo = await createPendingPayment(
+    const created = await createPendingPayment(
       serviceRole,
       order.id,
       order.order_no,
       order.total_amount,
     );
+    // insert 失敗（DB 暫時性故障）→ 停在系統忙碌頁，不 redirect。
+    if (created === null) {
+      return <SystemBusyNotice />;
+    }
+    merchantTradeNo = created;
   }
 
   const items = orderItems.map((item) => ({

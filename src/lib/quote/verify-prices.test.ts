@@ -871,3 +871,50 @@ describe("H Product name", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// I — T95（F-008）：DB 查詢 {error} 與「查無資料」分開報
+// ---------------------------------------------------------------------------
+
+function buildErrorMock(failing: "product" | "product_option") {
+  const dbError = { message: "connection timeout" };
+  const productChain: any = {
+    select: () => productChain,
+    eq: () => productChain,
+    maybeSingle: () =>
+      failing === "product"
+        ? Promise.resolve({ data: null, error: dbError })
+        : Promise.resolve({
+            data: { base_price: 10000, name: "測試商品" },
+            error: null,
+          }),
+  };
+  const productOptionsChain: any = {
+    select: () => productOptionsChain,
+    eq: () =>
+      failing === "product_option"
+        ? Promise.resolve({ data: null, error: dbError })
+        : Promise.resolve({
+            data: withActiveDefaults(GEM_OPTIONS),
+            error: null,
+          }),
+  };
+  return {
+    from: (table: string) =>
+      table === "product" ? productChain : productOptionsChain,
+  } as any;
+}
+
+describe("I T95: DB error vs no-rows", () => {
+  it("I1: product 查詢 {error} → throw 系統忙碌，而非「商品已下架」", async () => {
+    await expect(
+      verifyCartPrices(buildErrorMock("product"), [makeItem()]),
+    ).rejects.toThrow("系統忙碌");
+  });
+
+  it("I2: product_option 查詢 {error} → throw 系統忙碌，而非「無法取得商品選項」", async () => {
+    await expect(
+      verifyCartPrices(buildErrorMock("product_option"), [makeItem()]),
+    ).rejects.toThrow("系統忙碌");
+  });
+});
