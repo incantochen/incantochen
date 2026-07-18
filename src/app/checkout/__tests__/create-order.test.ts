@@ -37,8 +37,12 @@ vi.mock("@/lib/order/order-access-token", () => ({
 }));
 
 // T71 ultra review 限流 mock：預設一律放行，個別測試可覆寫 success 值
+// T129：checkInvoiceValidateRateLimit 為新增匯出，一併 mock，否則
+// actions.ts 呼叫時會因為缺這個 key 直接 TypeError。
 vi.mock("@/lib/rate-limit", () => ({
   checkCheckoutGuestRateLimit: async () => state.checkoutRateLimitSuccess,
+  checkInvoiceValidateRateLimit: async () =>
+    state.invoiceValidateRateLimitSuccess,
 }));
 
 // auth：預設未登入；member 建立走 mock
@@ -93,6 +97,7 @@ const state = {
   createdUser: { id: "member-new" },
   createUserError: null as any,
   checkoutRateLimitSuccess: true,
+  invoiceValidateRateLimitSuccess: true,
 };
 
 function makeServiceRole() {
@@ -176,6 +181,7 @@ beforeEach(() => {
   state.member = null;
   state.createUserError = null;
   state.checkoutRateLimitSuccess = true;
+  state.invoiceValidateRateLimitSuccess = true;
   getUser.mockResolvedValue({ data: { user: null } });
   redirect.mockClear();
   findOrCreateMember.mockClear();
@@ -215,6 +221,61 @@ describe("前置檢查", () => {
     const result = await createOrder({ ...FORM, customConsent: false as any });
     expect(result).toMatchObject({ ok: false });
     expect(createOrderFromCart).not.toHaveBeenCalled();
+  });
+
+  // T129（F-024）：發票驗證呼叫已搬到 cart 非空確認之後，這組是回歸鎖——
+  // 若順序退回「先驗證再查 cart」的舊版，以下 case 會立刻失敗。
+  describe("T129（F-024）：空購物車不觸發發票驗證 API", () => {
+    const emptyCartSetups: Array<[string, () => void]> = [
+      [
+        "無 guest_token cookie",
+        () => {
+          cookieJar = {};
+        },
+      ],
+      [
+        "cart 為空（無 cart row）",
+        () => {
+          state.cart = null;
+        },
+      ],
+      [
+        "cart_item 為空",
+        () => {
+          state.cartItems = [];
+        },
+      ],
+    ];
+
+    // 三種空購物車成因都要擋下——覆蓋主要 invoiceTarget（company）。
+    it.each(emptyCartSetups)(
+      "%s ＋ invoiceTarget=company → 不呼叫 checkCompanyIdentifier／checkBarcode",
+      async (_label, setup) => {
+        setup();
+        const result = await createOrder({
+          ...FORM,
+          invoiceTarget: "company",
+          taxId: "12345678",
+        });
+        expect(result).toMatchObject({ ok: false });
+        expect(checkCompanyIdentifier).not.toHaveBeenCalled();
+        expect(checkBarcode).not.toHaveBeenCalled();
+      },
+    );
+
+    // 補一個 mobile_barcode 案例，確認守衛不是只對 company 生效
+    // （其餘空購物車成因與 company 案例共用同一組早期 return，不重複覆蓋）。
+    it("cart 為空 ＋ invoiceTarget=mobile_barcode → 不呼叫 checkBarcode／checkCompanyIdentifier", async () => {
+      state.cart = null;
+      const result = await createOrder({
+        ...FORM,
+        invoiceTarget: "mobile_barcode",
+        carrierBarcode: "/ABC1234",
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(checkCompanyIdentifier).not.toHaveBeenCalled();
+      expect(checkBarcode).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -301,7 +362,10 @@ describe("T42：發票去向 ECPay 驗證（建單前擋明確無效值）", () 
       taxId: "12345678",
     });
 
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("統一編號") });
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("統一編號"),
+    });
     expect(createOrderFromCart).not.toHaveBeenCalled();
   });
 
@@ -317,12 +381,42 @@ describe("T42：發票去向 ECPay 驗證（建單前擋明確無效值）", () 
       carrierBarcode: "/ABC1234",
     });
 
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("手機條碼") });
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("手機條碼"),
+    });
     expect(createOrderFromCart).not.toHaveBeenCalled();
   });
 
   it("personal 不打任何驗證 API", async () => {
     await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
+    expect(checkCompanyIdentifier).not.toHaveBeenCalled();
+    expect(checkBarcode).not.toHaveBeenCalled();
+  });
+
+  // T129（F-024）：驗證呼叫前的限流閘。
+  it("company 分支被限流 → 回請求太頻繁，不呼叫驗證 API、不建單", async () => {
+    state.invoiceValidateRateLimitSuccess = false;
+
+    const result = await createOrder({
+      ...FORM,
+      invoiceTarget: "company",
+      taxId: "12345678",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "請求太頻繁，請稍後再試",
+    });
+    expect(checkCompanyIdentifier).not.toHaveBeenCalled();
+    expect(createOrderFromCart).not.toHaveBeenCalled();
+  });
+
+  it("personal 分支即使限流命中也不受影響（不進限流檢查）", async () => {
+    state.invoiceValidateRateLimitSuccess = false;
+
+    await expect(createOrder(FORM)).rejects.toBe(REDIRECT);
+
     expect(checkCompanyIdentifier).not.toHaveBeenCalled();
     expect(checkBarcode).not.toHaveBeenCalled();
   });
