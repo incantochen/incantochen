@@ -22,15 +22,35 @@ let candidates: CartRow[] = [];
 let selectError: { message: string } | null = null;
 let deleteError: { message: string } | null = null;
 
+// 候選 SELECT 收到的守衛過濾條件，供斷言 route 有把守衛條件套在「兩道關卡」的
+// 第一道（SELECT）上——DELETE 守衛只是縱深，SELECT 才是批量預算的把關者。
+let selectFilters: {
+  memberIdNull: boolean;
+  updatedBefore: string | null;
+  limit: number | null;
+};
+
+function resetSelectFilters() {
+  selectFilters = { memberIdNull: false, updatedBefore: null, limit: null };
+}
+
 // DELETE 收到的 in() id 清單與守衛過濾條件，供斷言 route 有把候選條件重跑一次。
+// selectCalled：DELETE 是否有 chain .select("id")——真實 supabase-js 未 chain
+// 時回 data:null，count 會變 0，故需可偵測。
 let deleteFilters: {
   ids: string[] | null;
   memberIdNull: boolean;
   updatedBefore: string | null;
+  selectCalled: boolean;
 };
 
 function resetDeleteFilters() {
-  deleteFilters = { ids: null, memberIdNull: false, updatedBefore: null };
+  deleteFilters = {
+    ids: null,
+    memberIdNull: false,
+    updatedBefore: null,
+    selectCalled: false,
+  };
 }
 
 function makeServiceRole() {
@@ -38,13 +58,25 @@ function makeServiceRole() {
     from: (table: string) => {
       if (table !== "cart") throw new Error(`unexpected table: ${table}`);
 
-      // 候選 SELECT 鏈：.select().is().lt().order().limit() → resolve
+      // 候選 SELECT 鏈：.select().is().lt().order().limit() → resolve；守衛條件
+      // 記錄下來，供斷言 route 有在 SELECT 端也套上（否則批量預算會被污染）。
       const selectChain: any = {
         select: () => selectChain,
-        is: () => selectChain,
-        lt: () => selectChain,
+        is: (col: string, val: unknown) => {
+          if (col === "member_id" && val === null) {
+            selectFilters.memberIdNull = true;
+          }
+          return selectChain;
+        },
+        lt: (col: string, val: string) => {
+          if (col === "updated_at") selectFilters.updatedBefore = val;
+          return selectChain;
+        },
         order: () => selectChain,
-        limit: () => selectChain,
+        limit: (n: number) => {
+          selectFilters.limit = n;
+          return selectChain;
+        },
         then: (resolve: (v: unknown) => void) => {
           resolve({
             data: candidates.map((c) => ({ id: c.id })),
@@ -71,7 +103,10 @@ function makeServiceRole() {
           if (col === "updated_at") deleteFilters.updatedBefore = val;
           return deleteChain;
         },
-        select: () => deleteChain,
+        select: () => {
+          deleteFilters.selectCalled = true;
+          return deleteChain;
+        },
         then: (resolve: (v: unknown) => void) => {
           if (deleteError) {
             resolve({ data: null, error: deleteError });
@@ -87,7 +122,15 @@ function makeServiceRole() {
             if (cutoff && !(c.updated_at < cutoff)) return false;
             return true;
           });
-          resolve({ data: deleted.map((c) => ({ id: c.id })), error: null });
+          // 真實 supabase-js：DELETE 未 chain .select() → RETURNING 無資料、data
+          // 為 null；未忠實反映會讓「拿掉 .select("id") 導致 deleted 恆 0」的
+          // 回歸無法被測到。
+          resolve({
+            data: deleteFilters.selectCalled
+              ? deleted.map((c) => ({ id: c.id }))
+              : null,
+            error: null,
+          });
         },
       };
 
@@ -121,19 +164,26 @@ beforeEach(() => {
   candidates = [];
   selectError = null;
   deleteError = null;
+  resetSelectFilters();
   resetDeleteFilters();
   captureException.mockReset();
 });
 
 describe("認證", () => {
-  it("缺 Authorization header → 401", async () => {
+  it("缺 Authorization header → 401，且未碰 DB（認證先於查詢）", async () => {
     const res = await GET(buildRequest());
     expect(res.status).toBe(401);
+    // 認證須短路在任何 DB 存取之前：若排序被改成先查後驗，未授權請求會打到
+    // SELECT／DELETE，這裡的 null 斷言即失守（比照 pending-payment-expire 測試）。
+    expect(deleteFilters.ids).toBeNull();
+    expect(selectFilters.limit).toBeNull();
   });
 
-  it("Authorization 錯誤 → 401", async () => {
+  it("Authorization 錯誤 → 401，且未碰 DB", async () => {
     const res = await GET(buildRequest("Bearer wrong-secret"));
     expect(res.status).toBe(401);
+    expect(deleteFilters.ids).toBeNull();
+    expect(selectFilters.limit).toBeNull();
   });
 
   it("無候選 → 200，deleted: 0", async () => {
@@ -154,10 +204,17 @@ describe("守衛式刪除（F-022）", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ deleted: 2 });
-    // DELETE 有重跑候選條件（member_id IS NULL + updated_at < cutoff）。
+    // 第一道關卡＝候選 SELECT：守衛條件（member_id IS NULL + updated_at < cutoff）
+    // ＋批量上限必須套在這裡，否則批次預算會被會員車／復活車污染而餓死真正逾期車。
+    expect(selectFilters.memberIdNull).toBe(true);
+    expect(selectFilters.updatedBefore).not.toBeNull();
+    expect(selectFilters.limit).toBe(500);
+    // 第二道關卡＝DELETE 重跑候選條件（縱深，防 SELECT→DELETE 空窗的 TOCTOU）。
     expect(deleteFilters.memberIdNull).toBe(true);
     expect(deleteFilters.updatedBefore).not.toBeNull();
     expect(deleteFilters.ids).toEqual(["c1", "c2"]);
+    // DELETE 必須 chain .select("id")，否則 supabase-js 回 data:null、deleted 恆 0。
+    expect(deleteFilters.selectCalled).toBe(true);
   });
 
   it("候選在 DELETE 前被 touch（updated_at 推新）→ 該車存活、deleted 計數如實", async () => {
