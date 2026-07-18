@@ -85,8 +85,10 @@ export async function addToCart(
       .from("product_option")
       .select("id", { count: "exact", head: true })
       .eq("product_id", productId);
+    // 查詢失敗 ≠ 查無資料：countError 是 DB 暫時性故障，回「系統忙碌」而非
+    // 「設定有誤」（與上方 product／product_option 兩處分流一致，CLAUDE.md §6）
     if (countError) {
-      return { ok: false, error: "商品選項設定有誤" };
+      return { ok: false, error: "系統忙碌，請稍後再試" };
     }
     if (count && count > 0) {
       // 有 product_option 列，只是全被隱藏——視為「目前無可選配項目」，
