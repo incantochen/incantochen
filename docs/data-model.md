@@ -232,7 +232,7 @@
 
 ### 8.4 已知限制／T47 定案結果
 
-- ✅ RMA 狀態機 T47 定案：沿用 admin 端既有四值 `pending／in_progress／completed／rejected`（不另擴 RMA 專屬狀態——退款本身走 orders/payment 狀態機，support_request 只追蹤售後案件處理進度）。⏳ check constraint 待 migration `0019_support_request_status_check.sql` 落地（`not valid` → `validate` 兩段式；先 `db push` 再 merge）。
+- ✅ RMA 狀態機 T47 定案：沿用 admin 端既有四值 `pending／in_progress／completed／rejected`（不另擴 RMA 專屬狀態——退款本身走 orders/payment 狀態機，support_request 只追蹤售後案件處理進度）。✅ check constraint 已於 migration `0019_support_request_status_check.sql` 落地（`not valid` → `validate` 兩段式；2026-07-18 已 `db push` 至雲端並驗證 `convalidated=true`）。
 - ✅ 退款改 T47 記錄式流程：後台退款區塊登記（自動翻 payment `refunded` → 訂單狀態機轉 `refunded` → 寄退款通知信），實際刷退仍走綠界廠商後台人工操作（見 ops-runbook §6）；DoAction 退刷 API 自動化另列衍生任務。`completed → refunded` 轉換同步開放（已完成客製訂單因瑕疵協議退款）。
 - 不支援佐證照片上傳；不做重複申請時效限制（§3.1 G19 已拍板不硬擋）。
 
