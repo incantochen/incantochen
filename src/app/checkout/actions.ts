@@ -25,7 +25,10 @@ import {
 } from "@/lib/ecpay/invoice/validate";
 import { orderAccessCookieOptions } from "@/lib/order/order-access-token";
 import { getClientIp } from "@/lib/get-client-ip";
-import { checkCheckoutGuestRateLimit } from "@/lib/rate-limit";
+import {
+  checkCheckoutGuestRateLimit,
+  checkInvoiceValidateRateLimit,
+} from "@/lib/rate-limit";
 import * as Sentry from "@sentry/nextjs";
 
 type CreateOrderResult = {
@@ -67,22 +70,6 @@ export async function createOrder(
         ? { target: "mobile_barcode", carrierNum: parsed.data.carrierBarcode! }
         : { target: "personal" };
 
-  // T42：統編／手機條碼打 ECPay 驗證 API 擋明確無效值（檢查碼錯的統編、
-  // 查無歸戶的條碼）——這是 zod 格式檢查之外的真正防線，建單前擋下，
-  // 不讓錯誤資料流到付款後才在開立時爆掉。驗證 API 自身故障時不阻擋
-  // （validate.ts 內建 fail-open，官方原則：只有明確無效才擋）。
-  if (invoiceTarget.target === "company") {
-    const check = await checkCompanyIdentifier(invoiceTarget.customerIdentifier);
-    if (check.blocked) {
-      return { ok: false, error: check.error ?? "統一編號驗證未通過" };
-    }
-  } else if (invoiceTarget.target === "mobile_barcode") {
-    const check = await checkBarcode(invoiceTarget.carrierNum);
-    if (check.blocked) {
-      return { ok: false, error: check.error ?? "手機條碼驗證未通過" };
-    }
-  }
-
   const serviceRole = createServiceRoleClient();
   const cookieStore = await cookies();
   const guestToken = cookieStore.get("guest_token")?.value;
@@ -119,6 +106,38 @@ export async function createOrder(
     return { ok: false, error: "購物車已空，請重新加入商品" };
   }
 
+  const headersList = await headers();
+  const ip = getClientIp(headersList);
+
+  // T42：統編／手機條碼打 ECPay 驗證 API 擋明確無效值（檢查碼錯的統編、
+  // 查無歸戶的條碼）——這是 zod 格式檢查之外的真正防線，建單前擋下，
+  // 不讓錯誤資料流到付款後才在開立時爆掉。驗證 API 自身故障時不阻擋
+  // （validate.ts 內建 fail-open，官方原則：只有明確無效才擋）。
+  // T129（F-024）：這段對 ECPay 發送真實外部請求，搬到 cart 非空確認之後
+  // 才執行，避免沒有真實購物車的請求也能點燃外部呼叫；company／
+  // mobile_barcode 才會真的打 API，故限流閘也只在這兩個分支前檢查。
+  if (
+    invoiceTarget.target === "company" ||
+    invoiceTarget.target === "mobile_barcode"
+  ) {
+    if (!(await checkInvoiceValidateRateLimit(ip))) {
+      return { ok: false, error: "請求太頻繁，請稍後再試" };
+    }
+  }
+  if (invoiceTarget.target === "company") {
+    const check = await checkCompanyIdentifier(
+      invoiceTarget.customerIdentifier,
+    );
+    if (check.blocked) {
+      return { ok: false, error: check.error ?? "統一編號驗證未通過" };
+    }
+  } else if (invoiceTarget.target === "mobile_barcode") {
+    const check = await checkBarcode(invoiceTarget.carrierNum);
+    if (check.blocked) {
+      return { ok: false, error: check.error ?? "手機條碼驗證未通過" };
+    }
+  }
+
   // ②-b Pending 訂單 dedup（T75）——必須在會員解析**之前**跑：訪客第一次
   // 成功建單時 member row 已隨之建立，若先解析會員，重送未變更 cart 會撞上
   // 「email 已註冊請登入」而拿不到既有訂單的付款頁。cart 由 guest_token
@@ -144,7 +163,10 @@ export async function createOrder(
       .eq("status", "pending_payment")
       .eq("invoice_status", "none");
     if (metaError) {
-      console.error("[createOrder] reuse 路徑 invoice_meta 更新失敗", metaError);
+      console.error(
+        "[createOrder] reuse 路徑 invoice_meta 更新失敗",
+        metaError,
+      );
       Sentry.captureMessage("createOrder: reuse 路徑 invoice_meta 更新失敗", {
         level: "warning",
         extra: { orderNo: pending.orderNo, error: metaError.message },
@@ -175,8 +197,7 @@ export async function createOrder(
     // T71 ultra review：這個分支等於一個帳號存在偵測 oracle（email 是否命中
     // 既有會員），先限流再查，避免被拿去大量掃描 email。命中限流時刻意不帶
     // requiresLogin，回應要跟「單純太頻繁」無法區分。
-    const headersList = await headers();
-    const ip = getClientIp(headersList);
+    // T129：ip／headersList 已在上方發票驗證前取過，這裡沿用同一份、不重複呼叫。
     if (!(await checkCheckoutGuestRateLimit(ip, guestToken))) {
       return { ok: false, error: "請求太頻繁，請稍後再試" };
     }

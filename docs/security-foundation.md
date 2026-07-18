@@ -78,7 +78,7 @@
 - 備註：掛 Cloudflare 時須把 cf-connecting-ip 調回首位（見檔內註解）。
 
 ### 11. 限流覆蓋
-- 斷言：可灌爆的寫入路徑（OTP 請求／驗證、購物車寫入、結帳、售後申請、訂單頁枚舉）都掛 `src/lib/rate-limit.ts` 的 limiter（各自 prefix、fail-open 走 safeLimit）。
+- 斷言：可灌爆的寫入路徑（OTP 請求／驗證、購物車寫入、結帳、售後申請、訂單頁枚舉、**發票統編／條碼 ECPay 驗證**〔T129／F-024〕）都掛 `src/lib/rate-limit.ts` 的 limiter（各自 prefix、fail-open 走 safeLimit）。發票驗證因會對 ECPay 發外部請求＋是統編→公司名 oracle，另須在「確認 cart 非空」之後才呼叫（`checkout/actions.ts`）。
 - 錨點：`src/lib/rate-limit.ts`。
 - 驗法：本期新增的 server action／route 逐一問「可被灌爆嗎」；新 limiter 必有專屬 prefix。
 
