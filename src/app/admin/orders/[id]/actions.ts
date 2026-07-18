@@ -22,6 +22,11 @@ import {
 import type { SupportRequestStatus } from "@/lib/support/support-request";
 import { REFRESH_TO_RETRY_SUFFIX } from "@/lib/concurrency-message";
 import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
+import {
+  refundOrder,
+  NoRefundablePaymentError,
+} from "@/lib/order/refund-order";
+import { sendOrderRefundedNotification } from "@/lib/email/order-refunded-notification";
 
 // transitionOrder 的 CAS 守衛（T66）代表狀態轉換現在可能因為別的流程（cron
 // 自動取消、ECPay webhook）搶先動過而失敗。這種情況不是操作失敗，是頁面顯示
@@ -50,6 +55,15 @@ export async function changeStatus(
   to: OrderStatus,
 ): Promise<AdminActionResult> {
   const user = await requireAdmin();
+  // 退款不走一鍵轉換（T47）：必須經退款區塊登記（必填原因、翻 payment、寄
+  // 退款通知信）。UI 已把 refunded 從快速按鈕濾掉，這裡是 server 端防旁路
+  // ——server action 可被直接呼叫，光靠 client 過濾擋不住。
+  if (to === "refunded") {
+    return {
+      ok: false,
+      error: "退款請走退款區塊登記（需填原因並確認已於綠界退刷）",
+    };
+  }
   try {
     await transitionOrder(orderId, to, { actorId: user.id });
   } catch (e) {
@@ -138,6 +152,68 @@ export async function overrideStatus(
   }
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath("/admin/orders");
+  return { ok: true };
+}
+
+// reason 會進 order_status_log.note 與 Sentry payload：限長防誤貼大段內容，
+// 與 refund-section.tsx 的 textarea maxLength 保持一致。
+const REFUND_REASON_MAX_LENGTH = 500;
+
+// T47 記錄式退款：實際刷退由管理者先在綠界廠商後台人工完成，這裡只登記
+// 結果——refundOrder 翻 payment＋orders（冪等），成功後 best-effort 寄退款
+// 通知信（sendOnce 去重＋每日 reconcile sweep 補寄）。
+// 命名 refundOrderAction（比照 issueInvoiceAction）：與 import 進來的 lib
+// 函式 refundOrder 同名會撞。
+export async function refundOrderAction(
+  orderId: string,
+  reason: string,
+): Promise<AdminActionResult> {
+  const user = await requireAdmin();
+
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) {
+    return { ok: false, error: "請填寫退款原因" };
+  }
+  if (trimmedReason.length > REFUND_REASON_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `退款原因請勿超過 ${REFUND_REASON_MAX_LENGTH} 字`,
+    };
+  }
+
+  try {
+    await refundOrder(orderId, { actorId: user.id, reason: trimmedReason });
+  } catch (e) {
+    if (e instanceof NoRefundablePaymentError) {
+      return { ok: false, error: "此訂單無已收款記錄，無法退款" };
+    }
+    if (e instanceof OrderTransitionRaceError) {
+      return { ok: false, error: RACE_MESSAGE };
+    }
+    reportAdminTransitionError("refundOrder", orderId, e);
+    return { ok: false, error: "退款登記失敗，請稍後再試" };
+  }
+
+  // 退款本體已成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證不往外
+  // 拋例外，且以 notification(order_id, type) unique 去重——重複操作不會重複
+  // 寄信。寄失敗以 warning 讓操作者知情，每日 reconcile sweep 自動補寄
+  // （order_refunded 已登記於 NOTIFICATION_SENDERS）。
+  const supabase = createServiceRoleClient();
+  const notified = await sendOnce(supabase, {
+    orderId,
+    type: "order_refunded",
+    send: () => sendOrderRefundedNotification(orderId),
+  });
+
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath("/admin/orders");
+  revalidatePath(`/account/orders/${orderId}`);
+  if (!notified) {
+    return {
+      ok: true,
+      warning: "退款已登記，但通知信寄送失敗——系統每日會自動重試補寄",
+    };
+  }
   return { ok: true };
 }
 

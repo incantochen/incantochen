@@ -106,6 +106,7 @@ describe("canTransition", () => {
       ["in_production", "refunded"],
       ["shipped", "completed"],
       ["shipped", "refunded"],
+      ["completed", "refunded"], // T47：已完成訂單因瑕疵協議退款
     ];
     for (const [from, to] of cases) {
       expect(canTransition(from, to), `${from} → ${to}`).toBe(true);
@@ -134,7 +135,8 @@ describe("canTransition", () => {
   });
 
   it("終止狀態無任何出口", () => {
-    const terminals: OrderStatus[] = ["completed", "cancelled", "refunded"];
+    // T47 起 completed 不再是終止狀態（completed → refunded 合法）。
+    const terminals: OrderStatus[] = ["cancelled", "refunded"];
     const allStatuses = Object.keys(VALID_TRANSITIONS) as OrderStatus[];
     for (const terminal of terminals) {
       for (const to of allStatuses) {

@@ -23,7 +23,9 @@ export const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   paid: ["in_production", "refunded"],
   in_production: ["shipped", "refunded"],
   shipped: ["completed", "refunded"],
-  completed: [],
+  // completed → refunded（T47）：已完成的客製訂單因瑕疵協議退款是合法情境；
+  // completed 不再是終止狀態，終止狀態僅剩 cancelled／refunded。
+  completed: ["refunded"],
   cancelled: [],
   refunded: [],
 };
