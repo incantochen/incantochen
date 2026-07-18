@@ -25,6 +25,7 @@ import {
 } from "@/lib/ecpay/invoice/validate";
 import { orderAccessCookieOptions } from "@/lib/order/order-access-token";
 import { getClientIp } from "@/lib/get-client-ip";
+import { GUEST_TOKEN_COOKIE } from "@/lib/cart/guest-token";
 import {
   checkCheckoutGuestRateLimit,
   checkInvoiceValidateRateLimit,
@@ -72,7 +73,7 @@ export async function createOrder(
 
   const serviceRole = createServiceRoleClient();
   const cookieStore = await cookies();
-  const guestToken = cookieStore.get("guest_token")?.value;
+  const guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
 
   // ② Read cart (service role — RLS blocks all direct reads)
   if (!guestToken) {

@@ -15,6 +15,7 @@ import {
   resolvePendingOrderForCart,
 } from "@/lib/order/create-order-from-cart";
 import { serverEnv } from "@/lib/env.server";
+import { GUEST_TOKEN_COOKIE } from "@/lib/cart/guest-token";
 
 type CreateAdminOrderResult =
   | { ok: true; orderNo: string; paymentLink: string }
@@ -46,7 +47,7 @@ export async function createAdminOrderFromCart(
 
   const serviceRole = createServiceRoleClient();
   const cookieStore = await cookies();
-  const guestToken = cookieStore.get("guest_token")?.value;
+  const guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
 
   if (!guestToken) {
     return { ok: false, error: "購物袋是空的，請先到商品頁加入商品" };

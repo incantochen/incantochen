@@ -7,9 +7,10 @@ import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCartWriteRateLimit } from "@/lib/rate-limit";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
-
-const GUEST_TOKEN_COOKIE = "guest_token";
-const GUEST_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days, rolling
+import {
+  GUEST_TOKEN_COOKIE,
+  guestTokenCookieOptions,
+} from "@/lib/cart/guest-token";
 
 type AddToCartInput = {
   productId: string;
@@ -197,13 +198,7 @@ export async function addToCart(
 
   await touchCartUpdatedAt(serviceRole, cartId);
 
-  cookieStore.set(GUEST_TOKEN_COOKIE, guestToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: GUEST_TOKEN_MAX_AGE,
-  });
+  cookieStore.set(GUEST_TOKEN_COOKIE, guestToken, guestTokenCookieOptions());
 
   return { ok: true };
 }

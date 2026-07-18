@@ -6,12 +6,13 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCartWriteRateLimit } from "@/lib/rate-limit";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
+import { GUEST_TOKEN_COOKIE } from "@/lib/cart/guest-token";
 
 type ActionResult = { ok: true } | { ok: false; error: string };
 
 async function verifyOwnership(cartItemId: string) {
   const cookieStore = await cookies();
-  const guestToken = cookieStore.get("guest_token")?.value;
+  const guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
   if (!guestToken) {
     return { ok: false as const, error: "找不到購物車" };
   }

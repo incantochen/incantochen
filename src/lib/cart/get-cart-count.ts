@@ -2,6 +2,7 @@ import "server-only";
 import * as Sentry from "@sentry/nextjs";
 import { cookies } from "next/headers";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { GUEST_TOKEN_COOKIE } from "@/lib/cart/guest-token";
 
 // 同一故障窗內只回報一次：DB 故障時每個 pageview 的 header 都會走 fail-soft
 // 分支，若每次都 capture+flush 會在故障期間對 Sentry 噴洪水（且每發都多等
@@ -24,7 +25,7 @@ async function captureCartCountFailure(err: unknown): Promise<void> {
 
 export async function getCartCount(): Promise<number> {
   const cookieStore = await cookies();
-  const guestToken = cookieStore.get("guest_token")?.value;
+  const guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
   if (!guestToken) return 0;
 
   const serviceRole = createServiceRoleClient();
