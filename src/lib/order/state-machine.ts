@@ -3,7 +3,10 @@ import * as Sentry from "@sentry/nextjs";
 
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { type OrderStatus, VALID_TRANSITIONS } from "@/lib/order/order-status";
-import { findPaidPayment } from "@/lib/order/find-paid-payment";
+import {
+  findPaidPayment,
+  findRefundedPayment,
+} from "@/lib/order/find-paid-payment";
 
 export type { OrderStatus };
 export { VALID_TRANSITIONS };
@@ -30,13 +33,29 @@ export class PaidOrderCancelBlockedError extends Error {
   }
 }
 
+// 「訂單 payment 尚未標記 refunded，不得把訂單轉 refunded」的守衛被觸發時
+// 拋出（T47）。鏡射 PaidOrderCancelBlockedError 的深度：money-coupling
+// invariant 集中在 transitionOrder（所有轉 refunded 路徑的必經之地）——
+// 正規路徑（refund-order.ts）先翻 payment 再轉訂單，天然通過；任何未來的
+// 呼叫端（自動退刷 API、第二個 admin 介面）漏掉 payment 翻面會在這裡被
+// 大聲擋下，而不是靜默產生「訂單已退款、payment 還掛 paid」的金流漂移
+//（Admin Override 仍為文件化逃生口，走 adminOverrideStatus 不經此守衛）。
+export class RefundPaymentNotFlippedError extends Error {
+  constructor(orderId: string) {
+    super(`訂單 payment 尚未標記 refunded，不得轉 refunded：${orderId}`);
+    this.name = "RefundPaymentNotFlippedError";
+  }
+}
+
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return VALID_TRANSITIONS[from].includes(to);
 }
 
 // 讀取現況共用段：把「查詢失敗」與「查無此單」分開回報——transient DB 錯誤
 // 誤報成「訂單不存在」會誤導呼叫端跳過重試（T110 review）。
-async function fetchCurrentStatus(
+// export（T47）：refund-order.ts 的 pre-guard／冪等複查重用同一套錯誤語意，
+// 不另養複本（散落複本失同步教訓）。
+export async function fetchCurrentStatus(
   supabase: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
 ): Promise<OrderStatus> {
@@ -114,6 +133,17 @@ export async function transitionOrder(
   if (to === "cancelled") {
     const paidBefore = await findPaidPayment(supabase, orderId);
     if (paidBefore) throw new PaidOrderCancelBlockedError(orderId);
+  }
+
+  // 退款守衛（T47，鏡射取消守衛的深度）：訂單要轉 refunded，payment 必須已
+  // 標記 refunded（正規路徑 refund-order.ts 先翻 payment 再呼叫本函式）。
+  // 沒有這道守衛，任何未來呼叫端直接 transitionOrder(id, "refunded") 會產生
+  // 「訂單已退款、payment 還掛 paid」——付款事實與訂單狀態矛盾，且該 payment
+  // 仍會被以 payment='paid' 為鍵的稽核臂持續告警（或反過來永不告警），
+  // 對帳無所適從。
+  if (to === "refunded") {
+    const refunded = await findRefundedPayment(supabase, orderId);
+    if (!refunded) throw new RefundPaymentNotFlippedError(orderId);
   }
 
   await execTransitionRpc(supabase, {

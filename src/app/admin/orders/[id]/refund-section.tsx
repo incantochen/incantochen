@@ -6,6 +6,7 @@ import { AdminPill } from "@/components/admin-pill";
 import {
   ADMIN_STATUS_COLORS,
   STATUS_LABELS,
+  VALID_TRANSITIONS,
   type InvoiceStatus,
   type OrderStatus,
 } from "@/lib/order/order-status";
@@ -16,13 +17,6 @@ import { refundOrderAction } from "./actions";
 // result 處理不讀 warning，會吞掉「退款成功但通知信寄失敗」的提示；比照
 // order-actions.tsx handleShip 用 useAdminNotify＋useTransition 手動處理。
 
-const REFUNDABLE_STATUSES: OrderStatus[] = [
-  "paid",
-  "in_production",
-  "shipped",
-  "completed",
-];
-
 export function RefundSection({
   orderId,
   orderStatus,
@@ -31,6 +25,9 @@ export function RefundSection({
 }: {
   orderId: string;
   orderStatus: OrderStatus;
+  // 嚴格語意：findPaidPayment 查到 status='paid' 的 payment（已退款訂單的
+  // payment 已翻 refunded，此值為 false——除非 Admin Override 改了狀態而
+  // payment 沒翻，見 needsPaymentRepair）。
   hasPaidPayment: boolean;
   invoiceStatus: InvoiceStatus;
 }) {
@@ -40,7 +37,14 @@ export function RefundSection({
   const [confirmed, setConfirmed] = useState(false);
 
   const isRefunded = orderStatus === "refunded";
-  const canRefund = hasPaidPayment && REFUNDABLE_STATUSES.includes(orderStatus);
+  // 「可退款狀態」直接由狀態機推導（比照 order-actions 的 canShip），不另抄
+  // 清單——VALID_TRANSITIONS 改動時這裡自動跟上。
+  const canRefund =
+    hasPaidPayment && VALID_TRANSITIONS[orderStatus].includes("refunded");
+  // 訂單已 refunded 但 payment 還掛 paid＝Admin Override 逃生口留下的半套
+  // 狀態（Override 不翻 payment、不寄信）。提供補登記入口：refundOrder 對
+  // 已 refunded 訂單冪等重入，只補翻 payment＋補寄通知信。
+  const needsPaymentRepair = isRefunded && hasPaidPayment;
 
   function handleRefund() {
     startTransition(async () => {
@@ -59,6 +63,8 @@ export function RefundSection({
     });
   }
 
+  const showForm = canRefund || needsPaymentRepair;
+
   return (
     <section className="bg-white rounded-lg border border-gray-200 p-5">
       <h2 className="text-sm font-semibold text-gray-600 mb-4 uppercase tracking-wide">
@@ -72,24 +78,35 @@ export function RefundSection({
             label={STATUS_LABELS.refunded}
             color={ADMIN_STATUS_COLORS.refunded}
           />
-          <span className="text-sm text-gray-500">此訂單已完成退款登記。</span>
+          <span className="text-sm text-gray-500">
+            {needsPaymentRepair
+              ? "訂單已標記退款，但付款記錄尚未同步。"
+              : "此訂單已完成退款登記。"}
+          </span>
         </div>
       )}
 
-      {!isRefunded && !canRefund && (
+      {!isRefunded && !showForm && (
         <p className="mt-2 text-sm text-gray-400">
           {hasPaidPayment
             ? "目前訂單狀態不可退款。"
-            : "此訂單無已收款記錄，無法退款。"}
+            : "查無已收款的付款記錄，無法在此登記退款（若訂單顯示已付款，可能是對帳同步中，請隔日再試或查 ops-runbook §1.1）。"}
         </p>
       )}
 
-      {!isRefunded && canRefund && (
+      {showForm && (
         <div className="mt-2 space-y-3">
-          <p className="text-xs text-gray-500">
-            請先於綠界廠商後台完成實際退刷，此處僅登記結果（不可逆）：系統將把
-            付款與訂單標記為已退款，並寄送退款通知信給客人。
-          </p>
+          {needsPaymentRepair ? (
+            <p className="text-xs text-red-600">
+              此訂單狀態為已退款（可能經 Admin
+              Override），但付款記錄仍為已付款、退款通知信可能未寄出。請確認已於綠界後台完成退刷後補登記，系統將同步付款記錄並補寄通知信。
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500">
+              請先於綠界廠商後台完成實際退刷，此處僅登記結果（不可逆）：系統將把
+              付款與訂單標記為已退款，並寄送退款通知信給客人。
+            </p>
+          )}
           {invoiceStatus === "issued" && (
             <p className="text-xs text-red-600">
               本訂單已開立發票，退款後須另行處理折讓/作廢（會計流程）。
@@ -122,7 +139,11 @@ export function RefundSection({
             disabled={isPending || !confirmed || !reason.trim()}
             className="px-4 py-2 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-50"
           >
-            {isPending ? "登記中…" : "登記退款"}
+            {isPending
+              ? "登記中…"
+              : needsPaymentRepair
+                ? "補登記退款"
+                : "登記退款"}
           </button>
         </div>
       )}

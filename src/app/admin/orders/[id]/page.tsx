@@ -231,14 +231,18 @@ export default async function AdminOrderDetailPage({
                     className={
                       payment.status === "paid"
                         ? "text-green-700 font-medium"
-                        : "text-gray-700"
+                        : payment.status === "refunded"
+                          ? "text-red-700 font-medium"
+                          : "text-gray-700"
                     }
                   >
                     {payment.status === "paid"
                       ? "已付款"
-                      : payment.status === "failed"
-                        ? "失敗"
-                        : "待付款"}
+                      : payment.status === "refunded"
+                        ? "已退款"
+                        : payment.status === "failed"
+                          ? "失敗"
+                          : "待付款"}
                   </dd>
                 </div>
                 <div>
@@ -288,12 +292,14 @@ export default async function AdminOrderDetailPage({
             }
           />
 
-          {/* 退款（T47）：已退款訂單 paid payment 已翻 refunded，findPaidPayment
-              查無——用 order.status 補上，讓區塊顯示唯讀「已退款」而非「無收款」 */}
+          {/* 退款（T47）。hasPaidPayment 傳嚴格語意（真的有 status='paid' 的
+              payment）：正常已退款訂單此值為 false（payment 已翻 refunded），
+              區塊由 orderStatus 顯示唯讀「已退款」；若 true 且訂單已 refunded
+              ＝Override 留下的半套狀態，區塊會提供補登記入口 */}
           <RefundSection
             orderId={order.id}
             orderStatus={order.status as OrderStatus}
-            hasPaidPayment={Boolean(paidPayment) || order.status === "refunded"}
+            hasPaidPayment={Boolean(paidPayment)}
             invoiceStatus={order.invoice_status}
           />
 

@@ -27,3 +27,26 @@ export async function findPaidPayment(
   }
   return data ?? null;
 }
+
+// 退款守衛（transitionOrder to='refunded'，T47）用：「這筆訂單有沒有已標記
+// refunded 的 payment」。與 findPaidPayment 形狀刻意分開：refunded 沒有
+// partial unique index（paid 才有 uq_payment_one_paid_per_order），同單多筆
+// refunded（§5 重複付款各自退刷）是合法狀態，需 limit(1) 只問存在性；
+// findPaidPayment 靠 unique index 保證至多一筆，maybeSingle 即安全。
+export async function findRefundedPayment(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  orderId: string,
+): Promise<{ id: string } | null> {
+  const { data, error } = await serviceRole
+    .from("payment")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("status", "refunded")
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`findRefundedPayment failed: ${error.message}`);
+  }
+  return data ?? null;
+}

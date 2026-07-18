@@ -25,6 +25,7 @@ import { issueInvoiceForOrder } from "@/lib/order/issue-invoice";
 import {
   refundOrder,
   NoRefundablePaymentError,
+  OrderNotRefundableError,
 } from "@/lib/order/refund-order";
 import { sendOrderRefundedNotification } from "@/lib/email/order-refunded-notification";
 
@@ -186,6 +187,15 @@ export async function refundOrderAction(
   } catch (e) {
     if (e instanceof NoRefundablePaymentError) {
       return { ok: false, error: "此訂單無已收款記錄，無法退款" };
+    }
+    if (e instanceof OrderNotRefundableError) {
+      // pre-guard：pending_payment／cancelled 等狀態不可走記錄式退款（這類
+      // 單屬 ops-runbook §6.1 人工裁決）。UI 已隱藏按鈕，這裡擋 server action
+      // 直接呼叫＋頁面過期的情境。
+      return {
+        ok: false,
+        error: `訂單目前狀態不可退款（${e.currentStatus}），請重新整理頁面確認`,
+      };
     }
     if (e instanceof OrderTransitionRaceError) {
       return { ok: false, error: RACE_MESSAGE };
