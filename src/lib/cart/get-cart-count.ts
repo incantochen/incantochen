@@ -1,7 +1,10 @@
 import "server-only";
 import * as Sentry from "@sentry/nextjs";
-import { cookies } from "next/headers";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import {
+  resolveCartIdentity,
+  findCartByIdentity,
+} from "@/lib/cart/resolve-cart-identity";
 
 // 同一故障窗內只回報一次：DB 故障時每個 pageview 的 header 都會走 fail-soft
 // 分支，若每次都 capture+flush 會在故障期間對 Sentry 噴洪水（且每發都多等
@@ -23,35 +26,38 @@ async function captureCartCountFailure(err: unknown): Promise<void> {
 }
 
 export async function getCartCount(): Promise<number> {
-  const cookieStore = await cookies();
-  const guestToken = cookieStore.get("guest_token")?.value;
-  if (!guestToken) return 0;
+  // T81：resolver 決定身分（登入→member、訪客→guest）。徽章屬裝飾性——任一
+  // 步驟失敗（含 getUser 因 DB 故障 throw、cart／count 查詢 error）一律 fail-soft：
+  // 記 Sentry＋回 0，不讓全站 header 一起掛（T95／§6，不得完全靜默）。
+  try {
+    const identity = await resolveCartIdentity();
+    if (identity.kind === "none") return 0;
 
-  const serviceRole = createServiceRoleClient();
-  const { data: cart, error: cartError } = await serviceRole
-    .from("cart")
-    .select("id")
-    .eq("guest_token", guestToken)
-    .maybeSingle();
+    const serviceRole = createServiceRoleClient();
+    const { data: cart, error: cartError } = await findCartByIdentity(
+      serviceRole,
+      identity,
+    );
 
-  // T95（F-008）：徽章屬裝飾性——DB 故障時 throw 會讓全站 header 一起掛，
-  // 故 fail-soft 回 0；但必須記 Sentry 保留可觀測性，不得完全靜默（§6）。
-  if (cartError) {
-    await captureCartCountFailure(cartError);
+    if (cartError) {
+      await captureCartCountFailure(cartError);
+      return 0;
+    }
+    if (!cart) return 0;
+
+    const { count, error: countError } = await serviceRole
+      .from("cart_item")
+      .select("*", { count: "exact", head: true })
+      .eq("cart_id", cart.id);
+
+    if (countError) {
+      await captureCartCountFailure(countError);
+      return 0;
+    }
+
+    return count ?? 0;
+  } catch (e) {
+    await captureCartCountFailure(e);
     return 0;
   }
-
-  if (!cart) return 0;
-
-  const { count, error: countError } = await serviceRole
-    .from("cart_item")
-    .select("*", { count: "exact", head: true })
-    .eq("cart_id", cart.id);
-
-  if (countError) {
-    await captureCartCountFailure(countError);
-    return 0;
-  }
-
-  return count ?? 0;
 }

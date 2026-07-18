@@ -13,6 +13,16 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
+// T81：resolveCartIdentity 會呼叫 createClient().auth.getUser() 判身分。這裡固定
+// 回未登入 → 身分＝guest（帶 guest-token-1），維持這支測試原本的 guest 路徑。
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    auth: {
+      getUser: async () => ({ data: { user: null }, error: null }),
+    },
+  }),
+}));
+
 const captureException = vi.fn();
 const flush = vi.fn(async () => true);
 vi.mock("@sentry/nextjs", () => ({

@@ -7,9 +7,15 @@ import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCartWriteRateLimit } from "@/lib/rate-limit";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
-
-const GUEST_TOKEN_COOKIE = "guest_token";
-const GUEST_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days, rolling
+import {
+  GUEST_TOKEN_COOKIE,
+  guestTokenCookieOptions,
+} from "@/lib/cart/guest-token";
+import { getOrCreateMemberCart } from "@/lib/cart/get-or-create-member-cart";
+import {
+  resolveCartIdentity,
+  type CartIdentity,
+} from "@/lib/cart/resolve-cart-identity";
 
 type AddToCartInput = {
   productId: string;
@@ -34,11 +40,26 @@ export async function addToCart(
   const headersList = await headers();
   const ip = getClientIp(headersList);
 
-  if (!(await checkCartWriteRateLimit(ip, guestToken))) {
-    return { ok: false, error: "操作過於頻繁，請稍後再試" };
+  const supabase = await createClient();
+
+  // T81 max review #8：身分判定統一走 resolveCartIdentity（單一出處，identity
+  // invariant 見該檔），不再自行 getUser 分流——「登入態絕不 fallback guest
+  // token」這條安全不變式只維護一份。resolver 在 Auth 端暫時性故障時 throw
+  // （查詢失敗 ≠ 已登出），轉成本檔的 {ok:false} 契約。
+  let identity: CartIdentity;
+  try {
+    identity = await resolveCartIdentity();
+  } catch {
+    return { ok: false, error: "系統忙碌，請稍後再試" };
   }
 
-  const supabase = await createClient();
+  // 限流第二鍵用穩定身分值（登入→memberId、訪客→guest_token），避免登入前後
+  // 同一人打到不同 bucket。
+  const rateLimitKey =
+    identity.kind === "member" ? identity.memberId : guestToken;
+  if (!(await checkCartWriteRateLimit(ip, rateLimitKey))) {
+    return { ok: false, error: "操作過於頻繁，請稍後再試" };
+  }
 
   const { data: product, error: productError } = await supabase
     .from("product")
@@ -138,48 +159,80 @@ export async function addToCart(
 
   const serviceRole = createServiceRoleClient();
 
-  if (!guestToken) {
-    guestToken = crypto.randomUUID();
-  }
-
-  // read-first：回頭客（已有 guest_token 命中既有 cart）是常態，先 SELECT
-  // 避免每次都付一次註定失敗的 INSERT＋unique_violation log（coding-system §3.2）
-  const { data: existingCart, error: existingCartError } = await serviceRole
-    .from("cart")
-    .select("id")
-    .eq("guest_token", guestToken)
-    .maybeSingle();
-
-  if (existingCartError) {
-    return { ok: false, error: "系統忙碌，請稍後再試" };
-  }
-
   let cartId: string;
-  if (existingCart) {
-    cartId = existingCart.id;
-  } else {
-    const { data: newCart, error: cartError } = await serviceRole
-      .from("cart")
-      .insert({ guest_token: guestToken })
-      .select("id")
-      .single();
+  // 訪客分支解析出的 guest_token，供結尾簽/續 cookie；member 分支維持 null。
+  let guestCookieToSet: string | null = null;
 
-    if (newCart) {
-      cartId = newCart.id;
-    } else if (cartError?.code === PG_UNIQUE_VIOLATION) {
-      // unique_violation（uq_cart_guest_token）：併發請求已插入同 guest_token
-      // 的 cart，重查取回該筆，不再各自 insert 出重複 cart row
-      const { data: raceCart, error: raceSelectError } = await serviceRole
+  if (identity.kind === "member") {
+    // T81 member 分支：取得（或建立）會員的車。getOrCreateMemberCart 內含
+    // claim fallback（登入併車若失敗，這裡把 guest 車補收進會員名下）與
+    // uq_cart_member 併發重查。member 分支不簽/不續 guest cookie。
+    // email 只在 member row 缺席（孤兒 auth user）時用到——best-effort 補抓，
+    // 失敗以空字串退場，不影響身分判定（身分已由 identity 定案）。
+    let memberEmail = "";
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      memberEmail = user?.email ?? "";
+    } catch {
+      // best-effort：email 抓不到不擋加車。
+    }
+    const memberCart = await getOrCreateMemberCart(
+      serviceRole,
+      identity.memberId,
+      memberEmail,
+      guestToken,
+    );
+    if (!memberCart.ok) {
+      return { ok: false, error: memberCart.error };
+    }
+    cartId = memberCart.cartId;
+  } else {
+    // 訪客分支（維持現行）：guest_token 綁 cart。
+    if (!guestToken) {
+      guestToken = crypto.randomUUID();
+    }
+    guestCookieToSet = guestToken;
+
+    // read-first：回頭客（已有 guest_token 命中既有 cart）是常態，先 SELECT
+    // 避免每次都付一次註定失敗的 INSERT＋unique_violation log（coding-system §3.2）
+    const { data: existingCart, error: existingCartError } = await serviceRole
+      .from("cart")
+      .select("id")
+      .eq("guest_token", guestToken)
+      .maybeSingle();
+
+    if (existingCartError) {
+      return { ok: false, error: "系統忙碌，請稍後再試" };
+    }
+
+    if (existingCart) {
+      cartId = existingCart.id;
+    } else {
+      const { data: newCart, error: cartError } = await serviceRole
         .from("cart")
+        .insert({ guest_token: guestToken })
         .select("id")
-        .eq("guest_token", guestToken)
-        .maybeSingle();
-      if (raceSelectError || !raceCart) {
+        .single();
+
+      if (newCart) {
+        cartId = newCart.id;
+      } else if (cartError?.code === PG_UNIQUE_VIOLATION) {
+        // unique_violation（uq_cart_guest_token）：併發請求已插入同 guest_token
+        // 的 cart，重查取回該筆，不再各自 insert 出重複 cart row
+        const { data: raceCart, error: raceSelectError } = await serviceRole
+          .from("cart")
+          .select("id")
+          .eq("guest_token", guestToken)
+          .maybeSingle();
+        if (raceSelectError || !raceCart) {
+          return { ok: false, error: "建立購物車失敗" };
+        }
+        cartId = raceCart.id;
+      } else {
         return { ok: false, error: "建立購物車失敗" };
       }
-      cartId = raceCart.id;
-    } else {
-      return { ok: false, error: "建立購物車失敗" };
     }
   }
 
@@ -197,13 +250,15 @@ export async function addToCart(
 
   await touchCartUpdatedAt(serviceRole, cartId);
 
-  cookieStore.set(GUEST_TOKEN_COOKIE, guestToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: GUEST_TOKEN_MAX_AGE,
-  });
+  // guest 分支才簽/續 guest cookie（決策 #14：效期僅由 addToCart 續命）；
+  // member 分支 guestCookieToSet 維持 null、不碰 guest cookie。
+  if (guestCookieToSet !== null) {
+    cookieStore.set(
+      GUEST_TOKEN_COOKIE,
+      guestCookieToSet,
+      guestTokenCookieOptions(),
+    );
+  }
 
   return { ok: true };
 }
