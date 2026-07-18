@@ -33,9 +33,9 @@
 - 驗法：grep `createServiceRoleClient` 本期新增呼叫點，逐一確認寫入前有擁有權守衛。
 
 ### 3. guest_token 生命週期
-- 斷言：httpOnly cookie、30 天 rolling **僅** `addToCart` 成功時重設；cart_item 任何改動前先驗 `cart.guest_token` 與 cookie 一致；90 天過期車由 cron 清。
+- 斷言：httpOnly cookie、30 天 rolling **僅** `addToCart` 成功時重設；cart_item 任何改動前先驗 `cart.guest_token` 與 cookie 一致；90 天過期車由 cron 清，且清理 DELETE **重跑候選守衛**（`.is("member_id", null).lt("updated_at", cutoff)`，guarded delete）——SELECT→DELETE 空窗內被 touch 復活或登入認領（member_id 被設）的車不得被誤刪（T131／F-022）。
 - 錨點：`src/lib/cart/`、`/api/cron/cart-cleanup`。
-- 驗法：grep `guest_token` 新增讀寫點；cookie 設定點僅 addToCart 一處。
+- 驗法：grep `guest_token` 新增讀寫點；cookie 設定點僅 addToCart 一處；cart-cleanup 的 `.delete()` 鏈仍帶 `member_id`／`updated_at` 兩守衛（勿被「DRY 成只綁 id」退化）。
 
 ### 4. 價格唯一出處
 - 斷言：建單鏈上唯一的金額計算是 `verifyCartPrices`（DB 白名單重算）；不存在信任前端／快照價格的新路徑；價格變動回 `priceUpdated` 不建單。
