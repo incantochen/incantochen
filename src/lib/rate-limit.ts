@@ -88,6 +88,23 @@ export async function checkCheckoutGuestRateLimit(
   return results.every((r) => r.success);
 }
 
+// T129（F-024）：checkCompanyIdentifier／checkBarcode 對 ECPay 發票 API 發出
+// 真實外部請求，原本沒有限流保護。只用 IP 維度——呼叫這個函式前
+// checkout/actions.ts 已確認 cart 非空，guest_token 維度在此已無額外防護
+// 意義，IP 已足以限制放大攻擊面。
+const invoiceValidateIpRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(10, "10 m"),
+  prefix: "ratelimit:invoice-validate-ip",
+});
+
+export async function checkInvoiceValidateRateLimit(
+  ip: string | null,
+): Promise<boolean> {
+  if (!ip) return true;
+  return safeLimit(invoiceValidateIpRatelimit, ip);
+}
+
 // T93（F-002）：售後申請需登入才能呼叫，key 用 memberId、不做 IP 維度。
 // 門檻抓寬鬆——正常客人一張訂單只會申請一次，5 次/10 分鐘已足以擋 script
 // 灌爆店家信箱與 support_request 表；同單去重另在 action 層處理。
