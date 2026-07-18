@@ -148,7 +148,7 @@ vi.mock("@/lib/supabase/service-role", () => ({
   createServiceRoleClient: () => makeServiceRole(),
 }));
 
-import { GET } from "../route";
+import { GET, CLEANUP_BATCH_LIMIT } from "../route";
 
 function buildRequest(auth?: string): Request {
   const headers: Record<string, string> = {};
@@ -171,19 +171,27 @@ beforeEach(() => {
 
 describe("認證", () => {
   it("缺 Authorization header → 401，且未碰 DB（認證先於查詢）", async () => {
+    // 種一筆本可被清的候選車，讓 SELECT／DELETE 若被觸及一定會留下痕跡——
+    // 否則 candidates=[] 時 route 會在 ids.length===0 提前 return、DELETE 永遠
+    // 到不了，deleteFilters.ids 恆 null，這條斷言就變成永遠成立的空話。
+    candidates = [{ id: "c1", member_id: null, updated_at: OLD }];
+
     const res = await GET(buildRequest());
     expect(res.status).toBe(401);
     // 認證須短路在任何 DB 存取之前：若排序被改成先查後驗，未授權請求會打到
-    // SELECT／DELETE，這裡的 null 斷言即失守（比照 pending-payment-expire 測試）。
-    expect(deleteFilters.ids).toBeNull();
+    // SELECT（selectFilters.limit 變 500）與 DELETE（deleteFilters.ids 被填），
+    // 兩條 null 斷言即失守（比照 pending-payment-expire 測試）。
     expect(selectFilters.limit).toBeNull();
+    expect(deleteFilters.ids).toBeNull();
   });
 
   it("Authorization 錯誤 → 401，且未碰 DB", async () => {
+    candidates = [{ id: "c1", member_id: null, updated_at: OLD }];
+
     const res = await GET(buildRequest("Bearer wrong-secret"));
     expect(res.status).toBe(401);
-    expect(deleteFilters.ids).toBeNull();
     expect(selectFilters.limit).toBeNull();
+    expect(deleteFilters.ids).toBeNull();
   });
 
   it("無候選 → 200，deleted: 0", async () => {
@@ -208,11 +216,15 @@ describe("守衛式刪除（F-022）", () => {
     // ＋批量上限必須套在這裡，否則批次預算會被會員車／復活車污染而餓死真正逾期車。
     expect(selectFilters.memberIdNull).toBe(true);
     expect(selectFilters.updatedBefore).not.toBeNull();
-    expect(selectFilters.limit).toBe(500);
+    expect(selectFilters.limit).toBe(CLEANUP_BATCH_LIMIT);
     // 第二道關卡＝DELETE 重跑候選條件（縱深，防 SELECT→DELETE 空窗的 TOCTOU）。
     expect(deleteFilters.memberIdNull).toBe(true);
     expect(deleteFilters.updatedBefore).not.toBeNull();
     expect(deleteFilters.ids).toEqual(["c1", "c2"]);
+    // 兩道關卡必須用「同一個 cutoff」：DELETE 若自算一個新 cutoff（或漏減
+    // 90 天），縱深守衛就與候選條件脫鉤——光斷言 updatedBefore 非 null 抓不到，
+    // 故釘住兩者相等。
+    expect(deleteFilters.updatedBefore).toBe(selectFilters.updatedBefore);
     // DELETE 必須 chain .select("id")，否則 supabase-js 回 data:null、deleted 恆 0。
     expect(deleteFilters.selectCalled).toBe(true);
   });
