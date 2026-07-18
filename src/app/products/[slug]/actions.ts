@@ -3,6 +3,7 @@
 import { cookies, headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCartWriteRateLimit } from "@/lib/rate-limit";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
@@ -165,8 +166,8 @@ export async function addToCart(
 
     if (newCart) {
       cartId = newCart.id;
-    } else if (cartError?.code === "23505") {
-      // 23505 = unique_violation（uq_cart_guest_token）：併發請求已插入同 guest_token
+    } else if (cartError?.code === PG_UNIQUE_VIOLATION) {
+      // unique_violation（uq_cart_guest_token）：併發請求已插入同 guest_token
       // 的 cart，重查取回該筆，不再各自 insert 出重複 cart row
       const { data: raceCart, error: raceSelectError } = await serviceRole
         .from("cart")

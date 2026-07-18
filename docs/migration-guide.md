@@ -68,6 +68,20 @@ supabase migration new create_product_option_tables
 > `config_snapshot`(JSONB)。白名單三層 `applies_to → ProductOption →
 > ProductOptionValue` 的外鍵與唯一鍵要到位。
 
+### 3.1 對「已有資料的正式表」加 index：優先評估 `CONCURRENTLY`（T132／F-018）
+
+- **判準**：若要對一張**已累積資料的正式表**新增 index（如 `0008` 首次對 `cart`
+  加 `uq_cart_guest_token`），優先用 `CREATE INDEX CONCURRENTLY`。普通
+  `CREATE INDEX` 建置期間持 **ACCESS EXCLUSIVE 鎖**、擋住該表所有寫入——小表
+  瞬間完成無感，但大表會把部署窗口拖成一段寫入中斷。
+- **Supabase 交易包裹限制**：`db push` 預設把每支 migration 包在單一交易內，而
+  `CREATE INDEX CONCURRENTLY` **不能在交易區塊中執行**。因此該語句必須**獨立成
+  一支 migration、檔內不含其他語句**（必要時於檔頭註明「本檔需非交易化執行」）；
+  唯一約束若需線上建立，先 `CREATE UNIQUE INDEX CONCURRENTLY` 再
+  `ALTER TABLE … ADD CONSTRAINT … USING INDEX` 兩步拆開。
+- **例外**：建表當下（表尚無資料）或確定資料量極小、且非熱點寫入表，普通
+  `CREATE INDEX` 即可——**讓它是決策不是慣性**，在 migration 檔頭一句話寫明理由。
+
 ---
 
 ## 4. 可回滾策略

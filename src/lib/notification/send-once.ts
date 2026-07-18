@@ -2,6 +2,7 @@ import "server-only";
 import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
 import type { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 
 type ServiceRole = ReturnType<typeof createServiceRoleClient>;
 
@@ -76,7 +77,7 @@ async function sendOnceInner(
           status: "sent",
           sent_at: new Date().toISOString(),
         });
-      if (recordError && recordError.code !== "23505") {
+      if (recordError && recordError.code !== PG_UNIQUE_VIOLATION) {
         console.error(
           "[notification] best-effort dedup record failed (email was delivered)",
           type,
@@ -201,7 +202,7 @@ async function tryClaim(
       status: "pending",
     });
     if (!error) return "claimed";
-    if (error.code === "23505") return "conflict";
+    if (error.code === PG_UNIQUE_VIOLATION) return "conflict";
     console.error("[notification] insert failed", type, error);
     return "unknown";
   } catch (e) {

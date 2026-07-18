@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { requireAdmin } from "@/lib/auth/require-admin"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes"
 import { flattenFieldErrors } from "@/lib/zod/flatten-field-errors"
 import { REFRESH_TO_RETRY_SUFFIX } from "@/lib/concurrency-message"
 import { PRODUCT_STATUS_META } from "@/lib/product/product-status"
@@ -61,7 +62,7 @@ export async function createProduct(
     .single()
 
   if (error) {
-    if (error.code === "23505") {
+    if (error.code === PG_UNIQUE_VIOLATION) {
       return buildSlugConflictError(supabase, parsed.data.slug)
     }
     return { ok: false, error: "建立商品失敗，請稍後再試" }
@@ -155,7 +156,7 @@ export async function updateProduct(
     .select("id")
 
   if (error) {
-    if (error.code === "23505") {
+    if (error.code === PG_UNIQUE_VIOLATION) {
       return buildSlugConflictError(supabase, parsed.data.slug)
     }
     return { ok: false, error: "更新商品失敗，請稍後再試" }

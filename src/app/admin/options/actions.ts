@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import type {
   AdminActionResult,
   AdminFormActionResult,
@@ -83,7 +84,7 @@ export async function createOptionType(
     .single();
 
   if (error) {
-    if (error.code === "23505") {
+    if (error.code === PG_UNIQUE_VIOLATION) {
       const { data: conflict, error: lookupError } = await supabase
         .from("option_type")
         .select("name")
@@ -276,7 +277,7 @@ export async function createOptionValue(
   });
 
   if (error || !newId) {
-    if (error?.code === "23505") {
+    if (error?.code === PG_UNIQUE_VIOLATION) {
       const { data: conflict, error: lookupError } = await supabase
         .from("option_value")
         .select("label")

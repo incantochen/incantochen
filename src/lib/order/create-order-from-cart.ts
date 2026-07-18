@@ -4,6 +4,7 @@ import { randomInt } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import * as Sentry from "@sentry/nextjs";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import {
   invoiceTargetToMeta,
   type InvoiceTargetInput as InvoiceTargetInputType,
@@ -317,7 +318,7 @@ export async function createOrderFromCart(
 
   if (
     !order &&
-    orderError?.code === "23505" &&
+    orderError?.code === PG_UNIQUE_VIOLATION &&
     !isPendingCartCollision(orderError)
   ) {
     orderNo = generateOrderNo();
@@ -325,7 +326,10 @@ export async function createOrderFromCart(
   }
 
   if (!order) {
-    if (orderError?.code === "23505" && isPendingCartCollision(orderError)) {
+    if (
+      orderError?.code === PG_UNIQUE_VIOLATION &&
+      isPendingCartCollision(orderError)
+    ) {
       const { data: racedOrder, error: racedOrderError } = await serviceRole
         .from("orders")
         .select("order_no")
