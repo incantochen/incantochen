@@ -86,4 +86,4 @@
 - 斷言：每個 Supabase 呼叫解構並處理 `error`；「查詢失敗 ≠ 查無資料」——頁面層 throw 交 error boundary／顯示系統忙碌，不得誤報空清單／notFound／redirect 走人。
 - 錨點：全 codebase；error boundary：`app/cart|checkout|account/error.tsx`。
 - 驗法：本期新增的 `.from(` 查詢逐一確認 error 分支（開放式，配合 dev-review 的 F1 類別掃描）。
-- 歷史教訓：F-008 修 7 處後同根因仍擴散（F-017），逐點修必配清單驗。
+- 歷史教訓：F-008 修 7 處後同根因仍擴散（F-017），逐點修必配清單驗。F-017 最後未收斂的 `products/[slug]/actions.ts`（product／product_option）＋同函式 count 查詢已於 2026-07-18（T130／PR #81）補齊，F-017 全數收斂——印證「逐點修必配清單驗」直到清單清空。
