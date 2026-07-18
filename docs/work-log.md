@@ -773,6 +773,21 @@
 
 ---
 
+#### #T81 ／ #T133 / M2 購物車 / 會員購物車合併（登入併車）＋ proxy 預簽 guest_token（PR #84）
+
+**說明**：cart.member_id 全程未用、購物車完全綁 guest_token cookie——會員換裝置／清 cookie 即遺失（T81）；首次訪客近乎同時雙擊加車競態未消（T133）。兩者耦合（T133 任務描述已明示），合一支 PR：proxy.ts 首載預簽 guest_token＋登入時把 guest cart 併入會員名下、讀取鏈六處改 member-aware。
+
+| 項目     | 內容 |
+| -------- | ---- |
+| 狀態     | ✅ 完成（PR #84 squash `2e941d2`，2026-07-18） |
+| 產出     | `src/lib/cart/resolve-cart-identity.ts`（身分解析單一出處，登入態硬不變式絕不 fallback guest token）、`merge-guest-cart.ts`（`mergeGuestCartOnLogin` claim／merge、`backfillCartMemberId`）、`get-or-create-member-cart.ts`、`guest-token.ts`（cookie 常數單一出處）；`proxy.ts` 預簽；讀取鏈六處（read-cart／get-cart-count／cart actions／checkout／admin checkout／addToCart）改走 resolver；migration `0018_cart_member_unique.sql`（`uq_cart_member`，已 db push＋gen types）；T135（admin 代客建單共用車問題，轉未來任務）。 |
+| 更新描述 | 1. Ultraplan 雲端執行產出初版 PR。2. 本機 `/code-review max`（10 角度＋逐項 verifier）揪出並修復 7 項：`getOrCreateMemberCart` claim 的 error／conflict 與 none 混流（error 靜默建空車使原 guest 車孤兒化；conflict 不併車）；`resolveCartIdentity` 未檢查 `getUser` error（Auth 暫時性故障誤判已登出，改 `isAuthSessionMissingError` 分流＋故障上拋，3 個裸呼叫端補 try/catch）；`checkout.ts` 兩次獨立 `getUser` 可能不一致致訂單掛錯人（改只認 resolver identity，第二次僅補抓 email）；`mergeCarts` 搬列缺擁有權鎖（共用瀏覽器兩會員併發併車互吃品項，補 CAS 鎖）；`selectMemberCartId` 兩檔重複（去重）；`addToCart` 繞過 resolver（收斂）；`mergeGuestCartOnLogin` fail-soft 改結構保證（try 包全函式，兩登入呼叫端移除重複包裝）。3. 手動端到端驗證（production DB）追加抓到一個回歸：`trg_cart_updated_at` trigger 在每次 UPDATE 都把 `updated_at` 蓋成 DB now()，CAS 鎖 SET 的 JS 時間戳從未落地、刪殼 guard 永遠 miss（空殼不刪、cookie 不清）——單元測試 mock 不含 trigger 行為漏測，靠真 DB 手動走流程才暴露；改用 RETURNING 回讀 trigger 實寫值，回填 `docs/coding-system.md` 案例庫。4. Merge 前 `git merge origin/master`（合入同日先落地的 T131 guarded delete，零衝突）。5. 驗收：訪客加車→OTP 登入併車（claim／merge／空殼刪除／token 輪替全驗）、跨瀏覽器同帳號同車、跨帳號隔離（自建臨時 magic-link 產生器繞過 Resend sandbox 單一收件限制測試、測完即刪）、會員/訪客結帳（含 T71 既有會員擋下）、admin 代客建單，629 tests／lint／tsc／build 全綠。 |
+| 待辦     | 無 |
+| 依賴     | T08、T70（T81）；T70（T133） |
+| 裁決不修 | Admin 代客建單全帳號共用一車、換裝置會靜默取消前一張待付款訂單（verifier CONFIRMED）→ 轉 **T135**（per-draft cart 方向已定；「單一 admin 車」評估否決，`uq_orders_one_pending_per_cart` 仍逼取消前單）。`backfillCartMemberId` 陌生 email 曝光面擴大（訪客結帳種未註冊 email、日後真正主人登入會看到被種的購物車內容）→ 機率極低接受（既有「結帳即會員」決策 #3 的邊際擴大，非全新風險），T35 上線前隨 email 驗證決策一併重審。 |
+
+---
+
 ## 📋 日誌範本（複製使用）
 
 ```
