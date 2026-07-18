@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import type {
   AdminActionResult,
   AdminFormActionResult,
@@ -162,7 +163,7 @@ export async function addProductOption(
   });
 
   if (error || !newId) {
-    if (error?.code === "23505") {
+    if (error?.code === PG_UNIQUE_VIOLATION) {
       return {
         ok: false,
         error: "此選項類型已加入過",
@@ -374,7 +375,7 @@ export async function addProductOptionValue(
     .maybeSingle();
 
   if (error || !inserted) {
-    if (error?.code === "23505") {
+    if (error?.code === PG_UNIQUE_VIOLATION) {
       return {
         ok: false,
         error: "此選項值已加入白名單",

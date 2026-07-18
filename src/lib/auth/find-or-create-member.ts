@@ -1,5 +1,6 @@
 import "server-only";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import { normalizeEmail } from "@/lib/auth/normalize-email";
 
 // §6：SDK 錯誤回傳必檢查——insert 失敗過去被靜默吞掉，呼叫端（含 T111 新增
@@ -29,7 +30,7 @@ export async function findOrCreateMember(userId: string, email: string) {
 
   // 23505 = unique_violation：併發下兩個呼叫端同時幫同一個 userId 建 member
   // row，其中一個撞唯一鍵——不是失敗，member row 確實已存在，視為成功。
-  if (insertError && insertError.code !== "23505") {
+  if (insertError && insertError.code !== PG_UNIQUE_VIOLATION) {
     throw new Error(`findOrCreateMember: 建立會員失敗 - ${insertError.message}`);
   }
 }

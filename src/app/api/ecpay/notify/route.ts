@@ -4,6 +4,7 @@ import * as Sentry from "@sentry/nextjs";
 import { verifyCheckMacValue } from "@/lib/ecpay/check-mac-value";
 import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { PG_UNIQUE_VIOLATION } from "@/lib/supabase/postgres-error-codes";
 import {
   ensureOrderPaid,
   ensureNotificationSent,
@@ -142,8 +143,8 @@ export async function POST(request: Request) {
         raw_callback: params,
       });
 
-      // 23505 = unique_violation：並發請求已插入，視為冪等成功
-      if (insertError && insertError.code !== "23505") {
+      // unique_violation：並發請求已插入，視為冪等成功
+      if (insertError && insertError.code !== PG_UNIQUE_VIOLATION) {
         return ERR("DB insert failed");
       }
 
