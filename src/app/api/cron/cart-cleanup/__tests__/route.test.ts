@@ -10,8 +10,10 @@ vi.mock("@/lib/env.server", () => ({
 }));
 
 const captureException = vi.fn();
+const captureMessage = vi.fn();
 vi.mock("@sentry/nextjs", () => ({
   captureException: (...args: unknown[]) => captureException(...args),
+  captureMessage: (...args: unknown[]) => captureMessage(...args),
 }));
 
 type CartRow = { id: string; member_id: string | null; updated_at: string };
@@ -78,8 +80,11 @@ function makeServiceRole() {
           return selectChain;
         },
         then: (resolve: (v: unknown) => void) => {
+          // 忠實模擬 PostgREST：只回傳 .limit(n) 要求的筆數，route 才能靠
+          // 「回傳筆數 > 批量上限」偵測積壓（limit+1 探測）。
+          const lim = selectFilters.limit ?? candidates.length;
           resolve({
-            data: candidates.map((c) => ({ id: c.id })),
+            data: candidates.slice(0, lim).map((c) => ({ id: c.id })),
             error: selectError,
           });
         },
@@ -167,6 +172,7 @@ beforeEach(() => {
   resetSelectFilters();
   resetDeleteFilters();
   captureException.mockReset();
+  captureMessage.mockReset();
 });
 
 describe("認證", () => {
@@ -197,7 +203,7 @@ describe("認證", () => {
   it("無候選 → 200，deleted: 0", async () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ deleted: 0 });
+    expect(await res.json()).toEqual({ deleted: 0, truncated: false });
   });
 });
 
@@ -211,12 +217,14 @@ describe("守衛式刪除（F-022）", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ deleted: 2 });
+    expect(await res.json()).toEqual({ deleted: 2, truncated: false });
     // 第一道關卡＝候選 SELECT：守衛條件（member_id IS NULL + updated_at < cutoff）
     // ＋批量上限必須套在這裡，否則批次預算會被會員車／復活車污染而餓死真正逾期車。
     expect(selectFilters.memberIdNull).toBe(true);
     expect(selectFilters.updatedBefore).not.toBeNull();
-    expect(selectFilters.limit).toBe(CLEANUP_BATCH_LIMIT);
+    // limit 為 CLEANUP_BATCH_LIMIT + 1：多撈一筆是截斷探測（見 route 註解），
+    // 本輪仍只處理前 CLEANUP_BATCH_LIMIT 筆。
+    expect(selectFilters.limit).toBe(CLEANUP_BATCH_LIMIT + 1);
     // 第二道關卡＝DELETE 重跑候選條件（縱深，防 SELECT→DELETE 空窗的 TOCTOU）。
     expect(deleteFilters.memberIdNull).toBe(true);
     expect(deleteFilters.updatedBefore).not.toBeNull();
@@ -241,7 +249,7 @@ describe("守衛式刪除（F-022）", () => {
 
     expect(res.status).toBe(200);
     // 只有 c2 真的被刪；deleted 反映 DELETE 實際命中列數，非候選數。
-    expect(await res.json()).toEqual({ deleted: 1 });
+    expect(await res.json()).toEqual({ deleted: 1, truncated: false });
   });
 
   it("候選在 DELETE 前被登入認領（member_id 被設）→ 該車存活（T81 兌現後情境）", async () => {
@@ -255,7 +263,55 @@ describe("守衛式刪除（F-022）", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ deleted: 1 });
+    expect(await res.json()).toEqual({ deleted: 1, truncated: false });
+  });
+});
+
+describe("批量上限與截斷訊號（T134）", () => {
+  it("到期車數 = 批量上限（恰好撈滿、後面沒有更多）→ 不誤觸截斷", async () => {
+    // limit+1 探測的意義：撈到「恰好等於上限」不算截斷，避免每次剛好撈滿就
+    // 誤報 backlog。種 CLEANUP_BATCH_LIMIT 筆，route 用 limit+1 撈只回這麼多。
+    candidates = Array.from({ length: CLEANUP_BATCH_LIMIT }, (_, i) => ({
+      id: `c${i}`,
+      member_id: null as string | null,
+      updated_at: OLD,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      deleted: CLEANUP_BATCH_LIMIT,
+      truncated: false,
+    });
+    expect(captureMessage).not.toHaveBeenCalled();
+  });
+
+  it("到期車數 > 批量上限 → truncated:true＋Sentry 告警，本輪只清上限筆數", async () => {
+    // 種 CLEANUP_BATCH_LIMIT + 1 筆：route 用 limit+1 撈到 LIMIT+1 筆、偵測到
+    // 積壓，只處理前 LIMIT 筆（殘量留隔日），並發告警。
+    candidates = Array.from({ length: CLEANUP_BATCH_LIMIT + 1 }, (_, i) => ({
+      id: `c${i}`,
+      member_id: null as string | null,
+      updated_at: OLD,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(res.status).toBe(200);
+    // 本輪只刪 CLEANUP_BATCH_LIMIT 筆（DELETE 的 in() 只帶前 LIMIT 個 id），
+    // 多撈的那筆不進 DELETE、留隔日。
+    expect(await res.json()).toEqual({
+      deleted: CLEANUP_BATCH_LIMIT,
+      truncated: true,
+    });
+    expect(deleteFilters.ids).toHaveLength(CLEANUP_BATCH_LIMIT);
+    // 積壓告警必須發（warning 級），否則棄車會無聲累積到 DB 效能才被發現。
+    expect(captureMessage).toHaveBeenCalledTimes(1);
+    expect(captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("積壓"),
+      expect.objectContaining({ level: "warning" }),
+    );
   });
 });
 
@@ -266,7 +322,7 @@ describe("錯誤處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
 
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ deleted: 0 });
+    expect(await res.json()).toEqual({ deleted: 0, truncated: false });
     expect(captureException).toHaveBeenCalledTimes(1);
   });
 
@@ -277,7 +333,7 @@ describe("錯誤處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
 
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ deleted: 0 });
+    expect(await res.json()).toEqual({ deleted: 0, truncated: false });
     expect(captureException).toHaveBeenCalledTimes(1);
   });
 });
