@@ -116,26 +116,30 @@ export async function mergeCarts(
   memberCartId: string,
   guestCart: GuestCartRow,
 ): Promise<void> {
-  // a0) CAS 鎖：條件式 UPDATE 佔住 G（member_id 仍空＋updated_at 未變才成立；
-  //    SET 改動 WHERE 用到的 updated_at，符合 §6 EvalPlanQual 規則）。搶不到
-  //    （0 列）＝共用瀏覽器上另一個會員的併發 merge 已搶走、或 G 被 claim／
-  //    加車動過——沒有這道鎖，兩個「都已有會員車」的登入可各自把同一台 G 的
-  //    品項搬進自己車裡，先到先贏、後到靜默搬空（0 列無訊號），品項被吃進
-  //    別人帳下。鎖不到一律放棄本次 merge（不搬列、保留 cookie），留給下次
-  //    登入／addToCart 重試收斂。
-  const lockedAt = new Date().toISOString();
+  // a0) CAS 鎖：條件式 UPDATE 佔住 G（member_id 仍空＋updated_at 未變才成立）。
+  //    搶不到（0 列）＝共用瀏覽器上另一個會員的併發 merge 已搶走、或 G 被
+  //    claim／加車動過——沒有這道鎖，兩個「都已有會員車」的登入可各自把同一
+  //    台 G 的品項搬進自己車裡，先到先贏、後到靜默搬空（0 列無訊號），品項被
+  //    吃進別人帳下。鎖不到一律放棄本次 merge（不搬列、保留 cookie），留給
+  //    下次登入／addToCart 重試收斂。
+  //    ⚠️ trg_cart_updated_at（0001）在每次 UPDATE 都把 updated_at 蓋成 DB 的
+  //    now()——SET 進去的值存不進資料庫，所以佔位值隨便給，改用 RETURNING
+  //    （.select）讀回 trigger 實際寫入的值當後續刪殼 guard；比對 JS 端時間戳
+  //    永遠 miss（實測：微秒差）。trigger 也保證每次 UPDATE 必改 updated_at
+  //    這個 WHERE 欄位，EvalPlanQual 防併發雙搶的前提由它成立。
   const { data: locked, error: lockError } = await serviceRole
     .from("cart")
-    .update({ updated_at: lockedAt })
+    .update({ updated_at: new Date().toISOString() })
     .eq("id", guestCart.id)
     .is("member_id", null)
     .eq("updated_at", guestCart.updated_at)
-    .select("id");
+    .select("updated_at");
   if (lockError) {
     await reportMergeFailure(lockError);
     return;
   }
-  if (!locked || locked.length === 0) {
+  const lockedAt = locked?.[0]?.updated_at;
+  if (!lockedAt) {
     return;
   }
 

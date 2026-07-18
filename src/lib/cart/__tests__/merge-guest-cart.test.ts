@@ -47,7 +47,9 @@ const state = {
   moveItemsResult: { data: null, error: null } as Res,
   deleteShellResult: { data: [{ id: "G" }], error: null } as Res,
   backfillResult: { data: null, error: null } as Res,
-  lockResult: { data: [{ id: "G" }], error: null } as Res, // mergeCarts a0 CAS 鎖
+  // mergeCarts a0 CAS 鎖——RETURNING trigger 實際寫入的 updated_at（trg_cart_updated_at
+  // 會蓋掉 SET 值，production 以回讀值當刪殼 guard）
+  lockResult: { data: [{ updated_at: "locked-t" }], error: null } as Res,
 };
 
 const ops: {
@@ -135,7 +137,7 @@ beforeEach(() => {
   state.moveItemsResult = { data: null, error: null };
   state.deleteShellResult = { data: [{ id: "G" }], error: null };
   state.backfillResult = { data: null, error: null };
-  state.lockResult = { data: [{ id: "G" }], error: null };
+  state.lockResult = { data: [{ updated_at: "locked-t" }], error: null };
 });
 
 const cartOps = () => ops.filter((o) => o.table === "cart");
@@ -265,9 +267,10 @@ describe("mergeGuestCartOnLogin（T81）", () => {
         "updated_at" in o.eq,
     );
     expect(lock?.eq.updated_at).toBe("t");
-    // 刪殼帶 updated_at guard——比對的是 a0 鎖寫入的新值（非步驟 2 的舊值）
+    // 刪殼帶 updated_at guard——比對的是 a0 鎖 RETURNING 回讀的 trigger 實寫值
+    //（trg_cart_updated_at 會蓋掉 SET 進去的 JS 時間戳，比對 SET 值必 miss）
     const del = ops.find((o) => o.table === "cart" && o.op === "delete");
-    expect(del?.eq.updated_at).toBe(lock?.values?.updated_at);
+    expect(del?.eq.updated_at).toBe("locked-t");
     expect(touchCalls).toContain("M");
     expect(cookieDeleted).toBe(true);
   });
