@@ -20,6 +20,19 @@ vi.mock("@/lib/auth/require-admin", () => ({
   requireAdmin: (...a: unknown[]) => requireAdmin(...a),
 }));
 
+// T81：admin 是登入 user——resolveCartIdentity 以 createClient().auth.getUser()
+// 判身分＝member（admin 的 user id），代客建單的找車段改依 member_id。
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    auth: {
+      getUser: async () => ({
+        data: { user: { id: "admin-1", email: "admin@example.com" } },
+        error: null,
+      }),
+    },
+  }),
+}));
+
 const findOrCreateMemberByEmail = vi.fn();
 vi.mock("@/lib/auth/find-or-create-member", () => ({
   findOrCreateMemberByEmail: (...a: unknown[]) =>
@@ -128,8 +141,9 @@ describe("createAdminOrderFromCart", () => {
     expect(requireAdmin).toHaveBeenCalled();
   });
 
-  it("購物袋是空的（無 guest_token）→ 回錯誤，不查會員", async () => {
-    cookieJar = {};
+  it("購物袋是空的（admin 無會員車）→ 回錯誤，不查會員", async () => {
+    // T81：admin 加車走 member 分支，故「空」＝admin 的 member 車不存在。
+    state.cart = null;
     const result = await createAdminOrderFromCart(FORM);
     expect(result).toMatchObject({ ok: false });
     expect(findOrCreateMemberByEmail).not.toHaveBeenCalled();

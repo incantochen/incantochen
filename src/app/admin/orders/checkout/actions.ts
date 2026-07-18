@@ -1,7 +1,6 @@
 "use server";
 import "server-only";
 
-import { cookies } from "next/headers";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { findOrCreateMemberByEmail } from "@/lib/auth/find-or-create-member";
@@ -15,6 +14,11 @@ import {
   resolvePendingOrderForCart,
 } from "@/lib/order/create-order-from-cart";
 import { serverEnv } from "@/lib/env.server";
+import {
+  resolveCartIdentity,
+  findCartByIdentity,
+  type CartIdentity,
+} from "@/lib/cart/resolve-cart-identity";
 
 type CreateAdminOrderResult =
   | { ok: true; orderNo: string; paymentLink: string }
@@ -45,19 +49,27 @@ export async function createAdminOrderFromCart(
   const email = normalizeEmail(parsed.data.email);
 
   const serviceRole = createServiceRoleClient();
-  const cookieStore = await cookies();
-  const guestToken = cookieStore.get("guest_token")?.value;
 
-  if (!guestToken) {
+  // T81：admin 代客建單前，admin 在商品頁加車走的是 member 分支（addToCart
+  // 把商品放進 admin 自己的會員車），故這裡以 resolver 的身分（admin＝登入
+  // member）找車，而非讀 guest_token cookie。訂單掛的 member 仍是下方客人
+  // email 解析出的 memberId，不受影響。
+  // resolver 在 Auth 端暫時性故障時 throw（查詢失敗 ≠ 已登出），轉成本檔契約。
+  let identity: CartIdentity;
+  try {
+    identity = await resolveCartIdentity();
+  } catch {
+    return { ok: false, error: "讀取購物袋失敗，請稍後再試" };
+  }
+  if (identity.kind === "none") {
     return { ok: false, error: "購物袋是空的，請先到商品頁加入商品" };
   }
 
   // §6：查詢失敗 ≠ 查無資料——DB 暫時性故障不可誤判成「購物袋是空的」。
-  const { data: cart, error: cartError } = await serviceRole
-    .from("cart")
-    .select("id, updated_at")
-    .eq("guest_token", guestToken)
-    .maybeSingle();
+  const { data: cart, error: cartError } = await findCartByIdentity(
+    serviceRole,
+    identity,
+  );
 
   if (cartError) {
     return { ok: false, error: "讀取購物袋失敗，請稍後再試" };

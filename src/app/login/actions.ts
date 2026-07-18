@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member";
+import { mergeGuestCartOnLogin } from "@/lib/cart/merge-guest-cart";
 import { normalizeEmail } from "@/lib/auth/normalize-email";
 import {
   otpEmailRatelimit,
@@ -76,6 +77,12 @@ export async function verifyOtpCode(
   }
 
   await findOrCreateMember(data.user.id, data.user.email ?? email);
+
+  // T81：登入成功後把訪客購物車併入會員名下。fail-soft（吞錯記 Sentry、絕不
+  // throw）是 mergeGuestCartOnLogin 的結構保證（try 包住整個函式體），呼叫端
+  // 直接 await——登入不因併車失敗而中止，車與 cookie 都還在，下次登入／加車
+  // 會自我修復。
+  await mergeGuestCartOnLogin(data.user.id);
 
   return { ok: true };
 }

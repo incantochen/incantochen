@@ -25,15 +25,26 @@ const state = {
   cartItem: {
     id: "item-1",
     cart_id: "cart-1",
-    cart: { guest_token: "guest-abc" },
+    cart: { member_id: null, guest_token: "guest-abc" },
   } as any,
   cartItemMutationError: null as any,
   cartTouchError: null as any,
   cartItemSelectError: null as any,
+  // T81：登入身分——null＝訪客（比 guest_token），非 null＝比 member_id
+  authUser: null as any,
 };
 vi.mock("@/lib/rate-limit", () => ({
   checkCartWriteRateLimit: async () =>
     state.tokenRateLimitSuccess && state.ipRateLimitSuccess,
+}));
+
+// T81：resolveCartIdentity 呼叫 createClient().auth.getUser() 判身分。
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    auth: {
+      getUser: async () => ({ data: { user: state.authUser }, error: null }),
+    },
+  }),
 }));
 
 type Recorded = { table: string; op: string; values?: any };
@@ -96,11 +107,12 @@ beforeEach(() => {
   state.cartItem = {
     id: "item-1",
     cart_id: "cart-1",
-    cart: { guest_token: "guest-abc" },
+    cart: { member_id: null, guest_token: "guest-abc" },
   };
   state.cartItemMutationError = null;
   state.cartTouchError = null;
   state.cartItemSelectError = null;
+  state.authUser = null;
 });
 
 describe("cart actions — ownership／限流／cart.updated_at touch（T78）", () => {
@@ -177,5 +189,35 @@ describe("cart actions — ownership／限流／cart.updated_at touch（T78）",
     const result = await removeCartItem("item-1");
 
     expect(result).toEqual({ ok: true });
+  });
+
+  // T81：登入者依 member_id 核對擁有權，不看 guest_token。
+  it("登入者操作自己 member 車的項目 → 通過（比 member_id、不看 guest_token）", async () => {
+    state.authUser = { id: "mem-1" };
+    cookieJar = {}; // 登入態不需要 guest cookie
+    state.cartItem = {
+      id: "item-1",
+      cart_id: "cart-1",
+      cart: { member_id: "mem-1", guest_token: null },
+    };
+
+    const result = await updateCartItemQuantity("item-1", 2);
+
+    expect(result).toEqual({ ok: true });
+    const touch = recorded.find((r) => r.table === "cart_touch");
+    expect(touch?.values.id).toBe("cart-1");
+  });
+
+  it("登入者操作他人 member 車的項目 → 拒絕", async () => {
+    state.authUser = { id: "mem-1" };
+    state.cartItem = {
+      id: "item-1",
+      cart_id: "cart-1",
+      cart: { member_id: "mem-2", guest_token: null },
+    };
+
+    const result = await removeCartItem("item-1");
+
+    expect(result).toEqual({ ok: false, error: "找不到此購物車項目" });
   });
 });

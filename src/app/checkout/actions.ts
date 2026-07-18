@@ -26,6 +26,12 @@ import {
 import { orderAccessCookieOptions } from "@/lib/order/order-access-token";
 import { getClientIp } from "@/lib/get-client-ip";
 import {
+  resolveCartIdentity,
+  findCartByIdentity,
+  type CartIdentity,
+} from "@/lib/cart/resolve-cart-identity";
+import { backfillCartMemberId } from "@/lib/cart/merge-guest-cart";
+import {
   checkCheckoutGuestRateLimit,
   checkInvoiceValidateRateLimit,
 } from "@/lib/rate-limit";
@@ -72,19 +78,29 @@ export async function createOrder(
 
   const serviceRole = createServiceRoleClient();
   const cookieStore = await cookies();
-  const guestToken = cookieStore.get("guest_token")?.value;
 
   // ② Read cart (service role — RLS blocks all direct reads)
-  if (!guestToken) {
+  // T81：resolver 決定身分（登入→member、訪客→guest）；guestToken 仍留作
+  // 下方訪客限流的第二鍵與 pending 去重比對。resolver 在 Auth 端暫時性故障時
+  // throw（查詢失敗 ≠ 已登出），轉成本檔的 {ok:false} 契約。
+  let identity: CartIdentity;
+  try {
+    identity = await resolveCartIdentity();
+  } catch {
+    return { ok: false, error: "讀取購物車失敗，請稍後再試" };
+  }
+  const guestToken =
+    identity.kind === "guest" ? identity.guestToken : undefined;
+
+  if (identity.kind === "none") {
     return { ok: false, error: "購物車已空，請重新加入商品" };
   }
 
   // §6：查詢失敗 ≠ 查無資料——DB 暫時性故障不可誤判成「購物車已空」。
-  const { data: cart, error: cartError } = await serviceRole
-    .from("cart")
-    .select("id, updated_at")
-    .eq("guest_token", guestToken)
-    .maybeSingle();
+  const { data: cart, error: cartError } = await findCartByIdentity(
+    serviceRole,
+    identity,
+  );
 
   if (cartError) {
     return { ok: false, error: "讀取購物車失敗，請稍後再試" };
@@ -138,10 +154,12 @@ export async function createOrder(
     }
   }
 
-  // ②-b Pending 訂單 dedup（T75）——必須在會員解析**之前**跑：訪客第一次
-  // 成功建單時 member row 已隨之建立，若先解析會員，重送未變更 cart 會撞上
-  // 「email 已註冊請登入」而拿不到既有訂單的付款頁。cart 由 guest_token
-  // cookie 綁定、本來就是本人的，故不帶 memberId 比對。
+  // ②-b Pending 訂單 dedup（T75）——必須在**會員建立／既有會員比對**之前跑：
+  // 訪客第一次成功建單時 member row 已隨之建立，若先解析會員，重送未變更 cart
+  // 會撞上「email 已註冊請登入」而拿不到既有訂單的付款頁。（T81：resolver 在
+  // 上方已呼叫過 getUser 判身分，但那只是讀取、無副作用，不影響此順序約束——
+  // 約束針對的是下方 createUser／existingMember 查詢，不是 getUser。）訪客 cart
+  // 由 guest_token 綁定、本來就是本人的，故不帶 memberId 比對。
   const pending = await resolvePendingOrderForCart(
     serviceRole,
     cartId,
@@ -177,22 +195,31 @@ export async function createOrder(
   }
 
   // ③ Member find-or-create ("結帳即會員")
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  // T81 max review #4：member／guest 分流**只認上方 resolver 的 identity**，不再
+  // 二次 getUser() 重判——兩次獨立讀 session 中間隔著 ECPay 驗證等真實 I/O，第二
+  // 次暫時性失敗會把已登入會員誤導進訪客分支：cartId 是會員的車、memberId 卻是
+  // 表單 email 新建的會員（RPC 不比對兩者），訂單掛錯人。getUser 在 member 分支
+  // 只補抓 email（member row 建立用），失敗退回表單 email，不影響身分判定。
   let memberId: string;
 
-  if (user) {
-    // Already logged in — ensure member row exists
-    // T71 ultra review #3：user.email 來自 session，跟訪客分支的正規化保持一致，
+  if (identity.kind === "member") {
+    let sessionEmail: string | null = null;
+    try {
+      const supabase = await createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      sessionEmail = user?.email ?? null;
+    } catch {
+      // email 補抓失敗不擋建單——身分已由 identity 定案，退回表單 email。
+    }
+    // T71 ultra review #3：session email 跟訪客分支的正規化保持一致，
     // 避免 member.email 累積不同大小寫版本、之後訪客查詢比對不到。
     await findOrCreateMember(
-      user.id,
-      user.email ? normalizeEmail(user.email) : email,
+      identity.memberId,
+      sessionEmail ? normalizeEmail(sessionEmail) : email,
     );
-    memberId = user.id;
+    memberId = identity.memberId;
   } else {
     // T71 ultra review：這個分支等於一個帳號存在偵測 oracle（email 是否命中
     // 既有會員），先限流再查，避免被拿去大量掃描 email。命中限流時刻意不帶
@@ -233,6 +260,11 @@ export async function createOrder(
     }
     await findOrCreateMember(newAuthData.user.id, email);
     memberId = newAuthData.user.id;
+
+    // T81：結帳即會員——把當前 cart 掛到新會員名下（保留 guest_token，見
+    // backfillCartMemberId 註解），補上「結帳路徑也不設 member_id」的缺口，
+    // 新會員的車跨裝置可見。fail-soft：失敗不擋建單（車仍靠 guest_token 綁定）。
+    await backfillCartMemberId(serviceRole, memberId, cartId);
   }
 
   // ④⑤⑥⑦⑧ 驗價、金額計算、建單（R-S-Q／order_no 撞號重試）：

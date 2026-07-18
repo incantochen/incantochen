@@ -53,10 +53,16 @@ const state = {
   // T78：guest_token 限流 mock 開關；cart.update（touch）回傳的 error
   tokenRateLimitSuccess: true,
   cartTouchError: null as any,
+  // T81：登入身分——null＝訪客（走 guest 分支，多數既有測試）；非 null＝
+  // 走 member 分支（getOrCreateMemberCart）
+  authUser: null as any,
 };
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
+    auth: {
+      getUser: async () => ({ data: { user: state.authUser }, error: null }),
+    },
     from: (table: string) => {
       if (table === "product") {
         const chain: any = {
@@ -153,6 +159,7 @@ beforeEach(() => {
   state.cartItemInsertError = null;
   state.tokenRateLimitSuccess = true;
   state.cartTouchError = null;
+  state.authUser = null;
 });
 
 describe("addToCart — cart get-or-create（T130 read-first）", () => {
@@ -273,6 +280,22 @@ describe("addToCart — cart get-or-create（T130 read-first）", () => {
     expect(result).toEqual({ ok: true });
     const touch = recorded.find((r) => r.table === "cart_touch");
     expect(touch?.values.id).toBe("cart-new");
+  });
+
+  // T81：登入者加車走 member 分支——getOrCreateMemberCart 命中既有會員車、
+  // 品項寫進該車、且**不簽/不續 guest cookie**（getOrCreateMemberCart 的完整
+  // 併發分支另在 get-or-create-member-cart.test.ts 覆蓋）。
+  it("登入態加車 → 走 member 分支、cart_item 進會員車、不 set guest cookie", async () => {
+    state.authUser = { id: "mem-1", email: "m@example.com" };
+    cookieJar = { guest_token: "guest-abc" }; // 即使帶著 guest cookie 也不理會
+    state.cartSelectResults = [{ data: { id: "cart-mem" }, error: null }];
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: true });
+    const cartItemInsert = recorded.find((r) => r.table === "cart_item");
+    expect(cartItemInsert?.values.cart_id).toBe("cart-mem");
+    expect(cookieSetCalls).toHaveLength(0);
   });
 });
 

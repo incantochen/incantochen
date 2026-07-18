@@ -2,6 +2,10 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { env } from "@/lib/env";
+import {
+  GUEST_TOKEN_COOKIE,
+  guestTokenCookieOptions,
+} from "@/lib/cart/guest-token";
 
 // T97（F-010）：CSP 從 next.config.ts 搬到這裡（單一出處）——nonce 必須
 // 每請求新產，next.config 的靜態 headers() 做不到。production 的 script-src
@@ -57,6 +61,21 @@ export async function proxy(request: NextRequest) {
     request.headers.delete("x-nonce");
   }
 
+  // T133：首次訪客（無 cookie）近乎同時雙擊加車，兩個 addToCart 各自
+  // randomUUID() 產不同 token → 兩台 cart、一台對客人消失（uq_cart_guest_token
+  // 擋不到不同 token 的兩筆 insert）。修法＝頁面首載就預簽 guest_token，讓
+  // 「加入購物袋」永遠不是第一個設 cookie 的動作、消除競爭窗口。
+  // request 端先 set：讓同請求下游 Server Component 的 cookies() 立即看得到，
+  // 且下面 setAll 以 request 為基底重建 response 時不會弄丟這顆。實際 Set-Cookie
+  // 到 browser 的動作放在最終 response 上（見 CSP 旁），理由同 CSP：setAll 可能
+  // 已重建 response，太早設會被蓋掉。已有 cookie 則完全不動（不 roll——續命只由
+  // addToCart 負責，決策 #14）。
+  const existingGuestToken = request.cookies.get(GUEST_TOKEN_COOKIE)?.value;
+  const newGuestToken = existingGuestToken ? null : crypto.randomUUID();
+  if (newGuestToken !== null) {
+    request.cookies.set(GUEST_TOKEN_COOKIE, newGuestToken);
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -100,6 +119,16 @@ export async function proxy(request: NextRequest) {
 
   // 放在 getUser() 之後：上面的 setAll 會重建 response，太早設會被蓋掉。
   response.headers.set("Content-Security-Policy", csp);
+
+  // T133：預簽 guest_token 也放這裡（同 CSP 的理由——setAll 可能已重建 response）。
+  // 只在本次請求首簽時 set；已有 cookie 者 newGuestToken 為 null、完全不動。
+  if (newGuestToken !== null) {
+    response.cookies.set(
+      GUEST_TOKEN_COOKIE,
+      newGuestToken,
+      guestTokenCookieOptions(),
+    );
+  }
 
   return response;
 }
