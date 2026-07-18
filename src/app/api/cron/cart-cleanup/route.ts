@@ -42,10 +42,16 @@ export async function GET(request: Request) {
       return Response.json({ deleted: 0 });
     }
 
+    // 守衛式刪除：SELECT 取候選與 DELETE 是兩步、非原子——重跑候選條件
+    // （member_id IS NULL＋updated_at < cutoff）於 DELETE 當下再判一次，
+    // 讓空窗內被 addToCart/touchCartUpdatedAt 推新 updated_at（車已復活）、
+    // 或登入被設 member_id（T81 兌現後）的候選車自動存活，deleted 計數如實。
     const { data, error } = await serviceRole
       .from("cart")
       .delete()
       .in("id", ids)
+      .is("member_id", null)
+      .lt("updated_at", cutoff)
       .select("id");
 
     if (error) throw new Error(`cart cleanup 刪除失敗: ${error.message}`);
