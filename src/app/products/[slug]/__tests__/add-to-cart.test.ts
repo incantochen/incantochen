@@ -45,11 +45,9 @@ const state = {
   ] as any[],
   // cart insert 每次呼叫的回傳（依序消耗）
   cartInsertResults: [] as { data: any; error: any }[],
-  // 23505 後 reselect 的回傳
-  cartReselectResult: { data: { id: "cart-1" }, error: null } as {
-    data: any;
-    error: any;
-  },
+  // maybeSingle 每次呼叫的回傳，依序消耗：第一次是 read-first 的初始查詢，
+  // 若 insert 撞 23505 則第二次是 reselect。預設查無資料（觸發 insert 路徑）
+  cartSelectResults: [] as { data: any; error: any }[],
   maybeSingleCalls: 0,
   cartItemInsertError: null as any,
   // T78：guest_token 限流 mock 開關；cart.update（touch）回傳的 error
@@ -108,7 +106,9 @@ function cartChain() {
       ),
     maybeSingle: () => {
       state.maybeSingleCalls += 1;
-      return Promise.resolve(state.cartReselectResult);
+      return Promise.resolve(
+        state.cartSelectResults.shift() ?? { data: null, error: null },
+      );
     },
   };
   return chain;
@@ -148,15 +148,38 @@ beforeEach(() => {
   cookieSetCalls.length = 0;
   cookieJar = {};
   state.cartInsertResults = [];
-  state.cartReselectResult = { data: { id: "cart-1" }, error: null };
+  state.cartSelectResults = [];
   state.maybeSingleCalls = 0;
   state.cartItemInsertError = null;
   state.tokenRateLimitSuccess = true;
   state.cartTouchError = null;
 });
 
-describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
-  it("全新 guest_token → cart insert 一次成功 → cart_item 用回傳的 id → ok:true、cookie 有 set", async () => {
+describe("addToCart — cart get-or-create（T130 read-first）", () => {
+  it("read-first 命中既有 cart → 直接沿用、不 insert", async () => {
+    cookieJar = { guest_token: "guest-abc" };
+    state.cartSelectResults = [{ data: { id: "cart-existing" }, error: null }];
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: true });
+    const cartItemInsert = recorded.find((r) => r.table === "cart_item");
+    expect(cartItemInsert?.values.cart_id).toBe("cart-existing");
+    expect(recorded.find((r) => r.table === "cart")).toBeUndefined();
+    expect(state.maybeSingleCalls).toBe(1);
+  });
+
+  it("read-first 初始查詢本身出錯 → ok:false, error:系統忙碌，請稍後再試", async () => {
+    cookieJar = { guest_token: "guest-abc" };
+    state.cartSelectResults = [{ data: null, error: { message: "boom" } }];
+
+    const result = await addToCart(INPUT);
+
+    expect(result).toEqual({ ok: false, error: "系統忙碌，請稍後再試" });
+    expect(recorded.find((r) => r.table === "cart")).toBeUndefined();
+  });
+
+  it("全新 guest_token → read-first 查無資料 → insert 一次成功 → cart_item 用回傳的 id → ok:true、cookie 有 set", async () => {
     state.cartInsertResults = [{ data: { id: "cart-new" }, error: null }];
 
     const result = await addToCart(INPUT);
@@ -166,25 +189,31 @@ describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
     expect(cartItemInsert?.values.cart_id).toBe("cart-new");
     expect(cookieSetCalls).toHaveLength(1);
     expect(cookieSetCalls[0]?.name).toBe("guest_token");
-    expect(state.maybeSingleCalls).toBe(0);
+    expect(state.maybeSingleCalls).toBe(1);
   });
 
-  it("併發 guest_token（23505）→ reselect 取回既有 cart → cart_item 正確寫入 → ok:true", async () => {
+  it("併發 guest_token（read-first 落空後 insert 撞 23505）→ reselect 取回既有 cart → cart_item 正確寫入 → ok:true", async () => {
     cookieJar = { guest_token: "guest-abc" };
     state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
-    state.cartReselectResult = { data: { id: "cart-existing" }, error: null };
+    state.cartSelectResults = [
+      { data: null, error: null },
+      { data: { id: "cart-existing" }, error: null },
+    ];
 
     const result = await addToCart(INPUT);
 
     expect(result).toEqual({ ok: true });
     const cartItemInsert = recorded.find((r) => r.table === "cart_item");
     expect(cartItemInsert?.values.cart_id).toBe("cart-existing");
-    expect(state.maybeSingleCalls).toBe(1);
+    expect(state.maybeSingleCalls).toBe(2);
   });
 
   it("23505 後 reselect 查無資料 → ok:false, error:建立購物車失敗", async () => {
     state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
-    state.cartReselectResult = { data: null, error: null };
+    state.cartSelectResults = [
+      { data: null, error: null },
+      { data: null, error: null },
+    ];
 
     const result = await addToCart(INPUT);
 
@@ -193,7 +222,10 @@ describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
 
   it("23505 後 reselect 本身出錯 → ok:false, error:建立購物車失敗", async () => {
     state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
-    state.cartReselectResult = { data: null, error: { message: "boom" } };
+    state.cartSelectResults = [
+      { data: null, error: null },
+      { data: null, error: { message: "boom" } },
+    ];
 
     const result = await addToCart(INPUT);
 
@@ -206,7 +238,7 @@ describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
     const result = await addToCart(INPUT);
 
     expect(result).toEqual({ ok: false, error: "建立購物車失敗" });
-    expect(state.maybeSingleCalls).toBe(0);
+    expect(state.maybeSingleCalls).toBe(1);
   });
 
   it("cart_item insert 失敗（新 cart）→ ok:false、不 set cookie", async () => {
@@ -221,7 +253,10 @@ describe("addToCart — cart insert（T70 insert-then-23505-retry）", () => {
 
   it("cart_item insert 失敗（23505 reselect 後的 cart）→ ok:false、不 set cookie", async () => {
     state.cartInsertResults = [{ data: null, error: { code: "23505" } }];
-    state.cartReselectResult = { data: { id: "cart-existing" }, error: null };
+    state.cartSelectResults = [
+      { data: null, error: null },
+      { data: { id: "cart-existing" }, error: null },
+    ];
     state.cartItemInsertError = { message: "boom" };
 
     const result = await addToCart(INPUT);
@@ -254,6 +289,7 @@ describe("addToCart — T78 限流與 cart.updated_at touch", () => {
 
   it("touch（cart.update）失敗不影響已成功的加車操作", async () => {
     state.cartInsertResults = [{ data: { id: "cart-new" }, error: null }];
+    state.cartSelectResults = [{ data: null, error: null }];
     state.cartTouchError = { message: "boom" };
 
     const result = await addToCart(INPUT);
