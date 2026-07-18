@@ -322,7 +322,7 @@ describe("錯誤處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
 
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ deleted: 0 });
+    expect(await res.json()).toEqual({ deleted: 0, truncated: false });
     expect(captureException).toHaveBeenCalledTimes(1);
   });
 
@@ -333,7 +333,7 @@ describe("錯誤處理", () => {
     const res = await GET(buildRequest("Bearer test-cron-secret"));
 
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ deleted: 0 });
+    expect(await res.json()).toEqual({ deleted: 0, truncated: false });
     expect(captureException).toHaveBeenCalledTimes(1);
   });
 });

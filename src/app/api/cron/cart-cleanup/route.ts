@@ -84,6 +84,8 @@ export async function GET(request: Request) {
   } catch (e) {
     console.error("[cart-cleanup] unhandled error", e);
     Sentry.captureException(e);
-    return Response.json({ deleted: 0 }, { status: 500 });
+    // truncated:false 與成功路徑形狀對齊——查詢就沒跑成，無從判斷是否積壓，
+    // 回 false（保守：不誤報 backlog）。
+    return Response.json({ deleted: 0, truncated: false }, { status: 500 });
   }
 }
