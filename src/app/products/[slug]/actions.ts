@@ -39,19 +39,24 @@ export async function addToCart(
 
   const supabase = await createClient();
 
-  const { data: product } = await supabase
+  const { data: product, error: productError } = await supabase
     .from("product")
     .select("id, base_price, status")
     .eq("id", productId)
     .eq("status", "active")
     .single();
 
+  // PGRST116 = single() 查無列，是正常的「商品不存在」；其餘 error 代表查詢本身
+  // 失敗（DB 暫時性故障等），不得跟「查無資料」混為一談
+  if (productError && productError.code !== "PGRST116") {
+    return { ok: false, error: "系統忙碌，請稍後再試" };
+  }
   if (!product) {
     return { ok: false, error: "商品不存在或已下架" };
   }
 
   // !inner 理由同 PDP 查詢：RLS 濾掉的隱藏選項要整列消失，不能變 null
-  const { data: productOptions } = await supabase
+  const { data: productOptions, error: productOptionsError } = await supabase
     .from("product_option")
     .select(
       `
@@ -62,6 +67,9 @@ export async function addToCart(
     )
     .eq("product_id", productId);
 
+  if (productOptionsError) {
+    return { ok: false, error: "系統忙碌，請稍後再試" };
+  }
   if (!productOptions) {
     return { ok: false, error: "商品選項設定有誤" };
   }
@@ -131,29 +139,45 @@ export async function addToCart(
     guestToken = crypto.randomUUID();
   }
 
-  const { data: newCart, error: cartError } = await serviceRole
+  // read-first：回頭客（已有 guest_token 命中既有 cart）是常態，先 SELECT
+  // 避免每次都付一次註定失敗的 INSERT＋unique_violation log（coding-system §3.2）
+  const { data: existingCart, error: existingCartError } = await serviceRole
     .from("cart")
-    .insert({ guest_token: guestToken })
     .select("id")
-    .single();
+    .eq("guest_token", guestToken)
+    .maybeSingle();
+
+  if (existingCartError) {
+    return { ok: false, error: "系統忙碌，請稍後再試" };
+  }
 
   let cartId: string;
-  if (newCart) {
-    cartId = newCart.id;
-  } else if (cartError?.code === "23505") {
-    // 23505 = unique_violation（uq_cart_guest_token）：併發請求已插入同 guest_token
-    // 的 cart，重查取回該筆，不再各自 insert 出重複 cart row
-    const { data: existingCart, error: selectError } = await serviceRole
-      .from("cart")
-      .select("id")
-      .eq("guest_token", guestToken)
-      .maybeSingle();
-    if (selectError || !existingCart) {
-      return { ok: false, error: "建立購物車失敗" };
-    }
+  if (existingCart) {
     cartId = existingCart.id;
   } else {
-    return { ok: false, error: "建立購物車失敗" };
+    const { data: newCart, error: cartError } = await serviceRole
+      .from("cart")
+      .insert({ guest_token: guestToken })
+      .select("id")
+      .single();
+
+    if (newCart) {
+      cartId = newCart.id;
+    } else if (cartError?.code === "23505") {
+      // 23505 = unique_violation（uq_cart_guest_token）：併發請求已插入同 guest_token
+      // 的 cart，重查取回該筆，不再各自 insert 出重複 cart row
+      const { data: raceCart, error: raceSelectError } = await serviceRole
+        .from("cart")
+        .select("id")
+        .eq("guest_token", guestToken)
+        .maybeSingle();
+      if (raceSelectError || !raceCart) {
+        return { ok: false, error: "建立購物車失敗" };
+      }
+      cartId = raceCart.id;
+    } else {
+      return { ok: false, error: "建立購物車失敗" };
+    }
   }
 
   const { error: insertError } = await serviceRole.from("cart_item").insert({
