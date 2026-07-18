@@ -1,24 +1,26 @@
-"use server"
+"use server";
 
-import type { EmailOtpType } from "@supabase/supabase-js"
-import { createClient } from "@/lib/supabase/server"
-import { findOrCreateMember } from "@/lib/auth/find-or-create-member"
-import { normalizeEmail } from "@/lib/auth/normalize-email"
+import type { EmailOtpType } from "@supabase/supabase-js";
+import * as Sentry from "@sentry/nextjs";
+import { createClient } from "@/lib/supabase/server";
+import { findOrCreateMember } from "@/lib/auth/find-or-create-member";
+import { mergeGuestCartOnLogin } from "@/lib/cart/merge-guest-cart";
+import { normalizeEmail } from "@/lib/auth/normalize-email";
 
-type ActionResult = { ok: true } | { ok: false; error: string }
+type ActionResult = { ok: true } | { ok: false; error: string };
 
 export async function confirmMagicLink(
   tokenHash: string,
   type: EmailOtpType,
 ): Promise<ActionResult> {
-  const supabase = await createClient()
+  const supabase = await createClient();
   const { data, error } = await supabase.auth.verifyOtp({
     token_hash: tokenHash,
     type,
-  })
+  });
 
   if (error || !data.user) {
-    return { ok: false, error: "連結已失效或過期" }
+    return { ok: false, error: "連結已失效或過期" };
   }
 
   // T71 ultra review #3：跟 login/actions.ts、checkout/actions.ts 一致的正規化，
@@ -26,7 +28,18 @@ export async function confirmMagicLink(
   await findOrCreateMember(
     data.user.id,
     data.user.email ? normalizeEmail(data.user.email) : "",
-  )
+  );
 
-  return { ok: true }
+  // T81：magic link 登入成功後併訪客購物車入會員名下（fail-soft，同 login/actions
+  // 的 call-site 兜底：併車即使意外 throw 也不讓登入退化成失敗）。
+  try {
+    await mergeGuestCartOnLogin(data.user.id);
+  } catch (e) {
+    Sentry.captureException(e, {
+      tags: { area: "cart-merge", failMode: "fail-soft" },
+    });
+    await Sentry.flush(2000);
+  }
+
+  return { ok: true };
 }

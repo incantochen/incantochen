@@ -119,6 +119,9 @@ function makeServiceRole() {
       const chain: any = {
         select: () => chain,
         eq: () => chain,
+        // T81：backfillCartMemberId 走 .update().eq().is()——is 回鏈，await 由
+        // 下面的 then 解析成 {error:null}（cart 表），表示 backfill 成功。
+        is: () => chain,
         maybeSingle: () => {
           if (table === "cart") return Promise.resolve({ data: state.cart });
           if (table === "member")
@@ -563,5 +566,41 @@ describe("結帳即會員", () => {
       expect.anything(),
       { target: "personal" },
     );
+  });
+
+  // T81：登入者即使沒有 guest cookie，也以 member_id 找到會員車、正常建單。
+  it("已登入且無 guest cookie → 以 member 車建單", async () => {
+    cookieJar = {};
+    getUser.mockResolvedValue({
+      data: { user: { id: "member-logged-in", email: "m@example.com" } },
+    });
+
+    await createOrder(FORM).catch((e) => {
+      if (e !== REDIRECT) throw e;
+    });
+
+    expect(createOrderFromCart).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      "member-logged-in",
+      expect.anything(),
+      { target: "personal" },
+    );
+  });
+
+  // T81：訪客結帳建新會員後，backfill 把當前 cart 掛給新會員（保留 guest_token），
+  // 仍正常建單。fail-soft 的錯誤路徑另在 merge-guest-cart.test.ts 覆蓋。
+  it("訪客建新會員 → backfill 把 cart 掛給新會員（member_id）、仍建單成功", async () => {
+    // getUser 預設 null（訪客）、state.member null → 走 createUser 建新會員。
+    await createOrder(FORM).catch((e) => {
+      if (e !== REDIRECT) throw e;
+    });
+
+    const cartBackfill = recorded.find(
+      (r) => r.table === "cart" && r.values?.member_id === "member-new",
+    );
+    expect(cartBackfill).toBeDefined();
+    expect(createOrderFromCart).toHaveBeenCalled();
   });
 });

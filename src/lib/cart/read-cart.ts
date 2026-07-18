@@ -1,6 +1,8 @@
-import { cookies } from "next/headers";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { GUEST_TOKEN_COOKIE } from "@/lib/cart/guest-token";
+import {
+  resolveCartIdentity,
+  findCartByIdentity,
+} from "@/lib/cart/resolve-cart-identity";
 
 export type CartItemView = {
   id: string;
@@ -16,9 +18,9 @@ export async function getCart(): Promise<{
   items: CartItemView[];
   subtotal: number;
 } | null> {
-  const cookieStore = await cookies();
-  const guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
-  if (!guestToken) {
+  // T81：登入態以 member_id 查車、訪客以 guest_token 查車（resolver 決定身分）。
+  const identity = await resolveCartIdentity();
+  if (identity.kind === "none") {
     return null;
   }
 
@@ -27,11 +29,10 @@ export async function getCart(): Promise<{
   // T95（F-008）：查詢失敗 ≠ 查無資料——DB 暫時性故障若照樣回 null，客人
   // 會看到「購物袋是空的」的誤報。throw 交給 /cart 的 error boundary 顯示
   // 系統忙碌，不假裝購物車不存在。
-  const { data: cart, error: cartError } = await serviceRole
-    .from("cart")
-    .select("id")
-    .eq("guest_token", guestToken)
-    .maybeSingle();
+  const { data: cart, error: cartError } = await findCartByIdentity(
+    serviceRole,
+    identity,
+  );
 
   if (cartError) {
     throw new Error(`讀取購物車失敗: ${cartError.message}`);
