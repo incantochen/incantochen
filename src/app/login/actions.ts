@@ -2,7 +2,6 @@
 
 import { headers } from "next/headers";
 import { z } from "zod";
-import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member";
 import { mergeGuestCartOnLogin } from "@/lib/cart/merge-guest-cart";
@@ -79,18 +78,11 @@ export async function verifyOtpCode(
 
   await findOrCreateMember(data.user.id, data.user.email ?? email);
 
-  // T81：登入成功後把訪客購物車併入會員名下。mergeGuestCartOnLogin 內部已是
-  // fail-soft（吞錯記 Sentry 不 throw），這裡再加一層 call-site 兜底：即使日後
-  // 併車契約改變而意外 throw，也絕不能讓已成功的登入退化成失敗——車與 cookie
-  // 都還在，下次登入／加車會自我修復。
-  try {
-    await mergeGuestCartOnLogin(data.user.id);
-  } catch (e) {
-    Sentry.captureException(e, {
-      tags: { area: "cart-merge", failMode: "fail-soft" },
-    });
-    await Sentry.flush(2000);
-  }
+  // T81：登入成功後把訪客購物車併入會員名下。fail-soft（吞錯記 Sentry、絕不
+  // throw）是 mergeGuestCartOnLogin 的結構保證（try 包住整個函式體），呼叫端
+  // 直接 await——登入不因併車失敗而中止，車與 cookie 都還在，下次登入／加車
+  // 會自我修復。
+  await mergeGuestCartOnLogin(data.user.id);
 
   return { ok: true };
 }

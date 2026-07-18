@@ -18,7 +18,7 @@ import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
 // guest 車仍是可達的空車、品項已在會員車。任何失敗分支收斂結果只有兩種——
 // 「車仍完整掛在某一身分下」或「空殼待 cleanup」，不存在「有品項但無人可達」。
 
-async function reportMergeFailure(err: unknown): Promise<void> {
+export async function reportMergeFailure(err: unknown): Promise<void> {
   Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
     tags: { area: "cart-merge", failMode: "fail-soft" },
   });
@@ -89,13 +89,13 @@ async function deleteGuestCookie(): Promise<void> {
   cookieStore.delete(GUEST_TOKEN_COOKIE);
 }
 
-type GuestCartRow = {
+export type GuestCartRow = {
   id: string;
   member_id: string | null;
   updated_at: string;
 };
 
-async function selectMemberCartId(
+export async function selectMemberCartId(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   memberId: string,
 ): Promise<
@@ -110,12 +110,35 @@ async function selectMemberCartId(
   return { ok: true, cartId: data?.id ?? null };
 }
 
-// merge：把 guest 車 G 的品項搬進會員車 M，再條件式刪 G 的空殼。
-async function mergeCarts(
+// merge：先以 CAS 佔住 guest 車 G，再把品項搬進會員車 M，最後條件式刪 G 的空殼。
+export async function mergeCarts(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   memberCartId: string,
   guestCart: GuestCartRow,
 ): Promise<void> {
+  // a0) CAS 鎖：條件式 UPDATE 佔住 G（member_id 仍空＋updated_at 未變才成立；
+  //    SET 改動 WHERE 用到的 updated_at，符合 §6 EvalPlanQual 規則）。搶不到
+  //    （0 列）＝共用瀏覽器上另一個會員的併發 merge 已搶走、或 G 被 claim／
+  //    加車動過——沒有這道鎖，兩個「都已有會員車」的登入可各自把同一台 G 的
+  //    品項搬進自己車裡，先到先贏、後到靜默搬空（0 列無訊號），品項被吃進
+  //    別人帳下。鎖不到一律放棄本次 merge（不搬列、保留 cookie），留給下次
+  //    登入／addToCart 重試收斂。
+  const lockedAt = new Date().toISOString();
+  const { data: locked, error: lockError } = await serviceRole
+    .from("cart")
+    .update({ updated_at: lockedAt })
+    .eq("id", guestCart.id)
+    .is("member_id", null)
+    .eq("updated_at", guestCart.updated_at)
+    .select("id");
+  if (lockError) {
+    await reportMergeFailure(lockError);
+    return;
+  }
+  if (!locked || locked.length === 0) {
+    return;
+  }
+
   // a) 搬列（G 已被刪 → 0 列無害）
   const { error: moveError } = await serviceRole
     .from("cart_item")
@@ -129,7 +152,7 @@ async function mergeCarts(
 
   // b) 條件式刪空殼。兩道 guard：
   //    - member_id IS NULL：防搬列後空窗被他人 claim（他人車不能刪）。
-  //    - updated_at = 步驟 2 讀到的值（optimistic，同 T131 精神）：防搬列與
+  //    - updated_at = a0 鎖寫入的值（optimistic，同 T131 精神）：防搬列與
   //      刪殼之間，同瀏覽器另一分頁 guest 併發加車把新品項落進 G（會 touch
   //      G.updated_at）——若無此 guard，DELETE 的 CASCADE 會把剛加的品項一起
   //      帶走（毫秒級資料遺失窗）。
@@ -138,7 +161,7 @@ async function mergeCarts(
     .delete()
     .eq("id", guestCart.id)
     .is("member_id", null)
-    .eq("updated_at", guestCart.updated_at)
+    .eq("updated_at", lockedAt)
     .select("id");
 
   // c) touch 會員車（失敗只記錄不中止）
@@ -244,12 +267,15 @@ async function mergeInner(
 }
 
 export async function mergeGuestCartOnLogin(memberId: string): Promise<void> {
-  const cookieStore = await cookies();
-  const guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
-  if (!guestToken) return; // 步驟 1：無 cookie → no-op
-
-  const serviceRole = createServiceRoleClient();
+  // try 包住**整個**函式體（含 cookies()／createServiceRoleClient()）：fail-soft
+  // 是本函式的結構保證，呼叫端（login／auth confirm，未來任何登入路徑）直接
+  // await 即可，不需要也不應該各自再包一層 try/catch。
   try {
+    const cookieStore = await cookies();
+    const guestToken = cookieStore.get(GUEST_TOKEN_COOKIE)?.value;
+    if (!guestToken) return; // 步驟 1：無 cookie → no-op
+
+    const serviceRole = createServiceRoleClient();
     await mergeInner(serviceRole, memberId, guestToken, 0);
   } catch (e) {
     // 兜底：任何未預期的 throw 都 fail-soft，不讓登入主流程中止。

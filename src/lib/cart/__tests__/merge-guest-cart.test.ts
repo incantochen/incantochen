@@ -23,16 +23,20 @@ vi.mock("@/lib/cart/touch-cart-updated-at", () => ({
 
 let cookieValue: string | undefined;
 let cookieDeleted = false;
+let cookiesThrow = false;
 vi.mock("next/headers", () => ({
-  cookies: async () => ({
-    get: (name: string) =>
-      name === "guest_token" && cookieValue !== undefined
-        ? { value: cookieValue }
-        : undefined,
-    delete: () => {
-      cookieDeleted = true;
-    },
-  }),
+  cookies: async () => {
+    if (cookiesThrow) throw new Error("cookies boom");
+    return {
+      get: (name: string) =>
+        name === "guest_token" && cookieValue !== undefined
+          ? { value: cookieValue }
+          : undefined,
+      delete: () => {
+        cookieDeleted = true;
+      },
+    };
+  },
 }));
 
 type Res = { data: any; error: any };
@@ -43,16 +47,22 @@ const state = {
   moveItemsResult: { data: null, error: null } as Res,
   deleteShellResult: { data: [{ id: "G" }], error: null } as Res,
   backfillResult: { data: null, error: null } as Res,
+  lockResult: { data: [{ id: "G" }], error: null } as Res, // mergeCarts a0 CAS 鎖
 };
 
-const ops: { table: string; op: string; eq: Record<string, any> }[] = [];
+const ops: {
+  table: string;
+  op: string;
+  eq: Record<string, any>;
+  values?: any;
+}[] = [];
 
 function makeServiceRole() {
   return {
     from(table: string) {
       const q: any = { table, op: "select", eq: {}, is: {} };
       const resolve = (): Res => {
-        ops.push({ table: q.table, op: q.op, eq: { ...q.eq } });
+        ops.push({ table: q.table, op: q.op, eq: { ...q.eq }, values: q.values });
         if (table === "cart_item" && q.op === "update")
           return state.moveItemsResult;
         if (table === "cart") {
@@ -66,6 +76,8 @@ function makeServiceRole() {
           if (q.op === "update") {
             if ("guest_token" in q.eq)
               return state.claimResults.shift() ?? { data: null, error: null };
+            // mergeCarts a0 CAS 鎖：eq 帶 id＋updated_at；backfill 只帶 id
+            if ("id" in q.eq && "updated_at" in q.eq) return state.lockResult;
             if ("id" in q.eq) return state.backfillResult;
           }
           if (q.op === "delete") return state.deleteShellResult;
@@ -116,12 +128,14 @@ beforeEach(() => {
   ops.length = 0;
   cookieValue = "tok-1";
   cookieDeleted = false;
+  cookiesThrow = false;
   state.guestCartResult = { data: null, error: null };
   state.memberCartResults = [];
   state.claimResults = [];
   state.moveItemsResult = { data: null, error: null };
   state.deleteShellResult = { data: [{ id: "G" }], error: null };
   state.backfillResult = { data: null, error: null };
+  state.lockResult = { data: [{ id: "G" }], error: null };
 });
 
 const cartOps = () => ops.filter((o) => o.table === "cart");
@@ -242,11 +256,50 @@ describe("mergeGuestCartOnLogin（T81）", () => {
     await mergeGuestCartOnLogin(MEMBER);
 
     expect(didMoveItems()).toBe(true);
-    // 刪殼帶 updated_at guard
+    // a0 CAS 鎖以「步驟 2 讀到的 updated_at」為前提佔位
+    const lock = ops.find(
+      (o) =>
+        o.table === "cart" &&
+        o.op === "update" &&
+        "id" in o.eq &&
+        "updated_at" in o.eq,
+    );
+    expect(lock?.eq.updated_at).toBe("t");
+    // 刪殼帶 updated_at guard——比對的是 a0 鎖寫入的新值（非步驟 2 的舊值）
     const del = ops.find((o) => o.table === "cart" && o.op === "delete");
-    expect(del?.eq.updated_at).toBe("t");
+    expect(del?.eq.updated_at).toBe(lock?.values?.updated_at);
     expect(touchCalls).toContain("M");
     expect(cookieDeleted).toBe(true);
+  });
+
+  it("⑧-b merge 鎖不到（a0 CAS 回 0 列：他方併發 merge／claim 搶先）→ 不搬列、不刪殼、不刪 cookie", async () => {
+    state.guestCartResult = {
+      data: { id: "G", member_id: null, updated_at: "t" },
+      error: null,
+    };
+    state.memberCartResults = [{ data: { id: "M" }, error: null }];
+    state.lockResult = { data: [], error: null }; // 鎖 0 列
+
+    await mergeGuestCartOnLogin(MEMBER);
+
+    expect(didMoveItems()).toBe(false);
+    expect(didDeleteShell()).toBe(false);
+    expect(cookieDeleted).toBe(false);
+    expect(captureException).not.toHaveBeenCalled(); // 正常競態，非錯誤
+  });
+
+  it("⑧-c merge 鎖 DB error → fail-soft 記 Sentry、不搬列", async () => {
+    state.guestCartResult = {
+      data: { id: "G", member_id: null, updated_at: "t" },
+      error: null,
+    };
+    state.memberCartResults = [{ data: { id: "M" }, error: null }];
+    state.lockResult = { data: null, error: { message: "boom" } };
+
+    await mergeGuestCartOnLogin(MEMBER);
+
+    expect(didMoveItems()).toBe(false);
+    expect(captureException).toHaveBeenCalledTimes(1);
   });
 
   it("⑨ 刪殼回 0 列（updated_at guard：殼被併發加車復活）→ 不刪 cookie（但仍 touch）", async () => {
@@ -286,6 +339,17 @@ describe("mergeGuestCartOnLogin（T81）", () => {
     expect(captureException).toHaveBeenCalledTimes(1);
     expect(didClaim()).toBe(false);
     expect(cookieDeleted).toBe(false);
+  });
+
+  // 結構性 fail-soft 回歸鎖：try 包住整個函式體（含 cookies()），任何一步 throw
+  // 都不得冒泡——登入呼叫端已移除各自的 try/catch 包裝，全靠這個保證。
+  it("⑫ cookies() 本身 throw → 仍不冒泡、記 Sentry（fail-soft 是結構保證）", async () => {
+    cookiesThrow = true;
+
+    await expect(mergeGuestCartOnLogin(MEMBER)).resolves.toBeUndefined();
+
+    expect(captureException).toHaveBeenCalledTimes(1);
+    expect(ops).toHaveLength(0);
   });
 });
 

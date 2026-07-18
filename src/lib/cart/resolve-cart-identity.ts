@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { cookies } from "next/headers";
+import { isAuthSessionMissingError } from "@supabase/supabase-js";
 import type { PostgrestError } from "@supabase/supabase-js";
 import type { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { createClient } from "@/lib/supabase/server";
@@ -30,10 +31,21 @@ export const resolveCartIdentity = cache(async (): Promise<CartIdentity> => {
   const supabase = await createClient();
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
 
   if (user) {
     return { kind: "member", memberId: user.id };
+  }
+
+  // §6：查詢失敗 ≠ 查無資料。getUser 在「單純沒登入」時回 AuthSessionMissingError
+  // （訪客常態，放行走 guest／none 分支），其餘 error＝Auth 端暫時性故障——不可
+  // 誤判成「已登出」讓真會員靜默掉進 guest 分支（identity invariant 破口），一律
+  // 上拋交呼叫端依既有契約處理（get-cart-count fail-soft 回 0、read-cart 交
+  // error boundary、各 action 轉 {ok:false}）。getUser 自身也可能直接 throw
+  // （網路故障，proxy.ts C9 同款），同樣由呼叫端接。
+  if (authError && !isAuthSessionMissingError(authError)) {
+    throw new Error(`身分解析失敗：${authError.message}`, { cause: authError });
   }
 
   const cookieStore = await cookies();

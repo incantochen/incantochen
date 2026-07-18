@@ -8,6 +8,7 @@ vi.mock("server-only", () => ({}));
 const state = {
   user: null as { id: string } | null,
   cookie: undefined as string | undefined,
+  authError: null as unknown,
 };
 
 vi.mock("next/headers", () => ({
@@ -22,7 +23,10 @@ vi.mock("next/headers", () => ({
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     auth: {
-      getUser: async () => ({ data: { user: state.user }, error: null }),
+      getUser: async () => ({
+        data: { user: state.user },
+        error: state.authError,
+      }),
     },
   }),
 }));
@@ -47,6 +51,7 @@ function makeServiceRole() {
   };
 }
 
+import { AuthSessionMissingError } from "@supabase/supabase-js";
 import {
   resolveCartIdentity,
   findCartByIdentity,
@@ -55,6 +60,7 @@ import {
 beforeEach(() => {
   state.user = null;
   state.cookie = undefined;
+  state.authError = null;
   findCalls.length = 0;
 });
 
@@ -88,6 +94,27 @@ describe("resolveCartIdentity（T81）", () => {
       kind: "member",
       memberId: "mem-1",
     });
+  });
+
+  // §6：查詢失敗 ≠ 查無資料。AuthSessionMissingError＝單純沒登入（訪客常態，
+  // getUser 無 session 時的正常回傳），照常走 guest／none；其餘 error＝Auth 端
+  // 暫時性故障，不可誤判成訪客——上拋交呼叫端處理。
+  it("getUser 回 AuthSessionMissingError（訪客常態）→ 照常 guest／none", async () => {
+    state.authError = new AuthSessionMissingError();
+    state.cookie = "tok-1";
+    expect(await resolveCartIdentity()).toEqual({
+      kind: "guest",
+      guestToken: "tok-1",
+    });
+
+    state.cookie = undefined;
+    expect(await resolveCartIdentity()).toEqual({ kind: "none" });
+  });
+
+  it("getUser 回非 session-missing 的 error（Auth 暫時性故障）→ throw、不掉進 guest 分支", async () => {
+    state.authError = { message: "fetch failed", name: "AuthRetryableFetchError" };
+    state.cookie = "tok-1"; // 即使帶著 cookie 也不得誤判成 guest
+    await expect(resolveCartIdentity()).rejects.toThrow("身分解析失敗");
   });
 });
 

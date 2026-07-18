@@ -1,7 +1,6 @@
 "use server";
 
 import type { EmailOtpType } from "@supabase/supabase-js";
-import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { findOrCreateMember } from "@/lib/auth/find-or-create-member";
 import { mergeGuestCartOnLogin } from "@/lib/cart/merge-guest-cart";
@@ -30,16 +29,9 @@ export async function confirmMagicLink(
     data.user.email ? normalizeEmail(data.user.email) : "",
   );
 
-  // T81：magic link 登入成功後併訪客購物車入會員名下（fail-soft，同 login/actions
-  // 的 call-site 兜底：併車即使意外 throw 也不讓登入退化成失敗）。
-  try {
-    await mergeGuestCartOnLogin(data.user.id);
-  } catch (e) {
-    Sentry.captureException(e, {
-      tags: { area: "cart-merge", failMode: "fail-soft" },
-    });
-    await Sentry.flush(2000);
-  }
+  // T81：magic link 登入成功後併訪客購物車入會員名下。fail-soft 是
+  // mergeGuestCartOnLogin 的結構保證（同 login/actions），直接 await。
+  await mergeGuestCartOnLogin(data.user.id);
 
   return { ok: true };
 }

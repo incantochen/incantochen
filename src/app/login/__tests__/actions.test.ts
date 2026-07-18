@@ -58,22 +58,10 @@ describe("verifyOtpCode → mergeGuestCartOnLogin 接線（T81）", () => {
     expect(mergeGuestCartOnLogin).toHaveBeenCalledWith("mem-1");
   });
 
-  it("併車 throw → 不影響 ok:true（fail-soft）", async () => {
-    verifyOtp.mockResolvedValue({
-      data: { user: { id: "mem-1", email: "m@x.com" } },
-      error: null,
-    });
-    // mergeGuestCartOnLogin 內部本應吞錯；即便它意外 throw，也不能讓登入失敗。
-    // 註：現行實作 merge 為 fail-soft 不 throw；這裡直接注入 throw 是回歸鎖，
-    // 確保未來即使 merge 契約改變，登入主流程仍不被它拖垮。
-    mergeGuestCartOnLogin.mockRejectedValue(new Error("merge boom"));
-
-    const r = await verifyOtpCode("m@x.com", "12345678").catch((e) => ({
-      threw: e,
-    }));
-
-    expect(r).toEqual({ ok: true });
-  });
+  // 註（T81 max review #9）：「併車 throw 不影響登入」的回歸鎖已移至
+  // merge-guest-cart.test.ts ⑫——fail-soft 現在是 mergeGuestCartOnLogin 的
+  // 結構保證（try 包住整個函式體），call-site 不再各自包 try/catch，故本檔
+  // 不再注入 throw 測 call-site 兜底（那個兜底已按設計移除）。
 
   it("OTP 驗證失敗 → 不呼叫 mergeGuestCartOnLogin", async () => {
     verifyOtp.mockResolvedValue({

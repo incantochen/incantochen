@@ -6,13 +6,23 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCartWriteRateLimit } from "@/lib/rate-limit";
 import { touchCartUpdatedAt } from "@/lib/cart/touch-cart-updated-at";
-import { resolveCartIdentity } from "@/lib/cart/resolve-cart-identity";
+import {
+  resolveCartIdentity,
+  type CartIdentity,
+} from "@/lib/cart/resolve-cart-identity";
 
 type ActionResult = { ok: true } | { ok: false; error: string };
 
 async function verifyOwnership(cartItemId: string) {
   // T81：擁有權比對改依身分——登入者比 cart.member_id、訪客比 cart.guest_token。
-  const identity = await resolveCartIdentity();
+  // resolver 在 Auth 端暫時性故障時會 throw（查詢失敗 ≠ 已登出），這裡轉成
+  // 本檔的 {ok:false} 契約，不讓 server action 裸 throw 打壞前端錯誤顯示。
+  let identity: CartIdentity;
+  try {
+    identity = await resolveCartIdentity();
+  } catch {
+    return { ok: false as const, error: "查詢購物車失敗，請再試一次" };
+  }
   if (identity.kind === "none") {
     return { ok: false as const, error: "找不到購物車" };
   }

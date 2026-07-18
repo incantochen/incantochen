@@ -28,6 +28,7 @@ import { getClientIp } from "@/lib/get-client-ip";
 import {
   resolveCartIdentity,
   findCartByIdentity,
+  type CartIdentity,
 } from "@/lib/cart/resolve-cart-identity";
 import { backfillCartMemberId } from "@/lib/cart/merge-guest-cart";
 import {
@@ -80,8 +81,14 @@ export async function createOrder(
 
   // ② Read cart (service role — RLS blocks all direct reads)
   // T81：resolver 決定身分（登入→member、訪客→guest）；guestToken 仍留作
-  // 下方訪客限流的第二鍵與 pending 去重比對。
-  const identity = await resolveCartIdentity();
+  // 下方訪客限流的第二鍵與 pending 去重比對。resolver 在 Auth 端暫時性故障時
+  // throw（查詢失敗 ≠ 已登出），轉成本檔的 {ok:false} 契約。
+  let identity: CartIdentity;
+  try {
+    identity = await resolveCartIdentity();
+  } catch {
+    return { ok: false, error: "讀取購物車失敗，請稍後再試" };
+  }
   const guestToken =
     identity.kind === "guest" ? identity.guestToken : undefined;
 
@@ -188,22 +195,31 @@ export async function createOrder(
   }
 
   // ③ Member find-or-create ("結帳即會員")
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  // T81 max review #4：member／guest 分流**只認上方 resolver 的 identity**，不再
+  // 二次 getUser() 重判——兩次獨立讀 session 中間隔著 ECPay 驗證等真實 I/O，第二
+  // 次暫時性失敗會把已登入會員誤導進訪客分支：cartId 是會員的車、memberId 卻是
+  // 表單 email 新建的會員（RPC 不比對兩者），訂單掛錯人。getUser 在 member 分支
+  // 只補抓 email（member row 建立用），失敗退回表單 email，不影響身分判定。
   let memberId: string;
 
-  if (user) {
-    // Already logged in — ensure member row exists
-    // T71 ultra review #3：user.email 來自 session，跟訪客分支的正規化保持一致，
+  if (identity.kind === "member") {
+    let sessionEmail: string | null = null;
+    try {
+      const supabase = await createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      sessionEmail = user?.email ?? null;
+    } catch {
+      // email 補抓失敗不擋建單——身分已由 identity 定案，退回表單 email。
+    }
+    // T71 ultra review #3：session email 跟訪客分支的正規化保持一致，
     // 避免 member.email 累積不同大小寫版本、之後訪客查詢比對不到。
     await findOrCreateMember(
-      user.id,
-      user.email ? normalizeEmail(user.email) : email,
+      identity.memberId,
+      sessionEmail ? normalizeEmail(sessionEmail) : email,
     );
-    memberId = user.id;
+    memberId = identity.memberId;
   } else {
     // T71 ultra review：這個分支等於一個帳號存在偵測 oracle（email 是否命中
     // 既有會員），先限流再查，避免被拿去大量掃描 email。命中限流時刻意不帶

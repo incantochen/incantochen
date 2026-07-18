@@ -17,6 +17,7 @@ import { serverEnv } from "@/lib/env.server";
 import {
   resolveCartIdentity,
   findCartByIdentity,
+  type CartIdentity,
 } from "@/lib/cart/resolve-cart-identity";
 
 type CreateAdminOrderResult =
@@ -53,7 +54,13 @@ export async function createAdminOrderFromCart(
   // 把商品放進 admin 自己的會員車），故這裡以 resolver 的身分（admin＝登入
   // member）找車，而非讀 guest_token cookie。訂單掛的 member 仍是下方客人
   // email 解析出的 memberId，不受影響。
-  const identity = await resolveCartIdentity();
+  // resolver 在 Auth 端暫時性故障時 throw（查詢失敗 ≠ 已登出），轉成本檔契約。
+  let identity: CartIdentity;
+  try {
+    identity = await resolveCartIdentity();
+  } catch {
+    return { ok: false, error: "讀取購物袋失敗，請稍後再試" };
+  }
   if (identity.kind === "none") {
     return { ok: false, error: "購物袋是空的，請先到商品頁加入商品" };
   }

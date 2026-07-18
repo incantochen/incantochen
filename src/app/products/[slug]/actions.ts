@@ -12,6 +12,10 @@ import {
   guestTokenCookieOptions,
 } from "@/lib/cart/guest-token";
 import { getOrCreateMemberCart } from "@/lib/cart/get-or-create-member-cart";
+import {
+  resolveCartIdentity,
+  type CartIdentity,
+} from "@/lib/cart/resolve-cart-identity";
 
 type AddToCartInput = {
   productId: string;
@@ -38,14 +42,21 @@ export async function addToCart(
 
   const supabase = await createClient();
 
-  // T81：先判身分——登入者加車走 member 分支（放進會員車），訪客走 guest 分支。
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // T81 max review #8：身分判定統一走 resolveCartIdentity（單一出處，identity
+  // invariant 見該檔），不再自行 getUser 分流——「登入態絕不 fallback guest
+  // token」這條安全不變式只維護一份。resolver 在 Auth 端暫時性故障時 throw
+  // （查詢失敗 ≠ 已登出），轉成本檔的 {ok:false} 契約。
+  let identity: CartIdentity;
+  try {
+    identity = await resolveCartIdentity();
+  } catch {
+    return { ok: false, error: "系統忙碌，請稍後再試" };
+  }
 
   // 限流第二鍵用穩定身分值（登入→memberId、訪客→guest_token），避免登入前後
   // 同一人打到不同 bucket。
-  const rateLimitKey = user ? user.id : guestToken;
+  const rateLimitKey =
+    identity.kind === "member" ? identity.memberId : guestToken;
   if (!(await checkCartWriteRateLimit(ip, rateLimitKey))) {
     return { ok: false, error: "操作過於頻繁，請稍後再試" };
   }
@@ -152,14 +163,25 @@ export async function addToCart(
   // 訪客分支解析出的 guest_token，供結尾簽/續 cookie；member 分支維持 null。
   let guestCookieToSet: string | null = null;
 
-  if (user) {
+  if (identity.kind === "member") {
     // T81 member 分支：取得（或建立）會員的車。getOrCreateMemberCart 內含
     // claim fallback（登入併車若失敗，這裡把 guest 車補收進會員名下）與
     // uq_cart_member 併發重查。member 分支不簽/不續 guest cookie。
+    // email 只在 member row 缺席（孤兒 auth user）時用到——best-effort 補抓，
+    // 失敗以空字串退場，不影響身分判定（身分已由 identity 定案）。
+    let memberEmail = "";
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      memberEmail = user?.email ?? "";
+    } catch {
+      // best-effort：email 抓不到不擋加車。
+    }
     const memberCart = await getOrCreateMemberCart(
       serviceRole,
-      user.id,
-      user.email ?? "",
+      identity.memberId,
+      memberEmail,
       guestToken,
     );
     if (!memberCart.ok) {
