@@ -121,7 +121,7 @@
 
 ## F-013 [P2-low] 根目錄 `types/supabase.ts` 為過時型別殘留：無人引用、與正式生成檔並存易誤 import
 
-- 狀態：已轉任務(T100)（使用者 2026-07-08 確認）
+- 狀態：✅ 已修復（2026-07-20，T100／PR #88 squash 7473a0e）：grep 確認全 repo 無 import 後 `git rm types/supabase.ts`，`pnpm typecheck` 綠。
 - 位置：`types/supabase.ts`（根目錄，179 行，帶 BOM）；正式檔為 `src/types/database.types.ts`（813 行，14 表，隨 migration 再生成）
 - 失敗情境：全 repo grep 無任何 import 引用它——是早期 `supabase gen types` 的殘留（僅含最初 schema，缺 0003–0007 的欄位與 support_request 表）。風險在未來：IDE auto-import 對 `Database` 型別給出兩個候選，選錯的話拿到舊 schema——編譯照過（欄位子集相容時）、執行期才發現 insert 缺欄位或型別不符；也污染「改 schema 後重新 gen types」的心智模型（跑了正式檔、殘留檔永遠是舊的）。
 - 修法：確認無引用後直接刪除（一個 `git rm`）。
