@@ -477,6 +477,23 @@ describe("冪等：payment 已是 paid", () => {
   });
 });
 
+describe("退款終態：payment 已是 refunded（T47，重複回呼良性）", () => {
+  it("ECPay 重送舊 paid 回呼到已 refunded 的 payment → 回 1|OK，不翻面、不寫 log、不寄信、不觸發 settlePaid", async () => {
+    db.payment = { id: "p1", status: "refunded", order_id: "o1", amount: 25000 };
+    db.orderStatus = "refunded";
+
+    const res = await POST(buildRequest(BASE_PARAMS));
+
+    expect(await res.text()).toBe("1|OK");
+    // 不落入 pending→paid 翻面（否則 0 列→誤入 rescue→誤報 error）
+    expect(updatesTo("payment")).toHaveLength(0);
+    // 不觸發 settlePaid（否則 ensureOrderPaid 誤判「payment may be stuck」error）
+    expect(insertsTo("order_status_log")).toHaveLength(0);
+    expect(sendOrderConfirmation).not.toHaveBeenCalled();
+    expect(sendNewOrderNotification).not.toHaveBeenCalled();
+  });
+});
+
 describe("冪等：fallback 路徑，已有其他 paid payment", () => {
   it("orders 還卡在 pending_payment（上次執行半路失敗）→ 補做推進與通知", async () => {
     db.payment = null; // 這個 merchant_trade_no 對應不到既有 payment row
