@@ -21,6 +21,7 @@ export function RefundSection({
   orderId,
   orderStatus,
   hasPaidPayment,
+  paymentQueryFailed,
   invoiceStatus,
 }: {
   orderId: string;
@@ -29,6 +30,10 @@ export function RefundSection({
   // payment 已翻 refunded，此值為 false——除非 Admin Override 改了狀態而
   // payment 沒翻，見 needsPaymentRepair）。
   hasPaidPayment: boolean;
+  // page.tsx 的 findPaidPayment 查詢失敗（DB 暫時性故障）：只降級退款區塊
+  // （fail-closed 隱藏表單），不 500 整頁。與 hasPaidPayment=false 區分——後者
+  // 是「確定沒有 paid」，前者是「查不到、狀態不明」，不可誤當可退款或已退款。
+  paymentQueryFailed: boolean;
   invoiceStatus: InvoiceStatus;
 }) {
   const [isPending, startTransition] = useTransition();
@@ -45,6 +50,9 @@ export function RefundSection({
   // 狀態（Override 不翻 payment、不寄信）。提供補登記入口：refundOrder 對
   // 已 refunded 訂單冪等重入，只補翻 payment＋補寄通知信。
   const needsPaymentRepair = isRefunded && hasPaidPayment;
+  // 查詢失敗時只降級退款區塊：既不顯示表單（無法確認可退款）、也不誤顯示
+  // 「查無收款」，明確提示重整。優先於下方所有分支。
+  const paymentUnknown = paymentQueryFailed;
 
   function handleRefund() {
     startTransition(async () => {
@@ -72,21 +80,30 @@ export function RefundSection({
       </h2>
       <AdminNotifyBanner message={message} />
 
+      {/* 查詢失敗優先：不誤顯示「查無收款」或「已完成退款」，明確提示重整。 */}
+      {paymentUnknown && (
+        <p className="mt-2 text-sm text-red-600">
+          付款記錄查詢失敗（資料庫暫時性故障），無法在此登記退款。請重新整理頁面再試；訂單其餘操作不受影響。
+        </p>
+      )}
+
       {isRefunded && (
         <div className="mt-2 flex items-center gap-2">
           <AdminPill
             label={STATUS_LABELS.refunded}
             color={ADMIN_STATUS_COLORS.refunded}
           />
-          <span className="text-sm text-gray-500">
-            {needsPaymentRepair
-              ? "訂單已標記退款，但付款記錄尚未同步。"
-              : "此訂單已完成退款登記。"}
-          </span>
+          {!paymentUnknown && (
+            <span className="text-sm text-gray-500">
+              {needsPaymentRepair
+                ? "訂單已標記退款，但付款記錄尚未同步。"
+                : "此訂單已完成退款登記。"}
+            </span>
+          )}
         </div>
       )}
 
-      {!isRefunded && !showForm && (
+      {!isRefunded && !showForm && !paymentUnknown && (
         <p className="mt-2 text-sm text-gray-400">
           {hasPaidPayment
             ? "目前訂單狀態不可退款。"

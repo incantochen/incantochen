@@ -390,29 +390,41 @@ async function reconcileDriftedOrders(
   return true;
 }
 
-// recurring 稽核臂（#3 durable 兜底）：payment=paid ∧ orders=cancelled 是取消
-// 守衛的 TOCTOU 窄窗、或 T127 部署前既有列——主臂（鍵 payment=pending）與漂移
-// 臂（鍵 orders=pending_payment）都撈不到，若只靠取消當下的單次 Sentry，事件
-// 漏看就永遠無聲。這支每日查得到就告警，把單次訊號升級為 durable 復發偵測，
-// 走人工裁決（ops-runbook §6.1）。post-guard 下這個集合應恆近乎空，量體 ~0。
-// 回傳 false＝查詢失敗（同漂移臂，讓整支 cron fail-visible 回 500）。
-async function auditPaidOnCancelledOrders(
+// recurring 稽核臂（durable 兜底）：payment=paid ∧ orders 已進終態——錢掛在已
+// 關閉訂單上。主臂（鍵 payment=pending）與漂移臂（鍵 orders=pending_payment）
+// 都撈不到，若只靠事件當下的單次 Sentry，漏看就永遠無聲；這支每日查得到就
+// 告警，升級為 durable 復發偵測，走人工裁決（ops-runbook §6.1）。post-guard 下
+// 集合恆近乎空，量體 ~0。回傳 false＝查詢失敗（讓整支 cron fail-visible 回 500）。
+//
+// 兩個終態共用同一套查詢/截斷/告警邏輯，只差 orders.status 常值、Summary 欄位
+// 與 Sentry 訊息字串——參數化避免兩支同性質 P0 金流告警日後改一處另一處靜默
+// 分歧（cancelled＝取消守衛 TOCTOU／T127 前既有列；refunded＝Admin Override
+// 逃生口不翻 payment 或 legacy 半套）。
+async function auditPaidOnClosedOrders(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   summary: Summary,
+  config: {
+    orderStatus: "cancelled" | "refunded";
+    countKey: "paidOnCancelled" | "paidOnRefunded";
+    truncatedKey: "paidOnCancelledTruncated" | "paidOnRefundedTruncated";
+    queryFailMessage: string;
+    truncateMessage: string;
+    driftMessage: string;
+  },
 ): Promise<boolean> {
   const { data: rows, error } = await serviceRole
     .from("payment")
     .select("id, order_id, merchant_trade_no, orders!inner(status)")
     .eq("status", "paid")
-    .eq("orders.status", "cancelled")
-    // 穩定排序：無 .order() 時 PostgREST 每輪可能回不同的 20 筆，害同一筆
-    // 卡單在告警集裡進出跳動；固定以 paid_at 升序（最早的錢最該先處理）。
+    .eq("orders.status", config.orderStatus)
+    // 穩定排序：無 .order() 時 PostgREST 每輪可能回不同的 20 筆，害同一筆卡單
+    // 在告警集裡進出跳動；固定以 paid_at 升序（最早的錢最該先處理）。多撈一筆
+    // 精準偵測截斷（大面積事故 > DRIFT_LIMIT 時不可無聲）。
     .order("paid_at", { ascending: true, nullsFirst: true })
-    // 多撈一筆精準偵測截斷（同漂移臂）：大面積事故 > DRIFT_LIMIT 時不可無聲。
     .limit(DRIFT_LIMIT + 1);
 
   if (error) {
-    Sentry.captureMessage("reconcile: paid-on-cancelled 稽核查詢失敗", {
+    Sentry.captureMessage(config.queryFailMessage, {
       level: "error",
       extra: { error: error.message },
     });
@@ -420,68 +432,16 @@ async function auditPaidOnCancelledOrders(
   }
 
   if ((rows?.length ?? 0) > DRIFT_LIMIT) {
-    summary.paidOnCancelledTruncated = true;
-    Sentry.captureMessage("reconcile: paid-on-cancelled backlog exceeds limit", {
+    summary[config.truncatedKey] = true;
+    Sentry.captureMessage(config.truncateMessage, {
       level: "error",
       extra: { limit: DRIFT_LIMIT },
     });
   }
 
   for (const payment of (rows ?? []).slice(0, DRIFT_LIMIT)) {
-    summary.paidOnCancelled += 1;
-    Sentry.captureMessage("reconcile: paid payment on cancelled order", {
-      level: "error",
-      extra: {
-        orderId: payment.order_id,
-        merchantTradeNo: payment.merchant_trade_no,
-      },
-    });
-  }
-  return true;
-}
-
-// recurring 稽核臂（#4 durable 兜底，T47）：payment=paid ∧ orders=refunded。
-// 正規退款走 refund_order RPC（原子）不會產生此狀態；成因＝Admin Override 直接
-// 把訂單改 refunded（逃生口，不翻 payment、不寄信）或 legacy 半套。三個既有臂
-// （payment=pending／orders=pending_payment／orders=cancelled）都撈不到，唯一
-// 訊號原本只有逐單開啟才顯示的 needsPaymentRepair UI——非 durable，漏看即「已
-// 退款訂單上仍掛已付款」永遠無聲。這支把它升級為每日 durable 復發偵測，走人工
-// 裁決（回退款區塊「補登記退款」補翻 payment＋補寄信，ops-runbook §6.1）。
-// post-guard 下這個集合應恆近乎空，量體 ~0。回傳 false＝查詢失敗（同其他臂，
-// 讓整支 cron fail-visible 回 500）。
-async function auditPaidOnRefundedOrders(
-  serviceRole: ReturnType<typeof createServiceRoleClient>,
-  summary: Summary,
-): Promise<boolean> {
-  const { data: rows, error } = await serviceRole
-    .from("payment")
-    .select("id, order_id, merchant_trade_no, orders!inner(status)")
-    .eq("status", "paid")
-    .eq("orders.status", "refunded")
-    // 穩定排序（同 paid-on-cancelled 臂）：固定 paid_at 升序，避免同一筆卡單在
-    // 告警集裡進出跳動；多撈一筆精準偵測截斷。
-    .order("paid_at", { ascending: true, nullsFirst: true })
-    .limit(DRIFT_LIMIT + 1);
-
-  if (error) {
-    Sentry.captureMessage("reconcile: paid-on-refunded 稽核查詢失敗", {
-      level: "error",
-      extra: { error: error.message },
-    });
-    return false;
-  }
-
-  if ((rows?.length ?? 0) > DRIFT_LIMIT) {
-    summary.paidOnRefundedTruncated = true;
-    Sentry.captureMessage("reconcile: paid-on-refunded backlog exceeds limit", {
-      level: "error",
-      extra: { limit: DRIFT_LIMIT },
-    });
-  }
-
-  for (const payment of (rows ?? []).slice(0, DRIFT_LIMIT)) {
-    summary.paidOnRefunded += 1;
-    Sentry.captureMessage("reconcile: paid payment on refunded order", {
+    summary[config.countKey] += 1;
+    Sentry.captureMessage(config.driftMessage, {
       level: "error",
       extra: {
         orderId: payment.order_id,
@@ -888,12 +848,26 @@ export async function GET(request: Request) {
 
     // recurring 稽核臂：payment=paid ∧ orders=cancelled 的 durable 復發偵測。
     degraded =
-      !(await auditPaidOnCancelledOrders(serviceRole, summary)) || degraded;
+      !(await auditPaidOnClosedOrders(serviceRole, summary, {
+        orderStatus: "cancelled",
+        countKey: "paidOnCancelled",
+        truncatedKey: "paidOnCancelledTruncated",
+        queryFailMessage: "reconcile: paid-on-cancelled 稽核查詢失敗",
+        truncateMessage: "reconcile: paid-on-cancelled backlog exceeds limit",
+        driftMessage: "reconcile: paid payment on cancelled order",
+      })) || degraded;
 
     // recurring 稽核臂（T47）：payment=paid ∧ orders=refunded（Admin Override
     // 逃生口留下的半套狀態）的 durable 復發偵測。
     degraded =
-      !(await auditPaidOnRefundedOrders(serviceRole, summary)) || degraded;
+      !(await auditPaidOnClosedOrders(serviceRole, summary, {
+        orderStatus: "refunded",
+        countKey: "paidOnRefunded",
+        truncatedKey: "paidOnRefundedTruncated",
+        queryFailMessage: "reconcile: paid-on-refunded 稽核查詢失敗",
+        truncateMessage: "reconcile: paid-on-refunded backlog exceeds limit",
+        driftMessage: "reconcile: paid payment on refunded order",
+      })) || degraded;
 
     degraded = !(await sweepFailedNotifications(serviceRole, summary)) || degraded;
 

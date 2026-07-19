@@ -73,6 +73,14 @@ export default async function OrderDetailPage({
   const eligibleForSupport = canRequestSupport(status);
   const latestSupportRequest = (supportRequests ?? [])[0];
 
+  // 補登記退款（0021 repair_refunded_payment）會寫一筆 from=to=refunded 的同狀態
+  // 稽核自環（後台靠 note 的 [退款補登記] 前綴＋Override 標籤辨識）。客端時間軸
+  // 不顯示 note，這筆對客人是無意義的「已退款 → 已退款」——濾掉同狀態列，只給
+  // 客人看真正的狀態推進。
+  const customerLogs = (logs ?? []).filter(
+    (l) => l.from_status !== l.to_status,
+  );
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center gap-3">
@@ -92,9 +100,9 @@ export default async function OrderDetailPage({
           <h3 className="mb-4 text-[11px] tracking-[0.16em] text-ash uppercase">
             處理進度
           </h3>
-          {logs && logs.length > 0 ? (
+          {customerLogs.length > 0 ? (
             <ol>
-              {logs.map((log, i) => (
+              {customerLogs.map((log, i) => (
                 <li
                   key={i}
                   className="relative border-l border-stone py-0 pb-5 pl-6 last:border-transparent last:pb-0"

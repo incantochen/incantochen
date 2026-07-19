@@ -29,7 +29,9 @@ export default async function AdminOrderDetailPage({
 
   // paidPayment（T47 退款區塊）：不能沿用下方「最新一筆 payment」判斷——最新
   // 一筆可能是重試留下的 failed，會漏掉早前已 paid 那筆。findPaidPayment 查詢
-  // 失敗會 throw，交由頁面 error boundary 從嚴接手（不誤顯示「無收款記錄」）。
+  // 失敗會 throw；但這裡 .catch 成 sentinel，把「查詢失敗」的降級限縮在退款
+  // 區塊本身（fail-closed 隱藏退款表單），不讓一次 payment 暫時性故障 500 掉
+  // 整頁——訂單資訊／PII 揭示／出貨／售後等其餘操作在事故排查期仍須可用。
   const [
     orderRes,
     itemsRes,
@@ -70,7 +72,7 @@ export default async function AdminOrderDetailPage({
       .eq("order_id", id)
       .order("created_at", { ascending: false }),
 
-    findPaidPayment(supabase, id),
+    findPaidPayment(supabase, id).catch(() => "query-failed" as const),
   ]);
 
   if (orderRes.error || !orderRes.data) notFound();
@@ -299,7 +301,8 @@ export default async function AdminOrderDetailPage({
           <RefundSection
             orderId={order.id}
             orderStatus={order.status as OrderStatus}
-            hasPaidPayment={Boolean(paidPayment)}
+            hasPaidPayment={paidPayment !== "query-failed" && Boolean(paidPayment)}
+            paymentQueryFailed={paidPayment === "query-failed"}
             invoiceStatus={order.invoice_status}
           />
 
