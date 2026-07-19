@@ -88,7 +88,7 @@
 
 ## F-009 [P2] order_no↔MerchantTradeNo 重組邏輯仍散落兩處 inline 複本，違反 §6「格式互轉單一出處」規則（T67 根因未根治）
 
-- 狀態：已轉任務(T96)（使用者 2026-07-08 確認）
+- 狀態：✅ 已修復（2026-07-20，T96／PR #90 squash）：`merchant-trade-no.ts` 新增 `merchantTradeNoToOrderNo()`（generate 的逆運算＋長度防呆回 null），order-result route 與 notify fallback 兩處改 import、刪 inline slice 複本，null 走既有降級（notify→ERR Order not found；order-result→導 /checkout），合法輸入行為不變；新增 round-trip 單測＋既有 order-result route 測試補 server-only mock。隨手併修 F-009 附註的 buildItemName `#`→全形 `＃` sanitize。672 tests 全綠。
 - 位置：`src/app/api/ecpay/order-result/route.ts:14`＋`src/app/api/ecpay/notify/route.ts:54`（兩處各自手刻 `slice(0,3)/(3,11)/(11,17)` 重組）；正向轉換在 `src/lib/ecpay/merchant-trade-no.ts`（僅 generate、無 parse）
 - 失敗情境：T67 的根本原因是「同一格式的解析點散落多處、失同步」（trade no 加 2 碼後綴時 `slice(11)` 沒跟上）。修復只把兩處都改對，**沒有收斂成單一實作**——CLAUDE.md §6 明文「識別碼格式互轉單一出處…只能有一份實作供 import，禁止各處手刻」。下次 order_no 格式演進（如後綴改 8 碼、加品類前綴）時，改了 `generateMerchantTradeNo` 與其中一處解析點、漏掉另一處，就是 T67 完整重演：付款成功的客人被導回首頁或 webhook fallback 查無訂單。
 - 修法：在 `merchant-trade-no.ts` 新增 `merchantTradeNoToOrderNo(tradeNo: string): string`（含格式防呆），order-result 與 notify fallback 兩處改 import；既有 route 測試（T85）加一條 round-trip 測試（generate→parse 還原）鎖住兩端同步。純重構、行為不變，工作量 ≤0.25 天。
