@@ -41,15 +41,18 @@ function ConfirmContent() {
 
   return (
     <div className="mx-auto max-w-md px-6 py-16">
-      <h1 className="font-heading text-[28px] text-ink">確認登入</h1>
-      <p className="mt-3 text-sm text-ash">請按下方按鈕完成登入。</p>
+      <p className="eyebrow mb-3">SECURE SIGN-IN</p>
+      <h1 className="font-heading text-[28px] text-ink">最後一步，確認登入</h1>
+      <p className="mt-3 text-sm text-ash leading-relaxed">
+        為保護您的帳號，登入連結需由您親自按下確認才會生效。
+      </p>
       <button
         type="button"
         disabled={isPending}
         onClick={handleConfirm}
         className="mt-6 w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase hover:bg-primary-700 disabled:opacity-60"
       >
-        {isPending ? "登入中…" : "登入"}
+        {isPending ? "登入中…" : "確認登入"}
       </button>
       {error && (
         <div className="mt-3">
