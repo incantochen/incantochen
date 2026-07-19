@@ -14,12 +14,20 @@ export function OrderCancelledNotice() {
         <p className="text-sm text-ash mb-8 leading-relaxed">
           這筆訂單已被取消，可能已由新的訂單取代。請改用最新的訂單連結；如果您正停在付款頁面，請勿繼續付款。
         </p>
-        <Link
-          href="/"
-          className="inline-block rounded-[2px] bg-primary px-8 py-3 text-[11.5px] font-medium uppercase tracking-[0.2em] text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          返回首頁
-        </Link>
+        <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+          <Link
+            href="/"
+            className="inline-block rounded-[2px] bg-primary px-8 py-3 text-[11.5px] font-medium uppercase tracking-[0.2em] text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            返回首頁
+          </Link>
+          <Link
+            href="/account/orders"
+            className="inline-block rounded-[2px] border border-primary px-8 py-3 text-[11.5px] font-medium uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+          >
+            查看我的訂單
+          </Link>
+        </div>
       </div>
     </main>
   );
