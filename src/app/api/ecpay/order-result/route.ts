@@ -2,6 +2,8 @@
 // 強制瀏覽器以 GET 取得導向目標，否則 307 會把 POST 原樣帶到 page route 上而 405。
 // ⚠️ CheckMacValue 驗證留給 T26 ReturnURL webhook（server-to-server，才是安全關卡）
 // 這裡只做前端 redirect，不做驗章。
+import { merchantTradeNoToOrderNo } from "@/lib/ecpay/merchant-trade-no";
+
 export async function POST(request: Request) {
   const formData = await request.formData();
   const merchantTradeNo = formData.get("MerchantTradeNo") as string | null;
@@ -11,7 +13,10 @@ export async function POST(request: Request) {
     return Response.redirect(new URL("/checkout", request.url), 303);
   }
 
-  const orderNo = `${merchantTradeNo.slice(0, 3)}-${merchantTradeNo.slice(3, 11)}-${merchantTradeNo.slice(11, 17)}`;
+  const orderNo = merchantTradeNoToOrderNo(merchantTradeNo);
+  if (!orderNo) {
+    return Response.redirect(new URL("/checkout", request.url), 303);
+  }
 
   if (rtnCode === "1") {
     return Response.redirect(

@@ -16,9 +16,11 @@ function formatTaiwanTradeDate(date: Date): string {
   return parts.replace(/-/g, "/")
 }
 
-function buildItemName(items: OrderItemForPayment[]): string {
+// ECPay ItemName 以 # 作品項分隔符——商品名若含 # 會被切成多個假品項顯示。
+// 組裝前把商品名的半形 # 換成全形 ＃（視覺近似、不再被當分隔符）。
+export function buildItemName(items: OrderItemForPayment[]): string {
   const joined = items
-    .map((item) => `${item.productName} x${item.quantity}`)
+    .map((item) => `${item.productName.replace(/#/g, "＃")} x${item.quantity}`)
     .join("#")
   return joined.length > 200 ? joined.slice(0, 200) : joined
 }
