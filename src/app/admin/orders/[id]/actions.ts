@@ -93,15 +93,9 @@ export async function shipOrder(
   const user = await requireAdmin();
   const supabase = createServiceRoleClient();
 
-  const { error } = await supabase
-    .from("orders")
-    .update({ tracking_no: trackingNo })
-    .eq("id", orderId);
-
-  if (error) {
-    return { ok: false, error: "更新物流單號失敗，請稍後再試" };
-  }
-
+  // T77：先驗狀態轉換（含 CAS 守衛）再寫 tracking_no。原順序相反——非法轉換
+  // （訂單已出貨／取消，或與 cron 競態）拋錯時 tracking_no 已寫入，訂單落在
+  // 「有物流單號卻未出貨」的不一致態。轉換失敗即 return，orders 完全未動。
   try {
     await transitionOrder(orderId, "shipped", {
       actorId: user.id,
@@ -115,18 +109,36 @@ export async function shipOrder(
     return { ok: false, error: "出貨標記失敗，請稍後再試" };
   }
 
-  // 出貨這件事本身已經成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證
-  // 絕不往外拋例外（不擋出貨操作），且用 notification(order_id, type) 的
-  // unique 約束去重——雙擊出貨按鈕不會重複寄信。寄失敗以 warning 讓操作者
-  // 知情（T88：不再靜默丟棄結果），每日 reconcile sweep 會自動補寄。
+  // 狀態已成功轉 shipped 後才寫單號。此處若失敗（罕見暫時性 DB 錯），訂單
+  // 已是 shipped、僅缺單號——回 warning 提示操作者用「修正物流單號」補填，
+  // 不回 error（會誤導成「出貨沒成功」，實際已 shipped）。單號未寫入時通知
+  // 信也不寄（sendOrderShippedNotification 見 tracking_no 為空即跳過）。
+  const { error: trackingError } = await supabase
+    .from("orders")
+    .update({ tracking_no: trackingNo })
+    .eq("id", orderId);
+
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath("/admin/orders");
+
+  if (trackingError) {
+    return {
+      ok: true,
+      warning:
+        "已標記出貨，但物流單號寫入失敗——請用下方「修正物流單號」補填，客人才會收到含單號的通知",
+    };
+  }
+
+  // 出貨已成功寫入 DB，寄信只是 best-effort 通知：sendOnce 保證絕不往外拋
+  // 例外（不擋出貨操作），且用 notification(order_id, type) 的 unique 約束
+  // 去重——雙擊出貨按鈕不會重複寄信。寄失敗以 warning 讓操作者知情（T88：
+  // 不再靜默丟棄結果），每日 reconcile sweep 會自動補寄。
   const notified = await sendOnce(supabase, {
     orderId,
     type: "order_shipped",
     send: () => sendOrderShippedNotification(orderId),
   });
 
-  revalidatePath(`/admin/orders/${orderId}`);
-  revalidatePath("/admin/orders");
   if (!notified) {
     return {
       ok: true,
