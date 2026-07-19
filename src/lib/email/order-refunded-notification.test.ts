@@ -89,6 +89,18 @@ describe("sendOrderRefundedNotification", () => {
     expect(html).toContain("NT$25,800");
   });
 
+  it("total_amount 非數值（資料損毀）→ throw、不寄出「NT$NaN」的信（§6 isFinite 防呆）", async () => {
+    mockOrderQuery({
+      data: { ...BASE_ORDER, total_amount: "abc" },
+      error: null,
+    });
+
+    await expect(sendOrderRefundedNotification("order-1")).rejects.toThrow(
+      "total_amount 非數值",
+    );
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it("收件人姓名含 HTML 時被跳脫，不以原始標籤出現在信件中（T72/T84）", async () => {
     mockOrderQuery({
       data: { ...BASE_ORDER, recipient_name: '<script>alert("xss")</script>' },

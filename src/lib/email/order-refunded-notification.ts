@@ -123,6 +123,17 @@ export async function sendOrderRefundedNotification(
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`;
 
+  // numeric 欄位 PostgREST 可能回字串（生成型別仍標 number），先 Number() 再
+  // toLocaleString，避免字串上調用出現 "1000" 未加千分位的錯排。isFinite 防呆
+  //（CLAUDE.md §6）：total_amount 為 NOT NULL numeric、僅資料損毀時可能非數值，
+  // 但寧可 throw 讓 sendOnce 標 failed＋留訊號，也不寄出「退款金額 NT$NaN」誤導客人。
+  const totalAmount = Number(order.total_amount);
+  if (!Number.isFinite(totalAmount)) {
+    throw new Error(
+      `sendOrderRefundedNotification: total_amount 非數值（order ${orderId}）`,
+    );
+  }
+
   const { error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: email,
@@ -130,9 +141,7 @@ export async function sendOrderRefundedNotification(
     html: buildEmailHtml({
       orderNo: order.order_no,
       recipientName: order.recipient_name,
-      // numeric 欄位 PostgREST 可能回字串（生成型別仍標 number），先 Number()
-      // 再 toLocaleString，避免字串上調用出現 "1000" 未加千分位的錯排。
-      totalAmount: Number(order.total_amount),
+      totalAmount,
       loginUrl,
     }),
   });
