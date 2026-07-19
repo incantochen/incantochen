@@ -10,10 +10,9 @@ const FROM_EMAIL = "incantochen <onboarding@resend.dev>";
 function buildEmailHtml(params: {
   orderNo: string;
   recipientName: string;
-  totalAmount: number;
   loginUrl: string;
 }): string {
-  const { orderNo, recipientName, totalAmount, loginUrl } = params;
+  const { orderNo, recipientName, loginUrl } = params;
   const safeRecipientName = escapeHtml(recipientName);
   // order_no 目前系統生成為純英數低風險，但仍插進 HTML——與同檔 recipientName
   // 的 escape 慣例一致（防禦性，防日後 order_no 生成規則放寬引入特殊字元）。
@@ -46,19 +45,13 @@ function buildEmailHtml(params: {
               <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#c9a84c;">退款通知</p>
               <h1 style="margin:0 0 20px;font-size:22px;font-weight:400;color:#111;line-height:1.3;">您的訂單退款已辦理，${safeRecipientName}</h1>
               <p style="margin:0 0 32px;font-size:15px;color:#6b7280;line-height:1.6;">
-                我們已為您辦理退款。款項將退回您原刷卡的信用卡帳戶，實際入帳時間依各發卡銀行作業而定，約 3–7 個工作天。
+                我們已為您辦理退款。退款金額以綠界（ECPay）實際退刷金額為準，款項將退回您原刷卡的信用卡帳戶，實際入帳時間依各發卡銀行作業而定，約 3–7 個工作天。
               </p>
 
               <!-- Order number -->
-              <div style="background:#f9f7f4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">
+              <div style="background:#f9f7f4;border-radius:4px;padding:16px 20px;margin-bottom:32px;">
                 <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">訂單號碼</div>
                 <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${safeOrderNo}</div>
-              </div>
-
-              <!-- Refund amount -->
-              <div style="background:#f9f7f4;border-radius:4px;padding:16px 20px;margin-bottom:32px;">
-                <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">退款金額</div>
-                <div style="font-size:17px;font-weight:700;color:#111;">NT$${totalAmount.toLocaleString()}</div>
               </div>
 
               <!-- CTA -->
@@ -100,7 +93,7 @@ export async function sendOrderRefundedNotification(
 
   const { data: order, error: queryError } = await serviceRole
     .from("orders")
-    .select("order_no, recipient_name, total_amount, member:member_id(email)")
+    .select("order_no, recipient_name, member:member_id(email)")
     .eq("id", orderId)
     .single();
 
@@ -123,17 +116,9 @@ export async function sendOrderRefundedNotification(
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`;
 
-  // numeric 欄位 PostgREST 可能回字串（生成型別仍標 number），先 Number() 再
-  // toLocaleString，避免字串上調用出現 "1000" 未加千分位的錯排。isFinite 防呆
-  //（CLAUDE.md §6）：total_amount 為 NOT NULL numeric、僅資料損毀時可能非數值，
-  // 但寧可 throw 讓 sendOnce 標 failed＋留訊號，也不寄出「退款金額 NT$NaN」誤導客人。
-  const totalAmount = Number(order.total_amount);
-  if (!Number.isFinite(totalAmount)) {
-    throw new Error(
-      `sendOrderRefundedNotification: total_amount 非數值（order ${orderId}）`,
-    );
-  }
-
+  // 刻意不寫具體退款金額（#2）：MVP 記錄式退款不擷取實際退刷金額，部分退刷
+  // 情境下 order.total_amount 會高於實退而誤導客人；信文改「以綠界實際退刷
+  // 金額為準」。日後做部分退款（衍生任務）再加 refund_amount 欄位回填。
   const { error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: email,
@@ -141,7 +126,6 @@ export async function sendOrderRefundedNotification(
     html: buildEmailHtml({
       orderNo: order.order_no,
       recipientName: order.recipient_name,
-      totalAmount,
       loginUrl,
     }),
   });

@@ -218,7 +218,9 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 1. **退款**：綠界後台對該筆交易退刷（操作同 §5），完成後 payment 標 `refunded`（同 §5 SQL）；人工 email 告知客人（3–7 個工作天入帳）。
 2. **恢復訂單**：客人仍要商品且交期可接受 → `/admin/orders/[id]` Admin Override 把訂單改 `paid`（reason 寫明「取消後付款成立，經客人確認恢復訂單」），再依 §4 補寄確認信。
 
-⚠️ 前兩個訊號是**單次**的——收到當日就要處理，別等第二封。後兩個（`paid payment on cancelled order`、`paid payment on refunded order`）是 durable 兜底，會**每日重複告警**直到你把該列裁決掉，是「還沒處理」的每日催辦，不是新事件。`paid payment on refunded order` 專指 Admin Override 逃生口留下的「訂單已退款、payment 仍 paid」半套狀態——回退款區塊按「補登記退款」即補翻 payment＋補寄通知信。
+⚠️ 前兩個訊號是**單次**的——收到當日就要處理，別等第二封。後兩個（`paid payment on cancelled order`、`paid payment on refunded order`）是 durable 兜底，會**每日重複告警**直到你把該列裁決掉，是「還沒處理」的每日催辦，不是新事件。`paid payment on refunded order` 兩種成因，處置不同：
+- **Admin Override 逃生口**留下的「訂單已退款、payment 仍 paid」半套——回退款區塊按「補登記退款」即補翻 payment＋補寄通知信。
+- **重複付款的兄弟交易在退款後才成立**（§5 情境：客人重刷留下一筆 pending，你依已付款那筆退款結案後，綠界才回報這筆 pending 也成功→翻成 paid 掛在已退款單上）——客人實際被扣兩次、你只退了一筆。**去綠界後台把第二筆也退刷**，再回退款區塊補登記（payment 同步翻 refunded）。這是**刻意不在程式端自動壓掉**的：pending 兄弟收到成功回呼＝真錢已入帳，把它標 failed 會讓真金流在系統裡隱形，比告警更糟；webhook 翻面當下就會發 `money received on closed order` 單次訊號，本臂每日催辦到你處理完。
 
 ---
 

@@ -27,7 +27,6 @@ import { sendOrderRefundedNotification } from "./order-refunded-notification";
 type OrderRow = {
   order_no: string;
   recipient_name: string;
-  total_amount: number | string;
   member: { email: string } | null;
 };
 
@@ -52,7 +51,6 @@ function mockOrderQuery(result: {
 const BASE_ORDER: OrderRow = {
   order_no: "ORD-TEST-001",
   recipient_name: "王小明",
-  total_amount: 25800,
   member: { email: "customer@example.com" },
 };
 
@@ -62,7 +60,7 @@ beforeEach(() => {
 });
 
 describe("sendOrderRefundedNotification", () => {
-  it("happy path：寄到會員 email，內容含訂單號與千分位退款金額，退款原因不進信件", async () => {
+  it("happy path：寄到會員 email，內容含訂單號，退款原因與具體金額都不進信件", async () => {
     mockOrderQuery({ data: BASE_ORDER, error: null });
 
     await sendOrderRefundedNotification("order-1");
@@ -74,31 +72,10 @@ describe("sendOrderRefundedNotification", () => {
     };
     expect(call.to).toBe("customer@example.com");
     expect(call.subject).toContain("ORD-TEST-001");
-    expect(call.html).toContain("NT$25,800");
-  });
-
-  it("numeric 欄位回字串（PostgREST）→ 先 Number() 再排版，千分位不錯排", async () => {
-    mockOrderQuery({
-      data: { ...BASE_ORDER, total_amount: "25800" },
-      error: null,
-    });
-
-    await sendOrderRefundedNotification("order-1");
-
-    const html = sendMock.mock.calls[0]?.[0]?.html as string;
-    expect(html).toContain("NT$25,800");
-  });
-
-  it("total_amount 非數值（資料損毀）→ throw、不寄出「NT$NaN」的信（§6 isFinite 防呆）", async () => {
-    mockOrderQuery({
-      data: { ...BASE_ORDER, total_amount: "abc" },
-      error: null,
-    });
-
-    await expect(sendOrderRefundedNotification("order-1")).rejects.toThrow(
-      "total_amount 非數值",
-    );
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(call.html).toContain("ORD-TEST-001");
+    // #2：不寫具體金額，改「以綠界實際退刷金額為準」——避免部分退刷時誤導客人。
+    expect(call.html).toContain("實際退刷金額為準");
+    expect(call.html).not.toContain("NT$");
   });
 
   it("收件人姓名含 HTML 時被跳脫，不以原始標籤出現在信件中（T72/T84）", async () => {
