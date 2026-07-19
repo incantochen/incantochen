@@ -3,13 +3,10 @@ import { Resend } from "resend"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { escapeHtml } from "@/lib/email/escape-html"
+import { parseTracking } from "@/lib/order/shipping-tracking"
 
 // TODO(T35): switch to verified custom domain (e.g. orders@incantochen.com) before go-live
 const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
-
-// order-actions.tsx 的 handleShip 約定：面交時 tracking_no 存 `面交${pickupNote ? " "+pickupNote : ""}`，
-// 沒有獨立的出貨方式欄位可查，只能從這個既定字串格式判斷——與該處寫法必須保持一致。
-const PICKUP_PREFIX = "面交"
 
 function buildEmailHtml(params: {
   orderNo: string
@@ -20,8 +17,7 @@ function buildEmailHtml(params: {
   const { orderNo, recipientName, trackingNo, loginUrl } = params
   const safeRecipientName = escapeHtml(recipientName)
 
-  const isPickup = trackingNo.trim().startsWith(PICKUP_PREFIX)
-  const pickupNote = trackingNo.trim().slice(PICKUP_PREFIX.length).trim()
+  const { isPickup, pickupNote } = parseTracking(trackingNo)
   const safeTrackingNo = escapeHtml(trackingNo)
   const safePickupNote = escapeHtml(pickupNote)
 
@@ -138,7 +134,7 @@ export async function sendOrderShippedNotification(
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`
 
-  const isPickup = order.tracking_no.trim().startsWith(PICKUP_PREFIX)
+  const { isPickup } = parseTracking(order.tracking_no)
   const subject = isPickup
     ? `您的訂單已可安排面交 — 訂單 ${order.order_no}`
     : `您的訂單已出貨 — 訂單 ${order.order_no}`
