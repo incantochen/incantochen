@@ -6,6 +6,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildAioParams } from "@/lib/ecpay/aio-payment";
 import { generateMerchantTradeNo } from "@/lib/ecpay/merchant-trade-no";
 import { findPaidPayment } from "@/lib/order/find-paid-payment";
+import { OrderCancelledNotice } from "@/components/order-cancelled-notice";
 import { serverEnv } from "@/lib/env.server";
 import { getClientIp } from "@/lib/get-client-ip";
 import {
@@ -142,6 +143,12 @@ export default async function CheckoutPayPage({
   // 仍要能順利導去成功頁，不能卡在「無法在此瀏覽器繼續付款」的死路。
   if (order.status === "paid") {
     redirect(`/checkout/success?order=${orderNo}`);
+  }
+
+  // T119：已取消訂單（重新結帳頂替／逾期取消）不再靜默轉首頁，改渲染說明頁——
+  // 明確告知並勸阻客人在舊 ECPay 頁面繼續付款。其他非法狀態維持現行 redirect。
+  if (order.status === "cancelled") {
+    return <OrderCancelledNotice />;
   }
 
   if (order.status !== "pending_payment") {

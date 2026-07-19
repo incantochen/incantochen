@@ -11,6 +11,7 @@ import {
 } from "@/lib/order/order-access-token";
 import { RateLimitedNotice } from "../rate-limited-notice";
 import { SystemBusyNotice } from "../system-busy-notice";
+import { OrderCancelledNotice } from "@/components/order-cancelled-notice";
 import { OrderStatusCheck } from "./order-status-check";
 
 export default async function CheckoutSuccessPage({
@@ -214,6 +215,11 @@ export default async function CheckoutSuccessPage({
         </div>
       </main>
     );
+  }
+
+  // T119：已取消訂單改渲染說明頁（取代靜默轉首頁），與 pay 頁一致。
+  if (order.status === "cancelled") {
+    return <OrderCancelledNotice />;
   }
 
   redirect("/");
