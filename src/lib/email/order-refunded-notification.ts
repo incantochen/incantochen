@@ -15,6 +15,9 @@ function buildEmailHtml(params: {
 }): string {
   const { orderNo, recipientName, totalAmount, loginUrl } = params;
   const safeRecipientName = escapeHtml(recipientName);
+  // order_no 目前系統生成為純英數低風險，但仍插進 HTML——與同檔 recipientName
+  // 的 escape 慣例一致（防禦性，防日後 order_no 生成規則放寬引入特殊字元）。
+  const safeOrderNo = escapeHtml(orderNo);
 
   return `<!DOCTYPE html>
 <html lang="zh-TW">
@@ -49,7 +52,7 @@ function buildEmailHtml(params: {
               <!-- Order number -->
               <div style="background:#f9f7f4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">
                 <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">訂單號碼</div>
-                <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${orderNo}</div>
+                <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${safeOrderNo}</div>
               </div>
 
               <!-- Refund amount -->

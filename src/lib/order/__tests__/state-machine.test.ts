@@ -59,7 +59,8 @@ function makeServiceRole(opts: {
         return chain;
       }
       if (table === "payment") {
-        // limit：findRefundedPayment（退款守衛，T47）的鏈多一段 .limit(1)。
+        // 取消守衛與退款守衛都用 findPaidPayment（select→eq→eq→maybeSingle）；
+        // limit 保留供其他形狀的探針鏈，本測試不會呼叫。
         const chain = {
           select: () => chain,
           eq: () => chain,
@@ -303,14 +304,14 @@ describe("transitionOrder：取消守衛（有 paid payment 不得取消）", ()
   });
 });
 
-describe("transitionOrder：退款守衛（payment 未翻 refunded 不得轉 refunded，T47）", () => {
-  it("無 refunded payment → 丟 RefundPaymentNotFlippedError、不 UPDATE、不寫 log", async () => {
+describe("transitionOrder：退款守衛（有 paid 殘留不得轉 refunded，T47）", () => {
+  it("仍有 paid 殘留 → 丟 RefundPaymentNotFlippedError、不進 RPC", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "paid",
         updateMatches: true,
-        // 第 1 次 payment 查詢＝退款守衛的 findRefundedPayment：查無。
-        paidResults: [{ data: null, error: null }],
+        // 退款守衛的 findPaidPayment：查到 paid 殘留＝payment 尚未翻面。
+        paidResults: [{ data: { id: "pay-1" }, error: null }],
       }) as unknown as ReturnType<typeof createServiceRoleClient>,
     );
 
@@ -320,12 +321,12 @@ describe("transitionOrder：退款守衛（payment 未翻 refunded 不得轉 ref
     expect(rpcCall).not.toHaveBeenCalled();
   });
 
-  it("payment 已翻 refunded（正規路徑 refund-order 先翻後轉）→ 放行，RPC 收到 p_to=refunded", async () => {
+  it("無 paid 殘留（payment 已翻 refunded）→ 放行，RPC 收到 p_to=refunded", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "paid",
         updateMatches: true,
-        paidResults: [{ data: { id: "pay-1" }, error: null }],
+        paidResults: [{ data: null, error: null }],
       }) as unknown as ReturnType<typeof createServiceRoleClient>,
     );
 
@@ -336,7 +337,7 @@ describe("transitionOrder：退款守衛（payment 未翻 refunded 不得轉 ref
     );
   });
 
-  it("守衛查詢 {error} → throw 不吞（findRefundedPayment 契約：查詢失敗 ≠ 查無資料）", async () => {
+  it("守衛查詢 {error} → throw 不吞（findPaidPayment 契約：查詢失敗 ≠ 查無資料）", async () => {
     vi.mocked(createServiceRoleClient).mockReturnValue(
       makeServiceRole({
         initialStatus: "paid",
@@ -346,7 +347,7 @@ describe("transitionOrder：退款守衛（payment 未翻 refunded 不得轉 ref
     );
 
     await expect(transitionOrder("order-1", "refunded")).rejects.toThrow(
-      "findRefundedPayment failed",
+      "findPaidPayment failed",
     );
     expect(rpcCall).not.toHaveBeenCalled();
   });

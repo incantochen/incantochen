@@ -3,10 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { type OrderStatus, VALID_TRANSITIONS } from "@/lib/order/order-status";
-import {
-  findPaidPayment,
-  findRefundedPayment,
-} from "@/lib/order/find-paid-payment";
+import { findPaidPayment } from "@/lib/order/find-paid-payment";
 
 export type { OrderStatus };
 export { VALID_TRANSITIONS };
@@ -135,15 +132,19 @@ export async function transitionOrder(
     if (paidBefore) throw new PaidOrderCancelBlockedError(orderId);
   }
 
-  // 退款守衛（T47，鏡射取消守衛的深度）：訂單要轉 refunded，payment 必須已
-  // 標記 refunded（正規路徑 refund-order.ts 先翻 payment 再呼叫本函式）。
-  // 沒有這道守衛，任何未來呼叫端直接 transitionOrder(id, "refunded") 會產生
-  // 「訂單已退款、payment 還掛 paid」——付款事實與訂單狀態矛盾，且該 payment
-  // 仍會被以 payment='paid' 為鍵的稽核臂持續告警（或反過來永不告警），
-  // 對帳無所適從。
+  // 退款守衛（T47，鏡射取消守衛的深度）：訂單要轉 refunded，必須「無 paid 殘留」
+  // ——用 !findPaidPayment 判定，而非「存在任一 refunded」。差別在 §5 重複付款
+  // （同單 A=refunded 舊週期 ＋ B=paid 本次）：以「有無 refunded」判定會撞到 A
+  // 即放行、留 B=paid，正是本守衛要防的「訂單已退款、payment 還掛 paid」漂移；
+  // 以「無 paid 殘留」判定才真正 enforce 該不變式（取消守衛用 findPaidPayment
+  // 的正確鏡射）。正規退款走 refund_order RPC（0020，原子）不經本路徑；本守衛
+  // 專防未來直接呼叫 transitionOrder(id,"refunded") 的呼叫端（自動退刷 API、
+  // 第二個 admin 介面）漏翻 payment。Admin Override 仍為文件化逃生口，走
+  // adminOverrideStatus 不經此守衛（其半套狀態由 reconcile paid-on-refunded
+  // 稽核臂 durable 兜底）。
   if (to === "refunded") {
-    const refunded = await findRefundedPayment(supabase, orderId);
-    if (!refunded) throw new RefundPaymentNotFlippedError(orderId);
+    const paidResidual = await findPaidPayment(supabase, orderId);
+    if (paidResidual) throw new RefundPaymentNotFlippedError(orderId);
   }
 
   await execTransitionRpc(supabase, {

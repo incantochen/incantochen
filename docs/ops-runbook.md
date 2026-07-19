@@ -193,20 +193,21 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 
 1. 售後申請確認要退款（`/admin/orders/[id]` 售後區塊）。
 2. **綠界廠商後台**對該筆交易操作退刷（信用卡）；記下退刷結果。
-3. `/admin/orders/[id]` → **退款區塊**：填退款原因（進 order_status_log note，寫明退刷單據／日期）＋勾「已於綠界後台完成實際退刷」→ 登記退款。系統自動：payment 翻 `refunded` → 訂單走狀態機轉 `refunded`（含稽核 log）→ 寄退款通知信給客人（sendOnce 去重；寄失敗顯示 warning，每日 reconcile sweep 自動補寄）。整段冪等，中途失敗重按一次即收斂。
+3. `/admin/orders/[id]` → **退款區塊**：填退款原因（進 order_status_log note，寫明退刷單據／日期）＋勾「已於綠界後台完成實際退刷」→ 登記退款。系統自動：**payment 翻 `refunded`＋訂單 CAS 轉 `refunded`＋稽核 log 於單一交易內原子完成**（`refund_order` RPC，migration 0020；CAS 未命中整筆 rollback、payment 翻面一併還原——不會留下「payment 已退、訂單沒退」的半套狀態）→ 寄退款通知信給客人（sendOnce 去重；寄失敗顯示 warning，每日 reconcile sweep 自動補寄）。整段冪等，中途失敗重按一次即收斂。
 4. ⚖️ 已開電子發票（T42 之後）須折讓／作廢——會計流程未定案前，先記錄在訂單 note，發票開立後不可略過此步（退款區塊在已開發票時會紅字提醒）。
 5. 退款不走操作欄一鍵轉換（server 端也擋）；Admin Override 仍保留為逃生口，但走 Override 不會翻 payment、不寄通知信——正常退款一律走退款區塊。**若已誤走 Override**（訂單 refunded、payment 仍 paid 的半套狀態）：回訂單詳情頁退款區塊，會出現「補登記退款」入口——補登記即同步 payment＋補寄通知信（refundOrder 對已 refunded 訂單冪等重入）。
 6. pending_payment（webhook 卡單，§1.1 第④類）與 cancelled（§6.1）訂單**不可**在退款區塊登記（伺服器端會擋）——這類單屬人工裁決，依 §6.1 流程處理。
 
 ### 6.1 錢收在已關閉／已取消訂單上（人工裁決）
 
-**觸發本節的三個 Sentry 訊號**（成因不同，裁決流程相同）：
+**觸發本節的四個 Sentry 訊號**（成因不同，裁決流程相同）：
 
 | Sentry 訊息                                                            | summary 計數            | 成因                                                                                                                                 | 復發偵測                              |
 | ---------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
 | `reconcile: money received on closed order`                            | `promotedOnClosedOrder` | 對帳（主臂或漂移臂）向綠界／依財務事實推進時，重查發現訂單已 cancelled／refunded                                                     | 單次（payment 已 paid，隔日不再入選） |
 | `transitionOrder: money received on order cancelled during transition` | —                       | 取消守衛的 TOCTOU 毫秒窄窗：pre-guard 查無 paid、CAS 取消 commit 後才查到 payment 已 paid                                            | 單次（取消當下發）                    |
 | `reconcile: paid payment on cancelled order`                           | `paidOnCancelled`       | **durable 稽核臂**：每日掃 `payment=paid ∧ orders=cancelled`——上面兩種單次訊號漏看、或 T127 部署前既有列，都會被這支每日重新撈到告警 | **每日重複**直到處理                  |
+| `reconcile: paid payment on refunded order`                            | `paidOnRefunded`        | **durable 稽核臂（T47）**：每日掃 `payment=paid ∧ orders=refunded`——成因＝Admin Override 直接把訂單改 refunded（逃生口，不翻 payment）。裁決＝回退款區塊按「補登記退款」補翻 payment＋補寄信 | **每日重複**直到處理                  |
 
 **成因總述**：逾期自動取消／人工取消後客人才完成付款，或取消與 webhook 結算的窄窗競態。payment 照翻／維持 `paid`（`gateway_trade_no`／`raw_callback` 已落地＝日後退款的依據），訂單維持 cancelled／refunded。**不自癒**——錢收了但訂單不會自動復活，必須人工裁決。
 
@@ -217,7 +218,7 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 1. **退款**：綠界後台對該筆交易退刷（操作同 §5），完成後 payment 標 `refunded`（同 §5 SQL）；人工 email 告知客人（3–7 個工作天入帳）。
 2. **恢復訂單**：客人仍要商品且交期可接受 → `/admin/orders/[id]` Admin Override 把訂單改 `paid`（reason 寫明「取消後付款成立，經客人確認恢復訂單」），再依 §4 補寄確認信。
 
-⚠️ 前兩個訊號是**單次**的——收到當日就要處理，別等第二封。第三個（`paid payment on cancelled order`）是 durable 兜底，會**每日重複告警**直到你把該列裁決掉（退款標 `refunded`、或恢復訂單改 `paid`），是「還沒處理」的每日催辦，不是新事件。
+⚠️ 前兩個訊號是**單次**的——收到當日就要處理，別等第二封。後兩個（`paid payment on cancelled order`、`paid payment on refunded order`）是 durable 兜底，會**每日重複告警**直到你把該列裁決掉，是「還沒處理」的每日催辦，不是新事件。`paid payment on refunded order` 專指 Admin Override 逃生口留下的「訂單已退款、payment 仍 paid」半套狀態——回退款區塊按「補登記退款」即補翻 payment＋補寄通知信。
 
 ---
 

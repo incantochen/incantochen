@@ -28,12 +28,14 @@ export async function findPaidPayment(
   return data ?? null;
 }
 
-// 退款守衛（transitionOrder to='refunded'，T47）用：「這筆訂單有沒有已標記
-// refunded 的 payment」。與 findPaidPayment 形狀刻意分開：refunded 沒有
-// partial unique index（paid 才有 uq_payment_one_paid_per_order），同單多筆
-// refunded（§5 重複付款各自退刷）是合法狀態，需 limit(1) 只問存在性；
-// findPaidPayment 靠 unique index 保證至多一筆，maybeSingle 即安全。
-export async function findRefundedPayment(
+// 退款存在性守衛（refundOrder，T47）用：「這筆訂單有沒有任何可退款的收款
+// 記錄」——同時放行 paid（首次退款）與 refunded（重入／並發已翻走）。兩者都
+// 查無才代表這張單從未收款成立、無從退起。與 findPaidPayment 形狀刻意分開：
+// paid 有 partial unique index（uq_payment_one_paid_per_order）至多一筆，但
+// refunded 無此約束、§5 重複付款可有多筆，故用 in()＋limit(1) 只問存在性
+//（maybeSingle 在多筆 refunded 下會炸）。收斂 refund-order.ts 原本手刻的同款
+// 探針（避免散落複本失同步，T67 教訓）。
+export async function findRefundablePayment(
   serviceRole: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
 ): Promise<{ id: string } | null> {
@@ -41,12 +43,12 @@ export async function findRefundedPayment(
     .from("payment")
     .select("id")
     .eq("order_id", orderId)
-    .eq("status", "refunded")
+    .in("status", ["paid", "refunded"])
     .limit(1)
     .maybeSingle();
 
   if (error) {
-    throw new Error(`findRefundedPayment failed: ${error.message}`);
+    throw new Error(`findRefundablePayment failed: ${error.message}`);
   }
   return data ?? null;
 }

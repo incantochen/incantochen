@@ -102,6 +102,19 @@ describe("sendOrderRefundedNotification", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 
+  it("order_no 含 HTML 時被跳脫（與 recipient_name 一致的防禦性 escape）", async () => {
+    mockOrderQuery({
+      data: { ...BASE_ORDER, order_no: 'ORD-<img src=x onerror=alert(1)>' },
+      error: null,
+    });
+
+    await sendOrderRefundedNotification("order-1");
+
+    const html = sendMock.mock.calls[0]?.[0]?.html as string;
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img");
+  });
+
   it("查詢 PGRST116（查無此列）→ 安靜跳過不寄信、不 throw", async () => {
     mockOrderQuery({
       data: null,

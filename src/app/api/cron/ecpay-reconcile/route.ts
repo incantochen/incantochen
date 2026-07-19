@@ -176,6 +176,14 @@ type Summary = {
   paidOnCancelled: number;
   // 稽核臂撈到超過 DRIFT_LIMIT：大面積事故時 backlog 超出單輪量，需人工關注。
   paidOnCancelledTruncated: boolean;
+  // recurring 稽核臂（T47）：payment=paid ∧ orders=refunded 的漂移單。成因＝
+  // Admin Override 直接把訂單改 refunded（逃生口，不翻 payment、不寄信），
+  // 或 legacy 半套。三個既有臂（鍵 payment=pending／orders=pending_payment／
+  // orders=cancelled）都撈不到，唯一訊號原本只有逐單開啟才顯示的 needsPaymentRepair
+  // UI——非 durable。這支每日查得到就告警走人工裁決（管理者回退款區塊按「補登記
+  // 退款」補翻 payment＋補寄信，ops-runbook §6.1）。
+  paidOnRefunded: number;
+  paidOnRefundedTruncated: boolean;
   mismatches: number;
   failed: number;
   unexpected: number;
@@ -432,6 +440,58 @@ async function auditPaidOnCancelledOrders(
   return true;
 }
 
+// recurring 稽核臂（#4 durable 兜底，T47）：payment=paid ∧ orders=refunded。
+// 正規退款走 refund_order RPC（原子）不會產生此狀態；成因＝Admin Override 直接
+// 把訂單改 refunded（逃生口，不翻 payment、不寄信）或 legacy 半套。三個既有臂
+// （payment=pending／orders=pending_payment／orders=cancelled）都撈不到，唯一
+// 訊號原本只有逐單開啟才顯示的 needsPaymentRepair UI——非 durable，漏看即「已
+// 退款訂單上仍掛已付款」永遠無聲。這支把它升級為每日 durable 復發偵測，走人工
+// 裁決（回退款區塊「補登記退款」補翻 payment＋補寄信，ops-runbook §6.1）。
+// post-guard 下這個集合應恆近乎空，量體 ~0。回傳 false＝查詢失敗（同其他臂，
+// 讓整支 cron fail-visible 回 500）。
+async function auditPaidOnRefundedOrders(
+  serviceRole: ReturnType<typeof createServiceRoleClient>,
+  summary: Summary,
+): Promise<boolean> {
+  const { data: rows, error } = await serviceRole
+    .from("payment")
+    .select("id, order_id, merchant_trade_no, orders!inner(status)")
+    .eq("status", "paid")
+    .eq("orders.status", "refunded")
+    // 穩定排序（同 paid-on-cancelled 臂）：固定 paid_at 升序，避免同一筆卡單在
+    // 告警集裡進出跳動；多撈一筆精準偵測截斷。
+    .order("paid_at", { ascending: true, nullsFirst: true })
+    .limit(DRIFT_LIMIT + 1);
+
+  if (error) {
+    Sentry.captureMessage("reconcile: paid-on-refunded 稽核查詢失敗", {
+      level: "error",
+      extra: { error: error.message },
+    });
+    return false;
+  }
+
+  if ((rows?.length ?? 0) > DRIFT_LIMIT) {
+    summary.paidOnRefundedTruncated = true;
+    Sentry.captureMessage("reconcile: paid-on-refunded backlog exceeds limit", {
+      level: "error",
+      extra: { limit: DRIFT_LIMIT },
+    });
+  }
+
+  for (const payment of (rows ?? []).slice(0, DRIFT_LIMIT)) {
+    summary.paidOnRefunded += 1;
+    Sentry.captureMessage("reconcile: paid payment on refunded order", {
+      level: "error",
+      extra: {
+        orderId: payment.order_id,
+        merchantTradeNo: payment.merchant_trade_no,
+      },
+    });
+  }
+  return true;
+}
+
 const INVOICE_SWEEP_LIMIT = 20;
 
 // T42：「已付款未開票」每日 sweep（藍圖 07-invoice.md §6 明訂的核對項）——
@@ -496,6 +556,8 @@ export async function GET(request: Request) {
     promotedOnClosedOrder: 0,
     paidOnCancelled: 0,
     paidOnCancelledTruncated: false,
+    paidOnRefunded: 0,
+    paidOnRefundedTruncated: false,
     mismatches: 0,
     failed: 0,
     unexpected: 0,
@@ -827,6 +889,11 @@ export async function GET(request: Request) {
     // recurring 稽核臂：payment=paid ∧ orders=cancelled 的 durable 復發偵測。
     degraded =
       !(await auditPaidOnCancelledOrders(serviceRole, summary)) || degraded;
+
+    // recurring 稽核臂（T47）：payment=paid ∧ orders=refunded（Admin Override
+    // 逃生口留下的半套狀態）的 durable 復發偵測。
+    degraded =
+      !(await auditPaidOnRefundedOrders(serviceRole, summary)) || degraded;
 
     degraded = !(await sweepFailedNotifications(serviceRole, summary)) || degraded;
 

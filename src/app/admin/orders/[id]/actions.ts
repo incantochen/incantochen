@@ -136,14 +136,37 @@ export async function shipOrder(
   return { ok: true };
 }
 
+// reason 會進 order_status_log.note 與 Sentry payload：限長防誤貼大段內容，
+// 與 refund-section.tsx／override 表單的 textarea maxLength 保持一致。override
+// 與退款登記共用此上限。
+const STATUS_REASON_MAX_LENGTH = 500;
+
 export async function overrideStatus(
   orderId: string,
   to: OrderStatus,
   reason: string,
 ): Promise<AdminActionResult> {
   const user = await requireAdmin();
+
+  // 伺服器端驗 reason（非空＋限長）：override 是繞過狀態機的高權限操作（含退款
+  // 逃生口），稽核 note 必須有內容。client handleOverride 已擋，但 server action
+  // 可被直接呼叫，光靠 client 過濾會留下「空稽核 note 的狀態覆寫」旁路。
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) {
+    return { ok: false, error: "請填寫強制改狀態的原因" };
+  }
+  if (trimmedReason.length > STATUS_REASON_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `原因請勿超過 ${STATUS_REASON_MAX_LENGTH} 字`,
+    };
+  }
+
   try {
-    await adminOverrideStatus(orderId, to, { operatorId: user.id, reason });
+    await adminOverrideStatus(orderId, to, {
+      operatorId: user.id,
+      reason: trimmedReason,
+    });
   } catch (e) {
     if (e instanceof OrderTransitionRaceError) {
       return { ok: false, error: RACE_MESSAGE };
@@ -155,10 +178,6 @@ export async function overrideStatus(
   revalidatePath("/admin/orders");
   return { ok: true };
 }
-
-// reason 會進 order_status_log.note 與 Sentry payload：限長防誤貼大段內容，
-// 與 refund-section.tsx 的 textarea maxLength 保持一致。
-const REFUND_REASON_MAX_LENGTH = 500;
 
 // T47 記錄式退款：實際刷退由管理者先在綠界廠商後台人工完成，這裡只登記
 // 結果——refundOrder 翻 payment＋orders（冪等），成功後 best-effort 寄退款
@@ -175,10 +194,10 @@ export async function refundOrderAction(
   if (!trimmedReason) {
     return { ok: false, error: "請填寫退款原因" };
   }
-  if (trimmedReason.length > REFUND_REASON_MAX_LENGTH) {
+  if (trimmedReason.length > STATUS_REASON_MAX_LENGTH) {
     return {
       ok: false,
-      error: `退款原因請勿超過 ${REFUND_REASON_MAX_LENGTH} 字`,
+      error: `退款原因請勿超過 ${STATUS_REASON_MAX_LENGTH} 字`,
     };
   }
 
