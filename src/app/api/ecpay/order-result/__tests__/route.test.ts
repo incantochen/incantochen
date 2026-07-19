@@ -1,4 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { vi, describe, it, expect } from "vitest";
+
+// route 現經 merchant-trade-no.ts 拉進 server-only（T96）——node 測試環境會 throw
+// client-component 錯誤，比照 notify route.test.ts 以空模組 mock 掉。
+vi.mock("server-only", () => ({}));
+
 import { POST } from "../route";
 
 // order_no 格式 INC-YYYYMMDD-XXXXXX（3+8+6=17 碼去 hyphen）

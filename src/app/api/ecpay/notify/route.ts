@@ -12,6 +12,7 @@ import {
 } from "@/lib/order/ensure-paid";
 import { findPaidPayment } from "@/lib/order/find-paid-payment";
 import { validateSettleAmount } from "@/lib/ecpay/validate-settle-amount";
+import { merchantTradeNoToOrderNo } from "@/lib/ecpay/merchant-trade-no";
 
 const OK = () =>
   new Response("1|OK", {
@@ -86,8 +87,9 @@ export async function POST(request: Request) {
     }
 
     if (!payment) {
-      // pay page 預建失敗的邊緣情況：嘗試從 order_no 倒推（兼容舊格式）
-      const orderNo = `${merchantTradeNo.slice(0, 3)}-${merchantTradeNo.slice(3, 11)}-${merchantTradeNo.slice(11, 17)}`;
+      // pay page 預建失敗的邊緣情況：嘗試從 order_no 倒推（單一出處，T96/F-009）
+      const orderNo = merchantTradeNoToOrderNo(merchantTradeNo);
+      if (!orderNo) return ERR("Order not found");
       const { data: order, error: orderLookupError } = await serviceRole
         .from("orders")
         .select("id, status, total_amount")
