@@ -7,6 +7,7 @@ import {
   STATUS_LABELS,
   type OrderStatus,
 } from "@/lib/order/order-status";
+import { buildPickupTracking } from "@/lib/order/shipping-tracking";
 import {
   changeStatus,
   shipOrder,
@@ -88,7 +89,7 @@ export function OrderActions({
   function handleShip() {
     const tracking =
       shipMethod === "pickup"
-        ? `面交${pickupNote ? ` ${pickupNote}` : ""}`
+        ? buildPickupTracking(pickupNote)
         : trackingInput.trim();
 
     if (!tracking) {
