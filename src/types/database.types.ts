@@ -857,6 +857,10 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      repair_refunded_payment: {
+        Args: { p_actor_id?: string; p_note?: string; p_order_id: string }
+        Returns: number
+      }
       set_default_product_option_value: {
         Args: { p_pov_id: string }
         Returns: number

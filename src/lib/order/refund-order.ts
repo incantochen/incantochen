@@ -32,44 +32,30 @@ export class OrderNotRefundableError extends Error {
   }
 }
 
+// note 前綴（單一出處）：配合 from=to=refunded 同狀態列＋is_override=true，讓
+// order_status_log 一眼可辨是「補登記」而非正常轉換，並可 grep（見 0021 comment）。
+const REPAIR_NOTE_PREFIX = "[退款補登記]";
+
 // Admin Override 逃生口（paid→refunded）不翻 payment、不寄信，留下
 // 「order=refunded ∧ payment=paid」的半套狀態（refund-section.tsx 的
 // needsPaymentRepair）。此路徑補翻殘留的 paid payment 並把 reason 落進
-// order_status_log——原子 RPC 不適用（訂單狀態不變、無轉換可做）。
+// order_status_log——走 repair_refunded_payment RPC（0021）把兩者包進單一交易，
+// 消滅原本 TS 端兩次非原子寫入（log insert 失敗後重試會因 payment 已翻而跳過
+// log→reason 永久遺失＋假成功）的缺口。訂單狀態不變、無狀態機轉換可做，故不走
+// refund_order（0020）。
 async function repairRefundedOrderPayment(
   supabase: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
   options: { actorId: string; reason: string },
 ): Promise<void> {
-  // 條件式 UPDATE（帶 status='paid' 且 SET 改動該欄位，§6 CAS 規則）：並發雙擊
-  // 只有一筆搶到 paid，回傳被翻的列供判斷是否真的補翻了。
-  const { data: flipped, error: updateError } = await supabase
-    .from("payment")
-    .update({ status: "refunded" })
-    .eq("order_id", orderId)
-    .eq("status", "paid")
-    .select("id");
+  const { error } = await supabase.rpc("repair_refunded_payment", {
+    p_order_id: orderId,
+    p_note: `${REPAIR_NOTE_PREFIX} ${options.reason}`,
+    p_actor_id: options.actorId,
+  });
 
-  if (updateError) {
-    throw new Error(`payment 補翻 refunded 失敗：${updateError.message}`);
-  }
-
-  // 只在確實補翻了 payment 時寫稽核註記——避免重複點擊／payment 早已一致時灌
-  // 無意義的 log。from=to=refunded 的同狀態列刻意作為「退款補登記」的稽核痕跡
-  //（order_status_log 只 insert 不 update，同狀態註記可接受）。補上 code review
-  // 指出的缺口：UI 承諾 reason「入內部稽核記錄」，冪等重入路徑原本卻靜默丟棄。
-  if (flipped && flipped.length > 0) {
-    const { error: logError } = await supabase.from("order_status_log").insert({
-      order_id: orderId,
-      from_status: "refunded",
-      to_status: "refunded",
-      note: `退款補登記（payment 同步）：${options.reason}`,
-      actor_id: options.actorId,
-      is_override: true,
-    });
-    if (logError) {
-      throw new Error(`退款補登記稽核 log 失敗：${logError.message}`);
-    }
+  if (error) {
+    throw new Error(`退款補登記失敗：${error.message}`);
   }
 }
 

@@ -17,26 +17,21 @@ import type { OrderStatus } from "../order-status";
 
 type QueryResult<T> = { data: T | null; error: { message: string } | null };
 type RpcResult = {
-  data: { id: string } | null;
+  data: unknown;
   error: { message: string; code?: string } | null;
 };
 
 const rpcSpy = vi.fn();
-const paymentUpdateValuesSpy = vi.fn();
-const paymentUpdateEqSpy = vi.fn();
-const logInsertSpy = vi.fn();
 
 function makeServiceRole(opts: {
   // fetchCurrentStatus（pre-guard）讀 orders.status
   orderStatus: QueryResult<{ status: OrderStatus }>;
   // findRefundablePayment：payment in ('paid','refunded') 存在性
   existsResult?: QueryResult<{ id: string }>;
-  // repair 路徑：payment UPDATE ... .select("id") 回傳被翻的列（陣列）
-  repairUpdate?: { data: { id: string }[] | null; error: { message: string } | null };
-  // repair 路徑：order_status_log insert
-  logInsert?: { error: { message: string } | null };
   // 一般路徑：refund_order RPC → .select("id").maybeSingle()
-  rpcResult?: RpcResult;
+  refundRpc?: { data: { id: string } | null; error: { message: string; code?: string } | null };
+  // repair 路徑：repair_refunded_payment RPC → 直接 await {data, error}
+  repairRpc?: RpcResult;
 }) {
   return {
     from: (table: string) => {
@@ -61,40 +56,22 @@ function makeServiceRole(opts: {
             };
             return chain;
           },
-          // repair 路徑條件式 UPDATE ... .select("id")
-          update: (values: unknown) => {
-            paymentUpdateValuesSpy(values);
-            const chain = {
-              eq: (column: string, value: unknown) => {
-                paymentUpdateEqSpy(column, value);
-                return chain;
-              },
-              select: () =>
-                Promise.resolve(
-                  opts.repairUpdate ?? { data: [{ id: "pay-1" }], error: null },
-                ),
-            };
-            return chain;
-          },
-        };
-      }
-      if (table === "order_status_log") {
-        return {
-          insert: (row: unknown) => {
-            logInsertSpy(row);
-            return Promise.resolve(opts.logInsert ?? { error: null });
-          },
         };
       }
       throw new Error(`unexpected table ${table}`);
     },
     rpc: (name: string, args: unknown) => {
       rpcSpy(name, args);
+      if (name === "repair_refunded_payment") {
+        // TS 端直接 await → {data, error}
+        return Promise.resolve(opts.repairRpc ?? { data: 1, error: null });
+      }
+      // refund_order：.select("id").maybeSingle()
       return {
         select: () => ({
           maybeSingle: () =>
             Promise.resolve(
-              opts.rpcResult ?? { data: { id: "order-1" }, error: null },
+              opts.refundRpc ?? { data: { id: "order-1" }, error: null },
             ),
         }),
       };
@@ -113,14 +90,11 @@ const OPTS = { actorId: "admin-1", reason: "戒台瑕疵，協議全額退款" }
 
 beforeEach(() => {
   rpcSpy.mockClear();
-  paymentUpdateValuesSpy.mockClear();
-  paymentUpdateEqSpy.mockClear();
-  logInsertSpy.mockClear();
 });
 
 describe("refundOrder：pre-guard（動任何寫入之前擋不可退款的訂單狀態）", () => {
   it.each<OrderStatus>(["pending_payment", "cancelled"])(
-    "訂單狀態 %s → OrderNotRefundableError，不呼叫 RPC、不動 payment",
+    "訂單狀態 %s → OrderNotRefundableError，不呼叫任何 RPC",
     async (status) => {
       mockClient({ orderStatus: ok({ status }) });
 
@@ -128,7 +102,6 @@ describe("refundOrder：pre-guard（動任何寫入之前擋不可退款的訂�
         OrderNotRefundableError,
       );
       expect(rpcSpy).not.toHaveBeenCalled();
-      expect(paymentUpdateValuesSpy).not.toHaveBeenCalled();
     },
   );
 
@@ -169,11 +142,11 @@ describe("refundOrder：存在檢查（findRefundablePayment）", () => {
 });
 
 describe("refundOrder：一般路徑（原子 refund_order RPC）", () => {
-  it("happy path：以 p_from=現況、p_note=reason、p_actor_id 呼叫 refund_order RPC", async () => {
+  it("happy path：以 p_from=現況、p_note=reason、p_actor_id 呼叫 refund_order", async () => {
     mockClient({
       orderStatus: ok({ status: "paid" as OrderStatus }),
       existsResult: ok({ id: "pay-1" }),
-      rpcResult: { data: { id: "order-1" }, error: null },
+      refundRpc: { data: { id: "order-1" }, error: null },
     });
 
     await refundOrder("order-1", OPTS);
@@ -184,12 +157,10 @@ describe("refundOrder：一般路徑（原子 refund_order RPC）", () => {
       p_note: "戒台瑕疵，協議全額退款",
       p_actor_id: "admin-1",
     });
-    // 原子 RPC 取代了 TS 端手動翻 payment：一般路徑不直接 UPDATE payment。
-    expect(paymentUpdateValuesSpy).not.toHaveBeenCalled();
   });
 
   it.each<OrderStatus>(["in_production", "shipped", "completed"])(
-    "可退款狀態 %s → 進 RPC（含 completed→refunded）",
+    "可退款狀態 %s → 進 refund_order（含 completed→refunded）",
     async (status) => {
       mockClient({
         orderStatus: ok({ status }),
@@ -205,11 +176,11 @@ describe("refundOrder：一般路徑（原子 refund_order RPC）", () => {
     },
   );
 
-  it("RPC error code U0002（CAS 未命中）→ OrderTransitionRaceError", async () => {
+  it("refund_order error code U0002（CAS 未命中）→ OrderTransitionRaceError", async () => {
     mockClient({
       orderStatus: ok({ status: "paid" as OrderStatus }),
       existsResult: ok({ id: "pay-1" }),
-      rpcResult: { data: null, error: { message: "CAS 未命中", code: "U0002" } },
+      refundRpc: { data: null, error: { message: "CAS 未命中", code: "U0002" } },
     });
 
     await expect(refundOrder("order-1", OPTS)).rejects.toBeInstanceOf(
@@ -217,11 +188,11 @@ describe("refundOrder：一般路徑（原子 refund_order RPC）", () => {
     );
   });
 
-  it("RPC 一般 error（DB 故障）→ throw「退款交易失敗」，不吞", async () => {
+  it("refund_order 一般 error（DB 故障）→ throw「退款交易失敗」，不吞", async () => {
     mockClient({
       orderStatus: ok({ status: "paid" as OrderStatus }),
       existsResult: ok({ id: "pay-1" }),
-      rpcResult: {
+      refundRpc: {
         data: null,
         error: { message: "connection timeout", code: "57014" },
       },
@@ -230,11 +201,11 @@ describe("refundOrder：一般路徑（原子 refund_order RPC）", () => {
     await expect(refundOrder("order-1", OPTS)).rejects.toThrow("退款交易失敗");
   });
 
-  it("RPC 成功卻回 data=null（非預期）→ 保守當競態，不誤報成功", async () => {
+  it("refund_order 成功卻回 data=null（非預期）→ 保守當競態，不誤報成功", async () => {
     mockClient({
       orderStatus: ok({ status: "paid" as OrderStatus }),
       existsResult: ok({ id: "pay-1" }),
-      rpcResult: { data: null, error: null },
+      refundRpc: { data: null, error: null },
     });
 
     await expect(refundOrder("order-1", OPTS)).rejects.toBeInstanceOf(
@@ -243,53 +214,37 @@ describe("refundOrder：一般路徑（原子 refund_order RPC）", () => {
   });
 });
 
-describe("refundOrder：repair 路徑（訂單已 refunded，補翻殘留 payment）", () => {
-  it("Override 半套（order=refunded ∧ payment=paid）→ 補翻 payment＋落 reason 稽核 log，不呼叫 RPC", async () => {
+describe("refundOrder：repair 路徑（訂單已 refunded，原子補翻殘留 payment）", () => {
+  it("Override 半套 → 呼叫 repair_refunded_payment，note 含 [退款補登記] 前綴，不呼叫 refund_order", async () => {
     mockClient({
       orderStatus: ok({ status: "refunded" as OrderStatus }),
       existsResult: ok({ id: "pay-1" }),
-      repairUpdate: { data: [{ id: "pay-1" }], error: null },
+      repairRpc: { data: 1, error: null },
     });
 
     await refundOrder("order-1", OPTS);
 
-    expect(paymentUpdateValuesSpy).toHaveBeenCalledWith({ status: "refunded" });
-    expect(paymentUpdateEqSpy).toHaveBeenCalledWith("order_id", "order-1");
-    expect(paymentUpdateEqSpy).toHaveBeenCalledWith("status", "paid");
-    // 補上 UI 承諾的稽核：reason 落進 order_status_log note。
-    expect(logInsertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        order_id: "order-1",
-        note: expect.stringContaining("戒台瑕疵，協議全額退款"),
-        is_override: true,
-      }),
+    expect(rpcSpy).toHaveBeenCalledWith("repair_refunded_payment", {
+      p_order_id: "order-1",
+      p_note: "[退款補登記] 戒台瑕疵，協議全額退款",
+      p_actor_id: "admin-1",
+    });
+    // repair 不走一般轉換路徑
+    expect(rpcSpy).not.toHaveBeenCalledWith(
+      "refund_order",
+      expect.anything(),
     );
-    expect(rpcSpy).not.toHaveBeenCalled();
   });
 
-  it("已完全一致（payment 早已 refunded，UPDATE 0 列）→ 不寫稽核 log（避免重複點擊灌 log）", async () => {
+  it("repair RPC error → throw「退款補登記失敗」，不吞", async () => {
     mockClient({
       orderStatus: ok({ status: "refunded" as OrderStatus }),
       existsResult: ok({ id: "pay-1" }),
-      repairUpdate: { data: [], error: null },
-    });
-
-    await refundOrder("order-1", OPTS);
-
-    expect(logInsertSpy).not.toHaveBeenCalled();
-    expect(rpcSpy).not.toHaveBeenCalled();
-  });
-
-  it("repair 的 payment UPDATE {error} → throw 不吞", async () => {
-    mockClient({
-      orderStatus: ok({ status: "refunded" as OrderStatus }),
-      existsResult: ok({ id: "pay-1" }),
-      repairUpdate: { data: null, error: { message: "connection timeout" } },
+      repairRpc: { data: null, error: { message: "connection timeout" } },
     });
 
     await expect(refundOrder("order-1", OPTS)).rejects.toThrow(
-      "payment 補翻 refunded 失敗",
+      "退款補登記失敗",
     );
-    expect(logInsertSpy).not.toHaveBeenCalled();
   });
 });

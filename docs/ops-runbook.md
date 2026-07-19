@@ -195,7 +195,7 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 2. **綠界廠商後台**對該筆交易操作退刷（信用卡）；記下退刷結果。
 3. `/admin/orders/[id]` → **退款區塊**：填退款原因（進 order_status_log note，寫明退刷單據／日期）＋勾「已於綠界後台完成實際退刷」→ 登記退款。系統自動：**payment 翻 `refunded`＋訂單 CAS 轉 `refunded`＋稽核 log 於單一交易內原子完成**（`refund_order` RPC，migration 0020；CAS 未命中整筆 rollback、payment 翻面一併還原——不會留下「payment 已退、訂單沒退」的半套狀態）→ 寄退款通知信給客人（sendOnce 去重；寄失敗顯示 warning，每日 reconcile sweep 自動補寄）。整段冪等，中途失敗重按一次即收斂。
 4. ⚖️ 已開電子發票（T42 之後）須折讓／作廢——會計流程未定案前，先記錄在訂單 note，發票開立後不可略過此步（退款區塊在已開發票時會紅字提醒）。
-5. 退款不走操作欄一鍵轉換（server 端也擋）；Admin Override 仍保留為逃生口，但走 Override 不會翻 payment、不寄通知信——正常退款一律走退款區塊。**若已誤走 Override**（訂單 refunded、payment 仍 paid 的半套狀態）：回訂單詳情頁退款區塊，會出現「補登記退款」入口——補登記即同步 payment＋補寄通知信（refundOrder 對已 refunded 訂單冪等重入）。
+5. 退款不走操作欄一鍵轉換（server 端也擋）；Admin Override 仍保留為逃生口，但走 Override 不會翻 payment、不寄通知信——正常退款一律走退款區塊。**若已誤走 Override**（訂單 refunded、payment 仍 paid 的半套狀態）：回訂單詳情頁退款區塊，會出現「補登記退款」入口——補登記走 `repair_refunded_payment` 原子 RPC（0021）：補翻 payment＋寫稽核 log（note 帶 `[退款補登記]` 前綴）單一交易完成，再補寄通知信（對已 refunded 訂單冪等重入）。此半套狀態也由 reconcile `paid payment on refunded order` 稽核臂每日 durable 偵測（§6.1）。
 6. pending_payment（webhook 卡單，§1.1 第④類）與 cancelled（§6.1）訂單**不可**在退款區塊登記（伺服器端會擋）——這類單屬人工裁決，依 §6.1 流程處理。
 
 ### 6.1 錢收在已關閉／已取消訂單上（人工裁決）
