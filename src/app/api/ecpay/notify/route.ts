@@ -161,6 +161,20 @@ export async function POST(request: Request) {
       return await settlePaid(serviceRole, payment.order_id);
     }
 
+    // 退款終態（T47）：這筆 payment 已 refunded（正規退款或 Override 補登記）。
+    // ECPay 在其重送視窗內補送一次舊回呼會走到這裡——refunded 是終態，重複回呼
+    // 是良性的、非新事件。直接回 1|OK 停止 ECPay 重送，不落入下方 pending→paid
+    // 翻面（`.eq("status","pending")` 0 列 → 誤入 rescue 分支 `.eq("status",
+    // "failed")` 也 0 列 → 誤報 error「not rescued」）與 settlePaid（訂單已終態，
+    // ensureOrderPaid 會誤判「payment may be stuck」error）。記 info 供稽核。
+    if (payment.status === "refunded") {
+      Sentry.captureMessage(
+        "ecpay/notify: duplicate callback on refunded payment (benign)",
+        { level: "info", extra: { paymentId: payment.id, merchantTradeNo } },
+      );
+      return OK();
+    }
+
     const isPaid = params.RtnCode === "1";
     const now = new Date().toISOString();
 

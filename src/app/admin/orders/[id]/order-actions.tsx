@@ -15,8 +15,13 @@ import {
 } from "./actions";
 
 const ALL_STATUSES: OrderStatus[] = [
-  "pending_payment", "paid", "in_production",
-  "shipped", "completed", "cancelled", "refunded",
+  "pending_payment",
+  "paid",
+  "in_production",
+  "shipped",
+  "completed",
+  "cancelled",
+  "refunded",
 ];
 
 export function OrderActions({
@@ -32,7 +37,9 @@ export function OrderActions({
   const { message, notify } = useAdminNotify();
 
   // 出貨表單狀態
-  const [shipMethod, setShipMethod] = useState<"delivery" | "pickup">("delivery");
+  const [shipMethod, setShipMethod] = useState<"delivery" | "pickup">(
+    "delivery",
+  );
   const [trackingInput, setTrackingInput] = useState("");
   const [pickupNote, setPickupNote] = useState("");
 
@@ -56,7 +63,11 @@ export function OrderActions({
     : (overridableStatuses[0] ?? currentStatus);
   const [overrideReason, setOverrideReason] = useState("");
 
-  const nextStatuses = VALID_TRANSITIONS[currentStatus].filter((s) => s !== "shipped");
+  // shipped 走下方出貨表單（要填物流單號）；refunded 走退款區塊（要填原因、
+  // 翻 payment、寄退款通知信，T47）——一鍵按鈕會繞過這些必要環節，都不列。
+  const nextStatuses = VALID_TRANSITIONS[currentStatus].filter(
+    (s) => s !== "shipped" && s !== "refunded",
+  );
   const canShip = VALID_TRANSITIONS[currentStatus].includes("shipped");
 
   function handleChangeStatus(to: OrderStatus) {
@@ -218,7 +229,9 @@ export function OrderActions({
       {/* 修正物流單號（已出貨後） */}
       {currentStatus === "shipped" && (
         <div>
-          <h3 className="text-sm font-medium text-gray-700 mb-2">修正物流單號</h3>
+          <h3 className="text-sm font-medium text-gray-700 mb-2">
+            修正物流單號
+          </h3>
           <div className="flex gap-2">
             <input
               type="text"
@@ -250,19 +263,25 @@ export function OrderActions({
         {overrideOpen && (
           <div className="px-4 pb-4 space-y-3">
             <div>
-              <label className="block text-xs text-gray-600 mb-1">目標狀態</label>
+              <label className="block text-xs text-gray-600 mb-1">
+                目標狀態
+              </label>
               <select
                 value={effectiveOverrideTo}
                 onChange={(e) => setOverrideTo(e.target.value as OrderStatus)}
                 className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
               >
                 {overridableStatuses.map((s) => (
-                  <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+                  <option key={s} value={s}>
+                    {STATUS_LABELS[s]}
+                  </option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-600 mb-1">原因（必填）</label>
+              <label className="block text-xs text-gray-600 mb-1">
+                原因（必填）
+              </label>
               <textarea
                 value={overrideReason}
                 onChange={(e) => setOverrideReason(e.target.value)}

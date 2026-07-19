@@ -18,6 +18,7 @@ import {
   VALID_TRANSITIONS,
   OrderTransitionRaceError,
   PaidOrderCancelBlockedError,
+  RefundPaymentNotFlippedError,
   type OrderStatus,
 } from "../state-machine";
 
@@ -58,9 +59,12 @@ function makeServiceRole(opts: {
         return chain;
       }
       if (table === "payment") {
+        // 取消守衛與退款守衛都用 findPaidPayment（select→eq→eq→maybeSingle）；
+        // limit 保留供其他形狀的探針鏈，本測試不會呼叫。
         const chain = {
           select: () => chain,
           eq: () => chain,
+          limit: () => chain,
           maybeSingle: () =>
             Promise.resolve(paidQueue.shift() ?? { data: null, error: null }),
         };
@@ -106,6 +110,7 @@ describe("canTransition", () => {
       ["in_production", "refunded"],
       ["shipped", "completed"],
       ["shipped", "refunded"],
+      ["completed", "refunded"], // T47：已完成訂單因瑕疵協議退款
     ];
     for (const [from, to] of cases) {
       expect(canTransition(from, to), `${from} → ${to}`).toBe(true);
@@ -134,7 +139,8 @@ describe("canTransition", () => {
   });
 
   it("終止狀態無任何出口", () => {
-    const terminals: OrderStatus[] = ["completed", "cancelled", "refunded"];
+    // T47 起 completed 不再是終止狀態（completed → refunded 合法）。
+    const terminals: OrderStatus[] = ["cancelled", "refunded"];
     const allStatuses = Object.keys(VALID_TRANSITIONS) as OrderStatus[];
     for (const terminal of terminals) {
       for (const to of allStatuses) {
@@ -143,6 +149,17 @@ describe("canTransition", () => {
           `${terminal} → ${to} 應被拒絕`,
         ).toBe(false);
       }
+    }
+  });
+
+  it("completed 的唯一出口是 refunded（T47）——防未來誤開 completed→cancelled 等出口", () => {
+    // completed 訂單必有 paid payment，誤開 cancelled 出口＝直接踩取消守衛；
+    // 誤開回 in_production 等＝已履約訂單被重新打開。逐一鎖死。
+    const allStatuses = Object.keys(VALID_TRANSITIONS) as OrderStatus[];
+    for (const to of allStatuses) {
+      expect(canTransition("completed", to), `completed → ${to}`).toBe(
+        to === "refunded",
+      );
     }
   });
 });
@@ -284,6 +301,55 @@ describe("transitionOrder：取消守衛（有 paid payment 不得取消）", ()
       expect.objectContaining({ p_to: "in_production" }),
     );
     expect(sentryCaptureMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("transitionOrder：退款守衛（有 paid 殘留不得轉 refunded，T47）", () => {
+  it("仍有 paid 殘留 → 丟 RefundPaymentNotFlippedError、不進 RPC", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "paid",
+        updateMatches: true,
+        // 退款守衛的 findPaidPayment：查到 paid 殘留＝payment 尚未翻面。
+        paidResults: [{ data: { id: "pay-1" }, error: null }],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await expect(transitionOrder("order-1", "refunded")).rejects.toBeInstanceOf(
+      RefundPaymentNotFlippedError,
+    );
+    expect(rpcCall).not.toHaveBeenCalled();
+  });
+
+  it("無 paid 殘留（payment 已翻 refunded）→ 放行，RPC 收到 p_to=refunded", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "paid",
+        updateMatches: true,
+        paidResults: [{ data: null, error: null }],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await transitionOrder("order-1", "refunded", { actorId: "admin-1" });
+
+    expect(rpcCall).toHaveBeenCalledWith(
+      expect.objectContaining({ p_from: "paid", p_to: "refunded" }),
+    );
+  });
+
+  it("守衛查詢 {error} → throw 不吞（findPaidPayment 契約：查詢失敗 ≠ 查無資料）", async () => {
+    vi.mocked(createServiceRoleClient).mockReturnValue(
+      makeServiceRole({
+        initialStatus: "paid",
+        updateMatches: true,
+        paidResults: [{ data: null, error: { message: "connection timeout" } }],
+      }) as unknown as ReturnType<typeof createServiceRoleClient>,
+    );
+
+    await expect(transitionOrder("order-1", "refunded")).rejects.toThrow(
+      "findPaidPayment failed",
+    );
+    expect(rpcCall).not.toHaveBeenCalled();
   });
 });
 

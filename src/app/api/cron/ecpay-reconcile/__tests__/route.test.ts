@@ -169,9 +169,19 @@ let auditCandidates: {
 let auditQueryCapture:
   | { select: string | undefined; filters: Record<string, unknown> }
   | undefined;
+// #4 稽核臂（T47）：payment=paid ∧ orders=refunded。
+let auditRefundedCandidates: {
+  id: string;
+  order_id: string;
+  merchant_trade_no: string;
+}[] = [];
+let auditRefundedQueryCapture:
+  | { select: string | undefined; filters: Record<string, unknown> }
+  | undefined;
 // 候選查詢的 { error } 注入（Conv1 + degraded→500 測試）。
 let driftQueryError: string | null = null;
 let auditQueryError: string | null = null;
+let auditRefundedQueryError: string | null = null;
 // sweep 用：notification 表的 failed 紀錄與 orders 表的狀態查詢結果。
 let failedNotifications: { id: string; order_id: string; type: string }[] = [];
 let sweepOrders: { id: string; status: string }[] = [];
@@ -298,8 +308,9 @@ function makeChain() {
     then: (resolve: (v: unknown) => void) => {
       if (chain._op === "select") {
         if (chain._filters.status === "paid") {
-          // status='paid' 有兩支：漂移臂（orders.status='pending_payment'）
-          // 與稽核臂（orders.status='cancelled'），以 embed 過濾值分流。
+          // status='paid' 有三支：漂移臂（orders.status='pending_payment'）
+          // 與兩支稽核臂（orders.status='cancelled'／'refunded'），以 embed
+          // 過濾值分流。
           if (chain._filters["orders.status"] === "cancelled") {
             auditQueryCapture = {
               select: chain._select,
@@ -309,6 +320,18 @@ function makeChain() {
               auditQueryError
                 ? { data: null, error: { message: auditQueryError } }
                 : { data: auditCandidates, error: null },
+            );
+            return;
+          }
+          if (chain._filters["orders.status"] === "refunded") {
+            auditRefundedQueryCapture = {
+              select: chain._select,
+              filters: { ...chain._filters },
+            };
+            resolve(
+              auditRefundedQueryError
+                ? { data: null, error: { message: auditRefundedQueryError } }
+                : { data: auditRefundedCandidates, error: null },
             );
             return;
           }
@@ -382,8 +405,11 @@ beforeEach(() => {
   driftQueryCapture = undefined;
   mainQueryCapture = undefined;
   auditQueryCapture = undefined;
+  auditRefundedCandidates = [];
+  auditRefundedQueryCapture = undefined;
   driftQueryError = null;
   auditQueryError = null;
+  auditRefundedQueryError = null;
   failedNotifications = [];
   sweepOrders = [];
   queryTradeInfo.mockReset();
@@ -457,6 +483,8 @@ describe("認證", () => {
       promotedOnClosedOrder: 0,
       paidOnCancelled: 0,
       paidOnCancelledTruncated: false,
+      paidOnRefunded: 0,
+      paidOnRefundedTruncated: false,
       mismatches: 0,
       failed: 0,
       unexpected: 0,
@@ -1446,6 +1474,62 @@ describe("#3 recurring 稽核臂（payment=paid ∧ orders=cancelled）", () => 
     expect(body.paidOnCancelled).toBe(20);
     expect(sentryCaptureMessage).toHaveBeenCalledWith(
       "reconcile: paid-on-cancelled backlog exceeds limit",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+});
+
+describe("#4 recurring 稽核臂（payment=paid ∧ orders=refunded，T47）", () => {
+  it("查詢形狀：inner embed＋orders.status='refunded' 過濾", async () => {
+    await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(auditRefundedQueryCapture).toBeDefined();
+    expect(auditRefundedQueryCapture!.select).toContain("orders!inner(status)");
+    expect(auditRefundedQueryCapture!.filters.status).toBe("paid");
+    expect(auditRefundedQueryCapture!.filters["orders.status"]).toBe("refunded");
+  });
+
+  it("撈到 paid-on-refunded 漂移列（Override 半套）→ paidOnRefunded 計數＋error 告警", async () => {
+    auditRefundedCandidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1" },
+    ];
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.paidOnRefunded).toBe(1);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid payment on refunded order",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("稽核查詢 {error} → 告警＋整支 cron 回 500（fail-visible）", async () => {
+    auditRefundedQueryError = "connection timeout";
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+
+    expect(res.status).toBe(500);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid-on-refunded 稽核查詢失敗",
+      expect.objectContaining({ level: "error" }),
+    );
+  });
+
+  it("撈到超過 DRIFT_LIMIT（+1）→ paidOnRefundedTruncated=true＋只計前 DRIFT_LIMIT 筆", async () => {
+    auditRefundedCandidates = Array.from({ length: 21 }, (_, i) => ({
+      id: `p${i}`,
+      order_id: `o${i}`,
+      merchant_trade_no: `M${i}`,
+    }));
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.paidOnRefundedTruncated).toBe(true);
+    expect(body.paidOnRefunded).toBe(20);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: paid-on-refunded backlog exceeds limit",
       expect.objectContaining({ level: "error" }),
     );
   });

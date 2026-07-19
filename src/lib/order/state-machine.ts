@@ -30,13 +30,29 @@ export class PaidOrderCancelBlockedError extends Error {
   }
 }
 
+// 「訂單 payment 尚未標記 refunded，不得把訂單轉 refunded」的守衛被觸發時
+// 拋出（T47）。鏡射 PaidOrderCancelBlockedError 的深度：money-coupling
+// invariant 集中在 transitionOrder（所有轉 refunded 路徑的必經之地）——
+// 正規路徑（refund-order.ts）先翻 payment 再轉訂單，天然通過；任何未來的
+// 呼叫端（自動退刷 API、第二個 admin 介面）漏掉 payment 翻面會在這裡被
+// 大聲擋下，而不是靜默產生「訂單已退款、payment 還掛 paid」的金流漂移
+//（Admin Override 仍為文件化逃生口，走 adminOverrideStatus 不經此守衛）。
+export class RefundPaymentNotFlippedError extends Error {
+  constructor(orderId: string) {
+    super(`訂單 payment 尚未標記 refunded，不得轉 refunded：${orderId}`);
+    this.name = "RefundPaymentNotFlippedError";
+  }
+}
+
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return VALID_TRANSITIONS[from].includes(to);
 }
 
 // 讀取現況共用段：把「查詢失敗」與「查無此單」分開回報——transient DB 錯誤
 // 誤報成「訂單不存在」會誤導呼叫端跳過重試（T110 review）。
-async function fetchCurrentStatus(
+// export（T47）：refund-order.ts 的 pre-guard／冪等複查重用同一套錯誤語意，
+// 不另養複本（散落複本失同步教訓）。
+export async function fetchCurrentStatus(
   supabase: ReturnType<typeof createServiceRoleClient>,
   orderId: string,
 ): Promise<OrderStatus> {
@@ -114,6 +130,21 @@ export async function transitionOrder(
   if (to === "cancelled") {
     const paidBefore = await findPaidPayment(supabase, orderId);
     if (paidBefore) throw new PaidOrderCancelBlockedError(orderId);
+  }
+
+  // 退款守衛（T47，鏡射取消守衛的深度）：訂單要轉 refunded，必須「無 paid 殘留」
+  // ——用 !findPaidPayment 判定，而非「存在任一 refunded」。差別在 §5 重複付款
+  // （同單 A=refunded 舊週期 ＋ B=paid 本次）：以「有無 refunded」判定會撞到 A
+  // 即放行、留 B=paid，正是本守衛要防的「訂單已退款、payment 還掛 paid」漂移；
+  // 以「無 paid 殘留」判定才真正 enforce 該不變式（取消守衛用 findPaidPayment
+  // 的正確鏡射）。正規退款走 refund_order RPC（0020，原子）不經本路徑；本守衛
+  // 專防未來直接呼叫 transitionOrder(id,"refunded") 的呼叫端（自動退刷 API、
+  // 第二個 admin 介面）漏翻 payment。Admin Override 仍為文件化逃生口，走
+  // adminOverrideStatus 不經此守衛（其半套狀態由 reconcile paid-on-refunded
+  // 稽核臂 durable 兜底）。
+  if (to === "refunded") {
+    const paidResidual = await findPaidPayment(supabase, orderId);
+    if (paidResidual) throw new RefundPaymentNotFlippedError(orderId);
   }
 
   await execTransitionRpc(supabase, {

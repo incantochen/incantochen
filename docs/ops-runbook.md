@@ -64,6 +64,7 @@ order by created_at;
 > ℹ️ **T110 之後的失敗語意**：訂單狀態推進與 `order_status_log` 稽核寫入已交易化（`transition_order_status` RPC）——log 寫不進去時**整筆推進會 rollback 並回錯誤**（webhook 回 0|ERR 觸發 ECPay 重送、對帳隔日重試），不再出現「狀態已變但稽核缺漏」。反面代價：若 `order_status_log` 本身持續寫入失敗（如未來 migration 的約束／trigger 回歸），**所有**狀態推進（webhook／對帳／後台按鈕）會同時失敗——Sentry 看到大量「訂單狀態更新失敗」時先查該表，不要當一般 DB 抖動處理。
 >
 > 🛡️ **降低此風險的實務（動 `order_status_log` 前必讀）**：
+>
 > 1. **任何改動 `order_status_log` 的 migration**（加 CHECK／NOT NULL／trigger、改 RLS、增刪欄位）**先在 staging 實跑一輪真實狀態轉換**（沙盒 webhook 結算 ＋ 後台改一筆狀態），確認 INSERT 仍寫得進去再上正式。關鍵認知：`create function`／套 migration「成功」**不代表** RPC 內的 INSERT 跑得動——函式體不在套用當下執行，型別／約束錯誤只在**被呼叫時**才浮現（T110 的 RPC 即靠此程序在雲端以 miss／raise／hit+rollback 三態驗過）。
 > 2. **為 Sentry 設 P0 告警規則**，命中訊息 `ensureOrderPaid failed`／`訂單狀態更新失敗`／`transition_order_status`：這類事件語意已從「稽核小瑕疵」升級為「訂單流程全線中斷」，不可淹沒在一般錯誤流裡（此告警觸發＝結帳／付款／後台履約可能同時停擺，需即刻查 `order_status_log`）。
 > 3. **`order_status_log` 維持極簡 append-only**（現況：`text`／`uuid`／`bool`／`timestamptz`，除 `order_id`／`actor_id` 兩個 FK 外無其他約束）。要加任何會讓 INSERT 可能失敗的約束前，先評估是否值得用「全線狀態推進」當賭注——多數稽核性欄位驗證應放在應用層或非阻塞的事後檢查，而非這條交易關鍵路徑上。
@@ -74,14 +75,14 @@ order by created_at;
 
 > 前提都是 webhook 已先失靈（否則輪不到對帳出手）、客人在綠界**已成功扣款**。對帳 cron 現行每日一次（台北 02:00）；T126（改小時級）落地後本表的「隔日／每日」同步更新。
 
-| 失敗點                                     | 客人看到什麼                                                 | 店家看到什麼                                                                                                                                                                                              | 自癒時間                                                                      |
-| ------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| ① 訂單推進失敗（DB 暫時錯誤）              | 付了款但訂單仍「待付款」、沒收到確認信                       | Sentry exception ＋ cron summary `unexpected` +1                                                                                                                                                          | 隔日 cron 冪等重試（連續多日同一筆才走本節上方步驟）                          |
-| ② payment 翻 paid 失敗                     | **幾乎無感**——訂單已顯示已付款、確認信照寄（③不被②擋）       | 訂單 paid／payment pending 漂移（見上方註記，勿手動改）；唯一風險窗口：漂移期間要退款的話，`gateway_trade_no` 尚未落地——去綠界後台用 `merchant_trade_no` 查（§3 同一條路）                                | 隔日 cron CAS 補翻                                                            |
-| ③ 確認信寄送失敗                           | 訂單狀態、金額都正常，只是**信晚到**；急的客人可在訂單頁自查 | `notifyFailed` 告警；連續 2–3 天同一筆 → §4 人工介入                                                                                                                                                      | 每日 sweep 補寄                                                               |
+| 失敗點                                     | 客人看到什麼                                                 | 店家看到什麼                                                                                                                                                                                                                                                     | 自癒時間                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| ① 訂單推進失敗（DB 暫時錯誤）              | 付了款但訂單仍「待付款」、沒收到確認信                       | Sentry exception ＋ cron summary `unexpected` +1                                                                                                                                                                                                                 | 隔日 cron 冪等重試（連續多日同一筆才走本節上方步驟）                          |
+| ② payment 翻 paid 失敗                     | **幾乎無感**——訂單已顯示已付款、確認信照寄（③不被②擋）       | 訂單 paid／payment pending 漂移（見上方註記，勿手動改）；唯一風險窗口：漂移期間要退款的話，`gateway_trade_no` 尚未落地——去綠界後台用 `merchant_trade_no` 查（§3 同一條路）                                                                                       | 隔日 cron CAS 補翻                                                            |
+| ③ 確認信寄送失敗                           | 訂單狀態、金額都正常，只是**信晚到**；急的客人可在訂單頁自查 | `notifyFailed` 告警；連續 2–3 天同一筆 → §4 人工介入                                                                                                                                                                                                             | 每日 sweep 補寄                                                               |
 | ④ webhook 側卡單（見下方）                 | 付了款但訂單仍「待付款」、沒收到確認信                       | `payment.status='paid'` 但 `orders.status='pending_payment'`；Sentry warning「promoted webhook-side stuck order」＋summary `driftPromoted`（自癒當下發）；卡單期間若逼近 72h，另有逾期 cron 被取消守衛擋下的 error 告警「paid payment exists on expiring order」 | 隔日 cron 漂移臂冪等推進（T127；連續兩天仍漂移才走 §1 判斷步驟 1 的分支人工） |
-| ⑤ 訂單已關閉仍收到錢（逾期取消後付款成立） | 訂單顯示已取消，但卡已被扣款                                 | error 告警「reconcile: money received on closed order」＋summary `promotedOnClosedOrder`；payment 已翻 paid、訂單維持 cancelled／refunded。**此狀態另有每日 recurring 稽核臂復發偵測**（見下方 ⑥）                                                     | **不自癒**——人工裁決退款或恢復訂單（§6.1）                                    |
-| ⑥ 錢收在已取消訂單上（durable 稽核）       | 同⑤（訂單已取消、卡已扣款）                                 | 每日對帳 recurring 稽核臂（鍵 `payment=paid ∧ orders=cancelled`）error 告警「reconcile: paid payment on cancelled order」＋summary `paidOnCancelled`——**主臂／漂移臂都撈不到這種列**，這支是它的 durable 兜底（不靠取消當下的單次告警）                | **不自癒**——人工裁決（§6.1），但每日重複偵測直到處理                          |
+| ⑤ 訂單已關閉仍收到錢（逾期取消後付款成立） | 訂單顯示已取消，但卡已被扣款                                 | error 告警「reconcile: money received on closed order」＋summary `promotedOnClosedOrder`；payment 已翻 paid、訂單維持 cancelled／refunded。**此狀態另有每日 recurring 稽核臂復發偵測**（見下方 ⑥）                                                               | **不自癒**——人工裁決退款或恢復訂單（§6.1）                                    |
+| ⑥ 錢收在已取消訂單上（durable 稽核）       | 同⑤（訂單已取消、卡已扣款）                                  | 每日對帳 recurring 稽核臂（鍵 `payment=paid ∧ orders=cancelled`）error 告警「reconcile: paid payment on cancelled order」＋summary `paidOnCancelled`——**主臂／漂移臂都撈不到這種列**，這支是它的 durable 兜底（不靠取消當下的單次告警）                          | **不自癒**——人工裁決（§6.1），但每日重複偵測直到處理                          |
 
 > ℹ️ **第④類「webhook 側卡單」的成因與自癒（T127 已落地）**：webhook 端 `settlePaid` 先翻 `payment.status='paid'`、才推進訂單，若推進那步失敗且 ECPay 重送額度耗盡，會停在「payment 已 paid、orders 卡 pending_payment」。主對帳臂的候選鍵是 `payment.status='pending'`，撈不到這種漂移；T127 的**漂移臂**（第二候選臂，撈 payment=paid＋orders=pending_payment，不打 ECPay——payment=paid 是驗章＋金額核對通過後的財務事實，直接信任）隔日冪等推進＋補寄確認信。**取消守衛**（有 paid payment 就不准取消）下沉在共用的 `transitionOrder`，因此**所有**取消路徑（逾期 cron、結帳改單、admin 手動取消）都擋得住，不再只有逾期 cron；被擋下時逾期 cron 記 `paidConflict`＋error 告警。連續兩天以上仍漂移才依 §1 判斷步驟 1 的分支人工處理。
 
@@ -188,24 +189,25 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 
 ---
 
-## 6. 退款（過渡期流程，T47 自動化前）
+## 6. 退款（T47 記錄式流程：後台登記，實際刷退仍走綠界後台）
 
 1. 售後申請確認要退款（`/admin/orders/[id]` 售後區塊）。
 2. **綠界廠商後台**對該筆交易操作退刷（信用卡）；記下退刷結果。
-3. `/admin/orders/[id]` → Admin Override → `refunded`（reason 寫明退刷單據／日期）。
-4. payment 對應列標 `refunded`（同 §5 SQL）。
-5. ⚖️ 已開電子發票（T42 之後）須折讓／作廢——會計流程未定案前，先記錄在訂單 note，發票開立後不可略過此步。
-6. 目前**沒有退款通知信**（T87 未做）——人工 email 告知客人。
+3. `/admin/orders/[id]` → **退款區塊**：填退款原因（進 order_status_log note，寫明退刷單據／日期）＋勾「已於綠界後台完成實際退刷」→ 登記退款。系統自動：**payment 翻 `refunded`＋訂單 CAS 轉 `refunded`＋稽核 log 於單一交易內原子完成**（`refund_order` RPC，migration 0020；CAS 未命中整筆 rollback、payment 翻面一併還原——不會留下「payment 已退、訂單沒退」的半套狀態）→ 寄退款通知信給客人（sendOnce 去重；寄失敗顯示 warning，每日 reconcile sweep 自動補寄）。整段冪等，中途失敗重按一次即收斂。
+4. ⚖️ 已開電子發票（T42 之後）須折讓／作廢——會計流程未定案前，先記錄在訂單 note，發票開立後不可略過此步（退款區塊在已開發票時會紅字提醒）。
+5. 退款不走操作欄一鍵轉換（server 端也擋）；Admin Override 仍保留為逃生口，但走 Override 不會翻 payment、不寄通知信——正常退款一律走退款區塊。**若已誤走 Override**（訂單 refunded、payment 仍 paid 的半套狀態）：回訂單詳情頁退款區塊，會出現「補登記退款」入口——補登記走 `repair_refunded_payment` 原子 RPC（0021）：補翻 payment＋寫稽核 log（note 帶 `[退款補登記]` 前綴）單一交易完成，再補寄通知信（對已 refunded 訂單冪等重入）。此半套狀態也由 reconcile `paid payment on refunded order` 稽核臂每日 durable 偵測（§6.1）。
+6. pending_payment（webhook 卡單，§1.1 第④類）與 cancelled（§6.1）訂單**不可**在退款區塊登記（伺服器端會擋）——這類單屬人工裁決，依 §6.1 流程處理。
 
 ### 6.1 錢收在已關閉／已取消訂單上（人工裁決）
 
-**觸發本節的三個 Sentry 訊號**（成因不同，裁決流程相同）：
+**觸發本節的四個 Sentry 訊號**（成因不同，裁決流程相同）：
 
-| Sentry 訊息                                                              | summary 計數           | 成因                                                                                                                                   | 復發偵測             |
-| ------------------------------------------------------------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| `reconcile: money received on closed order`                              | `promotedOnClosedOrder` | 對帳（主臂或漂移臂）向綠界／依財務事實推進時，重查發現訂單已 cancelled／refunded                                                        | 單次（payment 已 paid，隔日不再入選） |
-| `transitionOrder: money received on order cancelled during transition`   | —                       | 取消守衛的 TOCTOU 毫秒窄窗：pre-guard 查無 paid、CAS 取消 commit 後才查到 payment 已 paid                                              | 單次（取消當下發）   |
-| `reconcile: paid payment on cancelled order`                             | `paidOnCancelled`       | **durable 稽核臂**：每日掃 `payment=paid ∧ orders=cancelled`——上面兩種單次訊號漏看、或 T127 部署前既有列，都會被這支每日重新撈到告警 | **每日重複**直到處理 |
+| Sentry 訊息                                                            | summary 計數            | 成因                                                                                                                                 | 復發偵測                              |
+| ---------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| `reconcile: money received on closed order`                            | `promotedOnClosedOrder` | 對帳（主臂或漂移臂）向綠界／依財務事實推進時，重查發現訂單已 cancelled／refunded                                                     | 單次（payment 已 paid，隔日不再入選） |
+| `transitionOrder: money received on order cancelled during transition` | —                       | 取消守衛的 TOCTOU 毫秒窄窗：pre-guard 查無 paid、CAS 取消 commit 後才查到 payment 已 paid                                            | 單次（取消當下發）                    |
+| `reconcile: paid payment on cancelled order`                           | `paidOnCancelled`       | **durable 稽核臂**：每日掃 `payment=paid ∧ orders=cancelled`——上面兩種單次訊號漏看、或 T127 部署前既有列，都會被這支每日重新撈到告警 | **每日重複**直到處理                  |
+| `reconcile: paid payment on refunded order`                            | `paidOnRefunded`        | **durable 稽核臂（T47）**：每日掃 `payment=paid ∧ orders=refunded`——成因＝Admin Override 直接把訂單改 refunded（逃生口，不翻 payment）。裁決＝回退款區塊按「補登記退款」補翻 payment＋補寄信 | **每日重複**直到處理                  |
 
 **成因總述**：逾期自動取消／人工取消後客人才完成付款，或取消與 webhook 結算的窄窗競態。payment 照翻／維持 `paid`（`gateway_trade_no`／`raw_callback` 已落地＝日後退款的依據），訂單維持 cancelled／refunded。**不自癒**——錢收了但訂單不會自動復活，必須人工裁決。
 
@@ -216,7 +218,9 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 1. **退款**：綠界後台對該筆交易退刷（操作同 §5），完成後 payment 標 `refunded`（同 §5 SQL）；人工 email 告知客人（3–7 個工作天入帳）。
 2. **恢復訂單**：客人仍要商品且交期可接受 → `/admin/orders/[id]` Admin Override 把訂單改 `paid`（reason 寫明「取消後付款成立，經客人確認恢復訂單」），再依 §4 補寄確認信。
 
-⚠️ 前兩個訊號是**單次**的——收到當日就要處理，別等第二封。第三個（`paid payment on cancelled order`）是 durable 兜底，會**每日重複告警**直到你把該列裁決掉（退款標 `refunded`、或恢復訂單改 `paid`），是「還沒處理」的每日催辦，不是新事件。
+⚠️ 前兩個訊號是**單次**的——收到當日就要處理，別等第二封。後兩個（`paid payment on cancelled order`、`paid payment on refunded order`）是 durable 兜底，會**每日重複告警**直到你把該列裁決掉，是「還沒處理」的每日催辦，不是新事件。`paid payment on refunded order` 兩種成因，處置不同：
+- **Admin Override 逃生口**留下的「訂單已退款、payment 仍 paid」半套——回退款區塊按「補登記退款」即補翻 payment＋補寄通知信。
+- **重複付款的兄弟交易在退款後才成立**（§5 情境：客人重刷留下一筆 pending，你依已付款那筆退款結案後，綠界才回報這筆 pending 也成功→翻成 paid 掛在已退款單上）——客人實際被扣兩次、你只退了一筆。**去綠界後台把第二筆也退刷**，再回退款區塊補登記（payment 同步翻 refunded）。這是**刻意不在程式端自動壓掉**的：pending 兄弟收到成功回呼＝真錢已入帳，把它標 failed 會讓真金流在系統裡隱形，比告警更糟；webhook 翻面當下就會發 `money received on closed order` 單次訊號，本臂每日催辦到你處理完。
 
 ---
 
