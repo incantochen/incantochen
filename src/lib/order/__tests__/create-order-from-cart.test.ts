@@ -522,6 +522,26 @@ describe("伺服器端驗價（T41 紅線）", () => {
   });
 });
 
+describe("order_item payload 形狀驗證（T113 契約漂移防呆）", () => {
+  it("上游形狀漂移（如 productName 變空字串）→ 回結構化 {ok:false, error}，不打 RPC、不拋未包裝例外", async () => {
+    // 模擬未來上游邏輯改動導致 verifiedItems 形狀走鐘：product_name_snapshot
+    // 為空字串會被 orderItemPayloadSchema 的 .min(1) 擋下。修前 parse 未包
+    // try/catch，ZodError 會冒泡成 Next.js 遮罩的通用例外。
+    verifyCartPrices.mockResolvedValue([
+      { ...VERIFIED_OK[0], productName: "" },
+    ]);
+
+    const result = await callCreateOrderFromCart();
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "訂單資料格式錯誤，請稍後再試",
+    });
+    // 形狀不合絕不可送進 create_order_with_items RPC。
+    expect(rpcCalls()).toHaveLength(0);
+  });
+});
+
 describe("order_no 碰撞重試", () => {
   it("首次 23505 → 換號重試一次成功", async () => {
     state.rpcResults = [
