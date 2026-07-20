@@ -1,0 +1,331 @@
+<title>系統架構總覽 — incantochen</title>
+<style>
+  :root{
+    --ground:#F1F3F0; --surface:#FBFCFA; --surface-2:#F4F6F2;
+    --ink:#171A18; --muted:#5B615C; --faint:#858B85;
+    --hairline:#E0E3DD; --hairline-strong:#CFD4CC;
+    --accent:#0B6E63; --accent-soft:#0B6E6314; --accent-ink:#095A51;
+    --warn:#9A5E08; --warn-bg:#F7ECD6; --warn-line:#E4C98F;
+    --good:#1B7343; --good-bg:#E1EFE6; --good-line:#A9D4BA;
+    --danger:#AA342D; --danger-bg:#F5E2E0; --danger-line:#E1AFAB;
+    --info:#1F5F8B; --info-bg:#E1EAF2; --info-line:#A9C4DC;
+    --radius:12px; --radius-sm:8px;
+    --shadow:0 1px 2px rgba(20,28,24,.05),0 6px 20px -12px rgba(20,28,24,.18);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --serif:ui-serif,"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ground:#0F1312; --surface:#161A19; --surface-2:#1B201E;
+    --ink:#E7EAE6; --muted:#9AA19B; --faint:#757C76;
+    --hairline:#262C29; --hairline-strong:#333A36;
+    --accent:#45C3B1; --accent-soft:#45C3B11f; --accent-ink:#6fd3c4;
+    --warn:#E0B267; --warn-bg:#2E2413; --warn-line:#5A4A24;
+    --good:#6FCB92; --good-bg:#12271A; --good-line:#2C4E37;
+    --danger:#E8938C; --danger-bg:#2C1715; --danger-line:#58312D;
+    --info:#8FB8DA; --info-bg:#152430; --info-line:#2C4356;
+  }}
+  :root[data-theme="light"]{
+    --ground:#F1F3F0; --surface:#FBFCFA; --surface-2:#F4F6F2;
+    --ink:#171A18; --muted:#5B615C; --faint:#858B85;
+    --hairline:#E0E3DD; --hairline-strong:#CFD4CC;
+    --accent:#0B6E63; --accent-soft:#0B6E6314; --accent-ink:#095A51;
+    --warn:#9A5E08; --warn-bg:#F7ECD6; --warn-line:#E4C98F;
+    --good:#1B7343; --good-bg:#E1EFE6; --good-line:#A9D4BA;
+    --danger:#AA342D; --danger-bg:#F5E2E0; --danger-line:#E1AFAB;
+    --info:#1F5F8B; --info-bg:#E1EAF2; --info-line:#A9C4DC;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0F1312; --surface:#161A19; --surface-2:#1B201E;
+    --ink:#E7EAE6; --muted:#9AA19B; --faint:#757C76;
+    --hairline:#262C29; --hairline-strong:#333A36;
+    --accent:#45C3B1; --accent-soft:#45C3B11f; --accent-ink:#6fd3c4;
+    --warn:#E0B267; --warn-bg:#2E2413; --warn-line:#5A4A24;
+    --good:#6FCB92; --good-bg:#12271A; --good-line:#2C4E37;
+    --danger:#E8938C; --danger-bg:#2C1715; --danger-line:#58312D;
+    --info:#8FB8DA; --info-bg:#152430; --info-line:#2C4356;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1080px;margin:0 auto;padding:clamp(28px,5vw,60px) clamp(18px,4vw,44px) 96px;}
+
+  header{border-bottom:1px solid var(--hairline);padding-bottom:28px;margin-bottom:20px;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-ink);display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+  .eyebrow::before{content:"";width:22px;height:1px;background:var(--accent);display:inline-block;}
+  h1{font-family:var(--serif);font-weight:600;letter-spacing:-.01em;font-size:clamp(30px,5vw,44px);line-height:1.08;margin:0 0 14px;text-wrap:balance;}
+  .lede{color:var(--muted);font-size:15px;max-width:64ch;margin:0;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:20px;font-family:var(--mono);font-size:12px;color:var(--faint);}
+  .meta b{color:var(--muted);font-weight:500;}
+
+  section{margin-top:52px;}
+  .sec-head{display:flex;align-items:baseline;gap:13px;margin-bottom:8px;}
+  .sec-num{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.1em;}
+  h2{font-family:var(--serif);font-weight:600;font-size:clamp(20px,3vw,25px);margin:0;letter-spacing:-.01em;}
+  .sec-sub{color:var(--muted);font-size:13.5px;margin:0 0 22px;max-width:68ch;}
+
+  /* layered stack */
+  .stack{display:flex;flex-direction:column;gap:14px;}
+  .layer{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px;position:relative;overflow:hidden;}
+  .layer::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--lc,var(--accent));}
+  .layer.l-client{--lc:var(--info);}
+  .layer.l-vercel{--lc:var(--accent);}
+  .layer.l-supa{--lc:var(--good);}
+  .layer.l-third{--lc:var(--warn);}
+  .layer-label{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+  .layer-label .name{font-family:var(--serif);font-size:16px;font-weight:600;}
+  .layer-label .tag{font-family:var(--mono);font-size:10.5px;color:var(--faint);}
+  .nodes{display:flex;flex-wrap:wrap;gap:8px;}
+  .node{font-family:var(--mono);font-size:11.5px;padding:6px 11px;border-radius:var(--radius-sm);border:1px solid var(--hairline-strong);background:var(--surface-2);color:var(--ink);line-height:1.35;}
+  .node b{color:var(--lc,var(--accent-ink));font-weight:600;}
+  .node .s{color:var(--faint);}
+  .flowdown{text-align:center;color:var(--faint);font-size:14px;margin:-6px 0;}
+
+  /* module inventory */
+  .mods{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+  @media (max-width:740px){.mods{grid-template-columns:1fr;}}
+  .modgroup{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 17px;}
+  .modgroup h3{font-family:var(--mono);font-size:12px;letter-spacing:.05em;color:var(--accent-ink);margin:0 0 11px;text-transform:uppercase;}
+  .modgroup ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+  .modgroup li{display:grid;grid-template-columns:auto 1fr;gap:9px;font-size:13px;align-items:baseline;}
+  .modgroup li .m{font-family:var(--mono);font-size:11.5px;color:var(--ink);font-weight:600;white-space:nowrap;}
+  .modgroup li .d{color:var(--muted);font-size:12.5px;}
+  .modgroup li .d code{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--hairline);border-radius:4px;padding:0 4px;color:var(--accent-ink);}
+
+  /* rpc cards */
+  .rpcs{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+  @media (max-width:740px){.rpcs{grid-template-columns:1fr;}}
+  .rpc{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px;border-top:3px solid var(--accent);}
+  .rpc .fn{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent-ink);}
+  .rpc .mig{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-left:6px;}
+  .rpc p{margin:9px 0 0;font-size:13px;color:var(--muted);}
+
+  /* tables */
+  .tbl-scroll{overflow-x:auto;border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);}
+  table{border-collapse:collapse;width:100%;min-width:560px;background:var(--surface);font-size:13px;}
+  thead th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:12px 15px;border-bottom:1px solid var(--hairline-strong);background:var(--surface-2);}
+  tbody td{padding:11px 15px;border-bottom:1px solid var(--hairline);vertical-align:top;color:var(--muted);}
+  tbody tr:last-child td{border-bottom:0;}
+  tbody td:first-child{font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap;}
+  td code,.sec-sub code{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--hairline);border-radius:4px;padding:0 4px;color:var(--accent-ink);}
+  .st{display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:100px;}
+  .st.done{color:var(--good);background:var(--good-bg);border:1px solid var(--good-line);}
+  .st.wip{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-line);}
+  .st.todo{color:var(--danger);background:var(--danger-bg);border:1px solid var(--danger-line);}
+
+  /* tables-of-db group chips */
+  .dbgroups{display:flex;flex-wrap:wrap;gap:10px;}
+  .dbg{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius-sm);padding:11px 14px;box-shadow:var(--shadow);flex:1 1 200px;}
+  .dbg .h{font-size:12px;color:var(--muted);margin-bottom:7px;}
+  .dbg .h b{color:var(--accent-ink);font-family:var(--mono);}
+  .dbg .t{display:flex;flex-wrap:wrap;gap:5px;}
+  .dbg .t span{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:5px;background:var(--surface-2);border:1px solid var(--hairline);color:var(--ink);}
+
+  /* gap board */
+  .gaps{display:flex;flex-direction:column;gap:10px;}
+  .gap{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);padding:13px 16px;box-shadow:var(--shadow);}
+  @media (max-width:600px){.gap{grid-template-columns:1fr;gap:6px;}}
+  .sev{font-family:var(--mono);font-size:14px;}
+  .gap .txt{font-size:13.5px;color:var(--ink);}
+  .gap .txt .sub{display:block;color:var(--muted);font-size:12px;margin-top:2px;}
+  .gap .task{font-family:var(--mono);font-size:11px;color:var(--accent-ink);white-space:nowrap;}
+  .closed-note{margin-top:16px;padding:15px 18px;border:1px dashed var(--hairline-strong);border-radius:var(--radius);background:var(--surface);font-size:12.5px;color:var(--muted);line-height:1.7;}
+  .closed-note b{color:var(--good);}
+  .closed-note code{font-family:var(--mono);font-size:11px;color:var(--accent-ink);}
+
+  .xref{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+  .xref a{font-family:var(--mono);font-size:11.5px;text-decoration:none;color:var(--accent-ink);border:1px solid var(--hairline-strong);border-radius:100px;padding:5px 12px;background:var(--surface);transition:border-color .14s;}
+  .xref a:hover{border-color:var(--accent);}
+
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--hairline);font-family:var(--mono);font-size:11.5px;color:var(--faint);display:flex;flex-wrap:wrap;gap:6px 20px;}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">incantochen · 系統架構盤點</div>
+    <h1>系統架構總覽</h1>
+    <p class="lede">單一 Next.js 16 App Router 應用部署於 Vercel，資料層為單一 Supabase 專案，金流／電子發票走綠界 ECPay。沒有獨立後端——所有伺服器邏輯都在 Server Components／Actions／Route Handlers 內。本頁為 <code>architecture.md</code> 的儀表板視圖。</p>
+    <div class="meta">
+      <span><b>更新</b> 2026-07-20（對齊 M2 進行中）</span>
+      <span><b>規模</b> 16 表 · 4 RPC · 3 Cron · migrations 0001–0021</span>
+      <span><b>權威</b> 程式碼與 docs/ 為準</span>
+    </div>
+  </header>
+
+  <!-- 1. 分層總覽 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>系統分層</h2></div>
+    <p class="sec-sub">請求由瀏覽器進入 proxy（刷新 session＋每請求動態 CSP nonce），分派到伺服器邏輯；寫入集中走 service role 繞過 RLS。</p>
+    <div class="stack">
+      <div class="layer l-client">
+        <div class="layer-label"><span class="name">瀏覽器</span><span class="tag">Client</span></div>
+        <div class="nodes">
+          <div class="node"><b>前台</b> <span class="s">PDP／目錄／購物車／結帳／會員</span></div>
+          <div class="node"><b>後台</b> <span class="s">/admin 訂單・商品・選項 CRUD</span></div>
+        </div>
+      </div>
+      <div class="flowdown">↓ proxy.ts · session＋CSP nonce</div>
+      <div class="layer l-vercel">
+        <div class="layer-label"><span class="name">Vercel — Next.js 16 App Router</span><span class="tag">無獨立後端</span></div>
+        <div class="nodes">
+          <div class="node"><b>Server Components</b> <span class="s">頁面渲染</span></div>
+          <div class="node"><b>Server Actions</b> <span class="s">cart／checkout／login／admin／support</span></div>
+          <div class="node"><b>Route Handlers</b> <span class="s">ecpay/notify・order-result</span></div>
+          <div class="node"><b>Cron ×3</b> <span class="s">reconcile・cart-cleanup・pending-expire</span></div>
+        </div>
+      </div>
+      <div class="flowdown">↓ anon key＋RLS ｜ service role 繞過</div>
+      <div class="layer l-supa">
+        <div class="layer-label"><span class="name">Supabase — 雲端 production</span><span class="tag">RLS deny-by-default</span></div>
+        <div class="nodes">
+          <div class="node"><b>Auth</b> <span class="s">Email OTP＋Magic Link</span></div>
+          <div class="node"><b>Postgres</b> <span class="s">16 表＋4 RPC</span></div>
+          <div class="node"><b>Storage</b> <span class="s">product-images</span></div>
+        </div>
+      </div>
+      <div class="flowdown">↕ 第三方服務</div>
+      <div class="layer l-third">
+        <div class="layer-label"><span class="name">第三方服務</span><span class="tag">Third-party</span></div>
+        <div class="nodes">
+          <div class="node"><b>綠界 ECPay</b> <span class="s">AioCheckOut／QueryTradeInfo／電子發票</span></div>
+          <div class="node"><b>Resend</b> <span class="s">交易信 ×5</span></div>
+          <div class="node"><b>Upstash Redis</b> <span class="s">OTP／對帳限流</span></div>
+          <div class="node"><b>Sentry</b> <span class="s">錯誤＋金流告警</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 模組盤點 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>模組盤點</h2></div>
+    <p class="sec-sub">模組邊界清楚、關鍵邏輯皆單一出處：金額（<code>verify-prices</code>／<code>validate-settle-amount</code>）、狀態轉換（<code>state-machine</code>＋4 RPC）、通知去重（<code>send-once</code>）、識別碼互轉（<code>merchant-trade-no</code>）。</p>
+    <div class="mods">
+      <div class="modgroup">
+        <h3>入口 / 身份</h3>
+        <ul>
+          <li><span class="m">proxy.ts</span><span class="d">刷新 session＋每請求動態 CSP（nonce＋strict-dynamic，T97）</span></li>
+          <li><span class="m">auth/</span><span class="d">OTP 主＋Magic Link 輔；requireUser／requireAdmin</span></li>
+          <li><span class="m">rate-limit</span><span class="d">OTP 雙桶＋對帳 403 計數（Upstash）</span></li>
+          <li><span class="m">supabase/</span><span class="d">三 client：anon／SSR／service-role</span></li>
+        </ul>
+      </div>
+      <div class="modgroup">
+        <h3>商品 / 購物車</h3>
+        <ul>
+          <li><span class="m">product/</span><span class="d">配置器三層白名單、暫停販售、目錄</span></li>
+          <li><span class="m">cart/</span><span class="d">擁有權檢查、徽章、會員併車（T81）</span></li>
+          <li><span class="m">quote/verify-prices</span><span class="d">🔴 伺服器驗價紅線</span></li>
+          <li><span class="m">storage/</span><span class="d">商品圖上傳（T11）</span></li>
+        </ul>
+      </div>
+      <div class="modgroup">
+        <h3>訂單 / 金流</h3>
+        <ul>
+          <li><span class="m">order/state-machine</span><span class="d">轉換＋取消/退款守衛</span></li>
+          <li><span class="m">order/ensure-paid</span><span class="d">冪等推進＋清車＋補通知</span></li>
+          <li><span class="m">order/refund-order</span><span class="d">記錄式退款（T47）</span></li>
+          <li><span class="m">order/issue-invoice</span><span class="d">電子發票開立（T42）</span></li>
+          <li><span class="m">ecpay/</span><span class="d">簽章／付款／查詢／發票／AES</span></li>
+        </ul>
+      </div>
+      <div class="modgroup">
+        <h3>兜底 / 通知 / 後台</h3>
+        <ul>
+          <li><span class="m">cron ×3</span><span class="d">對帳三臂＋逾期取消＋清車</span></li>
+          <li><span class="m">notification/send-once</span><span class="d">unique 佔位去重＋reclaim</span></li>
+          <li><span class="m">email/ ×5</span><span class="d">確認・店家・出貨・退款・售後</span></li>
+          <li><span class="m">admin/</span><span class="d">訂單・退款登記・CRUD・PII 揭露</span></li>
+          <li><span class="m">pii/</span><span class="d">遮罩＋稽核落表（T80）</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 交易化 RPC -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>資料庫端交易化（4 RPC）</h2></div>
+    <p class="sec-sub">多段寫入包進 plpgsql function＝同一交易單元，任一段失敗整段 rollback，消滅「半套狀態」中間態。RPC 是機制，是「塞進同一函式」讓它原子。</p>
+    <div class="rpcs">
+      <div class="rpc"><span class="fn">create_order_with_items</span><span class="mig">0010</span><p>建 orders＋order_item 原子化（T76，防孤兒訂單）。</p></div>
+      <div class="rpc"><span class="fn">transition_order_status</span><span class="mig">0017</span><p>狀態 CAS UPDATE＋order_status_log INSERT 原子化（T110，防「狀態已變、log 缺漏」）。</p></div>
+      <div class="rpc"><span class="fn">refund_order</span><span class="mig">0020</span><p>payment 翻 refunded＋訂單 CAS＋稽核 log 原子化（T47）。</p></div>
+      <div class="rpc"><span class="fn">repair_refunded_payment</span><span class="mig">0021</span><p>補登記退款（Override 逃生口的半套）：補翻 payment＋稽核 log 原子化（T47）。</p></div>
+    </div>
+  </section>
+
+  <!-- 4. 金流兜底縱深 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>金流兜底縱深</h2></div>
+    <p class="sec-sub">四層防線，每層守衛條件明確、靜默失敗點皆接 Sentry。付款判定以背景 webhook 為權威。</p>
+    <div class="stack">
+      <div class="layer l-vercel"><div class="layer-label"><span class="name">① Webhook（即時・權威）</span><span class="tag">ReturnURL</span></div><div class="nodes"><div class="node">驗章＋金額核對 → CAS 翻 payment → 推進訂單 RPC → 開票 → 補通知 → <b>1|OK</b></div></div></div>
+      <div class="layer l-vercel"><div class="layer-label"><span class="name">② 成功頁主動查詢（即時）</span><span class="tag">QueryTradeInfo</span></div><div class="nodes"><div class="node">結果頁未確認時主動打綠界快速對帳，數秒內給明確結果（三態：成功／失敗／處理中）</div></div></div>
+      <div class="layer l-supa"><div class="layer-label"><span class="name">③ 對帳三臂＋2 sweep（每日 02:00）</span><span class="tag">reconcile cron</span></div><div class="nodes"><div class="node"><b>主臂</b> <span class="s">payment=pending・打綠界</span></div><div class="node"><b>漂移臂</b> <span class="s">paid∧pending_payment・信任財務事實</span></div><div class="node"><b>稽核臂</b> <span class="s">paid∧{cancelled,refunded}・只偵測</span></div><div class="node">sweep <span class="s">補寄信＋補開票</span></div></div></div>
+      <div class="layer l-third"><div class="layer-label"><span class="name">④ email-pending（最後安全網）</span><span class="tag">極少數</span></div><div class="nodes"><div class="node">連訂單查詢都暫取不到時：「款項確認中，將以 email 通知你」，不提供重試</div></div></div>
+    </div>
+    <div class="xref">
+      <a href="#">＊ 詳見 order-state-machine.html（狀態機＋三臂時序）</a>
+      <a href="#">＊ 詳見 system-flow-and-user-flow.md 附錄 B</a>
+    </div>
+  </section>
+
+  <!-- 5. 資料表 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>資料模型（16 表）</h2></div>
+    <p class="sec-sub">外鍵策略：帳務鏈 <b>RESTRICT</b>（禁連動刪）、設定圖與暫態 <b>CASCADE</b>。<code>uq_payment_one_paid_per_order</code> 保證一張訂單最多一筆 paid payment。</p>
+    <div class="dbgroups">
+      <div class="dbg"><div class="h">商品與選項 <b>6</b></div><div class="t"><span>product</span><span>product_image</span><span>option_type</span><span>option_value</span><span>product_option</span><span>product_option_value</span></div></div>
+      <div class="dbg"><div class="h">會員與購物車 <b>3</b></div><div class="t"><span>member</span><span>cart</span><span>cart_item</span></div></div>
+      <div class="dbg"><div class="h">訂單與金流 <b>3</b></div><div class="t"><span>orders</span><span>order_item</span><span>payment</span></div></div>
+      <div class="dbg"><div class="h">通知與狀態 <b>2</b></div><div class="t"><span>order_status_log</span><span>notification</span></div></div>
+      <div class="dbg"><div class="h">售後 <b>1</b></div><div class="t"><span>support_request</span></div></div>
+      <div class="dbg"><div class="h">稽核 <b>1</b></div><div class="t"><span>pii_access_log</span></div></div>
+    </div>
+  </section>
+
+  <!-- 6. 第三方 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>第三方服務</h2></div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>服務</th><th>用途</th><th>失敗處理</th></tr></thead>
+        <tbody>
+          <tr><td>Supabase Postgres</td><td>主資料庫＋4 RPC</td><td>{data,error} 每次解構檢查；金流路徑 error→throw</td></tr>
+          <tr><td>Supabase Auth</td><td>OTP／Magic Link／建帳號</td><td>回錯誤物件，映射使用者訊息</td></tr>
+          <tr><td>Supabase Storage</td><td>商品圖</td><td>上傳失敗回 action error</td></tr>
+          <tr><td>ECPay AioCheckOut</td><td>付款頁</td><td>導 /checkout/failed，可重試（新 trade no）</td></tr>
+          <tr><td>ECPay ReturnURL</td><td>入帳 webhook</td><td>非 1|OK ECPay 重送；handler 全冪等</td></tr>
+          <tr><td>ECPay QueryTradeInfo</td><td>主動對帳</td><td>限流/5xx 分流中止整批，隔日重試</td></tr>
+          <tr><td>ECPay 電子發票</td><td>B2C 開票（AES）</td><td>失敗不阻塞金流，每日補開</td></tr>
+          <tr><td>Resend</td><td>5 種交易信</td><td>{error}→throw→sendOnce 標 failed→每日 sweep 補寄</td></tr>
+          <tr><td>Upstash Redis</td><td>OTP／對帳限流</td><td>Redis 掛 fail-open</td></tr>
+          <tr><td>Sentry</td><td>錯誤＋金流告警</td><td>—（僅 production enabled）</td></tr>
+          <tr><td>Vercel Cron</td><td>排程觸發</td><td>CRON_SECRET Bearer timing-safe；401 拒非法</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 7. Gap -->
+  <section>
+    <div class="sec-head"><span class="sec-num">07</span><h2>架構 Gap 狀態</h2></div>
+    <p class="sec-sub">自初版以來絕大多數缺口已落地。仍開放的架構級風險如下（依風險排序）。</p>
+    <div class="gaps">
+      <div class="gap"><span class="sev">🔴</span><span class="txt">環境不分離：dev／staging／prod 全打同一顆 Supabase production DB；Vercel env 共用<span class="sub">唯一真正的架構級風險——寫入面持續擴大前應優先解</span></span><span class="task">T82 · T83</span></div>
+      <div class="gap"><span class="sev">🔴</span><span class="txt">DB 備份未設定<span class="sub">上線紅線（CLAUDE.md §6）</span></span><span class="task">T34</span></div>
+      <div class="gap"><span class="sev">🟠</span><span class="txt">Email 送達性：FROM 仍 onboarding@resend.dev、無 SPF/DKIM/DMARC<span class="sub">上線前必換自有網域</span></span><span class="task">T35 · T50</span></div>
+      <div class="gap"><span class="sev">🟠</span><span class="txt">黑貓宅配未串接：shipping_fee=0 佔位<span class="sub">運費與物流單號現況人工</span></span><span class="task">T48</span></div>
+      <div class="gap"><span class="sev">🟠</span><span class="txt">電子發票仍 sandbox：正式帳號＋字軌未設定<span class="sub">上線前切正式</span></span><span class="task">T122</span></div>
+      <div class="gap"><span class="sev">🟡</span><span class="txt">E2E 測試套件未落地：CI 僅 typecheck/lint/unit<span class="sub">金流閉環回歸靠人工</span></span><span class="task">T106</span></div>
+      <div class="gap"><span class="sev">🟡</span><span class="txt">後台單一 email 權限：requireAdmin＝ADMIN_EMAIL 比對<span class="sub">多人營運前再議</span></span><span class="task">T09 註記</span></div>
+    </div>
+    <div class="closed-note">
+      <b>已關閉缺口（存根）：</b>訂單建立交易化 <code>T76</code>・狀態機 race＋log 交易化 <code>T92/T110</code>・付款成功才清車 <code>T75</code>・逾期取消 <code>T66/T74</code>・失敗信自動重試 <code>T88</code>・成功頁存取控制 <code>T73</code>・guest_token unique <code>T70</code>・訪客車併會員 <code>T81</code>・限流＋清理 <code>T78</code>・PII 落表 <code>T80</code>・後台 CRUD <code>T10–T13</code>・CSP 動態 nonce <code>T97</code>・最小 CI <code>T101</code>・識別碼 parse 單一出處 <code>T96</code>・死檔清除 <code>T100</code>。webhook 側卡單自癒 <code>T127</code> 與記錄式退款 <code>T47</code> 為初版後新增並已落地。
+    </div>
+  </section>
+
+  <footer>
+    <span>incantochen · 高端半客製彩色寶石電商</span>
+    <span>architecture.md 儀表板視圖 · 圖示為開發層對齊</span>
+  </footer>
+</div>
