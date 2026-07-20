@@ -82,8 +82,17 @@
   .meta { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 22px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
   .meta b { color: var(--muted); font-weight: 500; }
 
+  /* ---- top section nav ---- */
+  .topnav { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--ground) 92%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--hairline); margin: 0 0 4px; padding: 11px 0; display: flex; flex-wrap: wrap; gap: 7px; }
+  .topnav a { font-family: var(--mono); font-size: 11.5px; text-decoration: none; padding: 5px 12px; border-radius: 100px; border: 1px solid var(--hairline-strong); background: var(--surface); color: var(--muted); transition: border-color .14s, color .14s, background .14s; white-space: nowrap; }
+  .topnav a:hover { border-color: var(--accent); color: var(--accent-ink); }
+  .topnav a.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .topnav a.active { color: #0F1312; } }
+  :root[data-theme="dark"] .topnav a.active { color: #0F1312; }
+  :root[data-theme="light"] .topnav a.active { color: #fff; }
+
   /* ---- section ---- */
-  section { margin-top: 56px; }
+  section { margin-top: 56px; scroll-margin-top: 72px; }
   .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 24px; }
   .sec-num { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: .1em; }
   h2 { font-family: var(--serif); font-weight: 600; font-size: clamp(20px, 3vw, 26px); margin: 0; letter-spacing: -.01em; }
@@ -266,8 +275,17 @@
     </div>
   </header>
 
+  <nav class="topnav" id="topnav">
+    <a href="#s-overview">狀態全景</a>
+    <a href="#s-edges">每條邊</a>
+    <a href="#s-toctou">並發時序</a>
+    <a href="#s-arms">對帳三臂</a>
+    <a href="#s-guards">守衛分層</a>
+    <a href="#s-qa">QA 情境</a>
+  </nav>
+
   <!-- ===== 1. 狀態全景 ===== -->
-  <section>
+  <section id="s-overview">
     <div class="sec-head"><span class="sec-num">01</span><h2>狀態全景與合法轉換</h2></div>
     <p class="sec-sub">上排為付款成立後的正向生命週期（happy path）；<code>cancelled</code> 與 <code>refunded</code> 為僅有的兩個終止狀態。<code>completed</code> 因售後退款需求已不再是終止態。</p>
 
@@ -322,7 +340,7 @@
   </section>
 
   <!-- ===== 2. 邊的細節 ===== -->
-  <section>
+  <section id="s-edges">
     <div class="sec-head"><span class="sec-num">02</span><h2>每條邊：觸發者 / 守衛 / 後續動作 / 例外</h2></div>
     <p class="sec-sub">合法邊白名單 <code>VALID_TRANSITIONS</code> 的單一權威在 TS 端；所有寫入皆走 RPC，在 DB 端單一交易內完成 <code>CAS UPDATE orders</code> ＋ <code>INSERT order_status_log</code>，任一段失敗整段 rollback（T110）。</p>
 
@@ -401,7 +419,7 @@
   </section>
 
   <!-- ===== 3. 並發時序 ===== -->
-  <section>
+  <section id="s-toctou">
     <div class="sec-head"><span class="sec-num">03</span><h2>並發時序：取消守衛的 TOCTOU 窄窗</h2></div>
     <p class="sec-sub">最危險的競態——逾期 cron 正要取消訂單的同時，webhook 才把 payment 翻 paid。pre-guard 查完之後、CAS 取消 commit 之前的毫秒窄窗內若付款成立，主對帳臂（鍵 <code>payment=pending</code>）與漂移臂（鍵 <code>orders=pending_payment</code>）都撈不到——commit 後再查一次即偵測。</p>
 
@@ -473,7 +491,7 @@
   </section>
 
   <!-- ===== 4. 對帳三臂 ===== -->
-  <section>
+  <section id="s-arms">
     <div class="sec-head"><span class="sec-num">04</span><h2>金流兜底：對帳三臂</h2></div>
     <p class="sec-sub">webhook 是即時路徑，reconcile cron 是最終防線。三條臂各有一組<b>不相交的候選鍵</b>——以某一鍵查詢的臂看不見另一鍵的漂移單，所以必須三臂並存，才覆蓋「錢已收但訂單未反映」的所有狀態。</p>
 
@@ -581,7 +599,7 @@
   </section>
 
   <!-- ===== 5. 守衛分層 ===== -->
-  <section>
+  <section id="s-guards">
     <div class="sec-head"><span class="sec-num">05</span><h2>守衛分層總表</h2></div>
     <p class="sec-sub">六道守衛層層疊防，各擋一類失效模式。</p>
     <div class="tbl-scroll">
@@ -602,7 +620,7 @@
   </section>
 
   <!-- ===== 6. QA 與情境 ===== -->
-  <section>
+  <section id="s-qa">
     <div class="sec-head"><span class="sec-num">06</span><h2>QA 與情境</h2></div>
     <p class="sec-sub">把 <code>ensure-paid.ts</code> 在「CAS 沒搶到 payment 推進」後的三態複查（<code>already-settled</code> / <code>closed</code> / <code>indeterminate</code>）與其真實情境展開——這是理解本狀態機在並發/重送/兜底下如何保持冪等又不誤報的關鍵。</p>
 
@@ -718,3 +736,43 @@
     <span>圖示為開發層行為對齊，權威以程式碼與 ops-runbook 為準</span>
   </footer>
 </div>
+
+<script>
+  (function () {
+    var map = Array.prototype.slice.call(document.querySelectorAll('#topnav a'))
+      .map(function (a) { return { link: a, sec: document.querySelector(a.getAttribute('href')) }; })
+      .filter(function (m) { return m.sec; });
+    if (!map.length) return;
+
+    var OFFSET = 90;
+
+    function setActive(link) {
+      map.forEach(function (m) { m.link.classList.toggle('active', m.link === link); });
+    }
+
+    function currentIndex() {
+      var atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 2;
+      if (atBottom) return map.length - 1;
+      var idx = 0;
+      for (var i = 0; i < map.length; i++) {
+        if (map[i].sec.getBoundingClientRect().top - OFFSET <= 1) idx = i;
+      }
+      return idx;
+    }
+
+    var ticking = false;
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function () { ticking = false; setActive(map[currentIndex()].link); });
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+
+    map.forEach(function (m) {
+      m.link.addEventListener('click', function () { setActive(m.link); });
+    });
+
+    setActive(map[currentIndex()].link);
+  })();
+</script>
