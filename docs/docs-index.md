@@ -11,7 +11,6 @@
 |------|------|
 | `CLAUDE.md` | **Claude Code 主入口**。專案施工圖：技術棧、開發規則、目前狀態。每次對話自動載入。 |
 | `memory.md` | **開發決策記錄（durable decisions）**。品牌/客群/技術選型/已定決策/MVP 範圍。2026-07-08 起**不再記進度**——進度以 `docs/tasks.csv` 為準。 |
-| `incantochen-docs.skill` | Claude Skill 定義檔，規範文件寫作規則（doc-header、狀態 emoji、雙語慣例等）。 |
 
 ---
 
