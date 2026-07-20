@@ -23,7 +23,7 @@ flowchart TB
         subgraph Server["伺服器邏輯"]
             SC[Server Components<br/>頁面渲染]
             SA[Server Actions<br/>cart／checkout／login／admin／support]
-            RH[Route Handlers<br/>api/ecpay/notify｜order-result<br/>api/cron/ecpay-reconcile｜cart-cleanup｜pending-payment-expire]
+            RH["Route Handlers（本站 API×5，見 §2.5）<br/>api/ecpay/notify｜order-result<br/>api/cron/ecpay-reconcile｜cart-cleanup｜pending-payment-expire"]
         end
         CRON[Vercel Cron<br/>18:00／19:00／20:00 UTC]
     end
@@ -135,6 +135,20 @@ flowchart TB
 | `repair_refunded_payment` | 0021 | 補登記退款（Override 逃生口留下的半套）：補翻 payment＋稽核 log 原子化（T47） |
 
 > RPC 本身只是「呼叫 DB 函式」的機制；是「把多段寫入塞進同一函式」讓那次呼叫具原子性（見 `glossary.md`）。合法轉換白名單 `VALID_TRANSITIONS` 的單一權威在 TS 端（`order-status.ts`），RPC 刻意不驗合法性——非 override 的守衛由 `transitionOrder` 負責。
+
+### 2.5 本站對外 API 端點（Route Handlers，共 5 支）
+
+`src/app/api/*` 是本站**自己開的 HTTP 端點**，全部供**綠界或 Vercel Cron 打進來**（非給前端 fetch）。⚠️ 前台／後台的資料操作一律走 **Server Components／Server Actions**（不經 `/api`），故對外 API 面只有這 5 支——攻擊面小、關卡集中。
+
+| 端點 | 方法 | 認證 | 觸發者 | 用途 |
+| ---- | ---- | ---- | ------ | ---- |
+| `/api/ecpay/notify` | POST | **CheckMacValue 驗章＋金額核對** | 綠界 ReturnURL（server-to-server） | 入帳權威關卡：驗章→CAS 翻 payment→推進訂單→開票→補通知→回 `1\|OK`；全冪等、外層 try/catch 防 500 引發無限重送 |
+| `/api/ecpay/order-result` | POST | **不驗章**（僅前端導向，非安全關卡） | 綠界 OrderResultURL（瀏覽器 POST） | 付款後導回，303 強制 GET 分流 `/checkout/success`｜`failed` |
+| `/api/cron/ecpay-reconcile` | GET | `CRON_SECRET` Bearer（timing-safe） | Vercel Cron 18:00 UTC | 對帳三臂＋2 sweep；子臂查詢失敗回 500（fail-visible） |
+| `/api/cron/cart-cleanup` | GET | `CRON_SECRET` Bearer | Vercel Cron 19:00 UTC | 清逾期訪客車（`updated_at` 逾 90 天且 `member_id IS NULL`）；守衛式 DELETE＋批量上限＋截斷告警 |
+| `/api/cron/pending-payment-expire` | GET | `CRON_SECRET` Bearer | Vercel Cron 20:00 UTC | 逾期待付款自動取消（T66；有 paid payment 就不取消＝取消守衛，記 `paidConflict`） |
+
+> 兩類認證邊界：**綠界回拋**靠 CheckMacValue 驗章（`notify` 是安全關卡、`order-result` 僅導向不驗）；**Cron** 靠 `CRON_SECRET` Bearer timing-safe 比對，401 拒非法呼叫。
 
 ---
 

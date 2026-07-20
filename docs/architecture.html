@@ -169,7 +169,7 @@
         <div class="nodes">
           <div class="node"><b>Server Components</b> <span class="s">頁面渲染</span></div>
           <div class="node"><b>Server Actions</b> <span class="s">cart／checkout／login／admin／support</span></div>
-          <div class="node"><b>Route Handlers</b> <span class="s">ecpay/notify・order-result</span></div>
+          <div class="node"><b>Route Handlers</b> <span class="s">本站 API ×5（見下表）</span></div>
           <div class="node"><b>Cron ×3</b> <span class="s">reconcile・cart-cleanup・pending-expire</span></div>
         </div>
       </div>
@@ -192,6 +192,20 @@
           <div class="node"><b>Sentry</b> <span class="s">錯誤＋金流告警</span></div>
         </div>
       </div>
+    </div>
+
+    <p class="sec-sub" style="margin:26px 0 12px"><b>本站對外 API 端點（5 支 Route Handlers）</b>——全供綠界或 Vercel Cron 打進來，非給前端 fetch。前台／後台資料操作走 Server Components／Actions（不經 <code>/api</code>），故對外 API 面只有這 5 支、攻擊面小。</p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>端點</th><th>方法</th><th>認證</th><th>觸發者</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>/api/ecpay/notify</td><td>POST</td><td>CheckMacValue 驗章＋金額核對</td><td>綠界 ReturnURL（S2S）</td><td>入帳權威關卡：驗章→CAS 翻 payment→推進訂單→開票→補通知→回 1|OK（全冪等）</td></tr>
+          <tr><td>/api/ecpay/order-result</td><td>POST</td><td>不驗章（僅導向）</td><td>綠界 OrderResultURL（瀏覽器）</td><td>付款後導回，303 分流 success｜failed</td></tr>
+          <tr><td>/api/cron/ecpay-reconcile</td><td>GET</td><td>CRON_SECRET Bearer（timing-safe）</td><td>Vercel Cron 18:00 UTC</td><td>對帳三臂＋2 sweep；子臂失敗回 500（fail-visible）</td></tr>
+          <tr><td>/api/cron/cart-cleanup</td><td>GET</td><td>CRON_SECRET Bearer</td><td>Vercel Cron 19:00 UTC</td><td>清逾期訪客車（updated_at&gt;90 天 ∧ member_id 為 null）</td></tr>
+          <tr><td>/api/cron/pending-payment-expire</td><td>GET</td><td>CRON_SECRET Bearer</td><td>Vercel Cron 20:00 UTC</td><td>逾期待付款自動取消（T66；有 paid 就不取消＝取消守衛）</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
 
