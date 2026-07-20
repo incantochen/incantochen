@@ -67,7 +67,7 @@ flowchart TB
 | 路由攔截＋CSP | `src/proxy.ts` | 每請求刷新 Supabase session；注入 `x-pathname`；**每請求動態產生 CSP（nonce＋strict-dynamic，T97/F-010）**——CSP 單一出處已從 next.config 搬來 | `@supabase/ssr`、env |
 | 環境變數 | `src/lib/env.ts`（前端可見）、`env.server.ts`（server-only） | 前端：`NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`；server：service role、ECPay 金鑰、Resend、Upstash、發票字軌、`ADMIN_EMAIL`、`CRON_SECRET`；皆 fail-fast，`import "server-only"` 防洩漏 | — |
 | Supabase clients | `src/lib/supabase/` | 三種 client：`client.ts`（瀏覽器 anon）、`server.ts`（SSR anon＋cookie）、`service-role.ts`（繞過 RLS，server-only） | env |
-| Auth | `src/app/login/`、`src/app/auth/confirm/`、`src/lib/auth/` | Email OTP（主）＋Magic Link（輔）；`requireUser()`／`requireAdmin()` 路由保護；`find-or-create-member`（member 無 INSERT policy，走 service role）；`normalize-email`、`safe-redirect` | Supabase Auth、rate-limit |
+| Auth | `src/app/login/`、`src/app/auth/confirm/`、`src/lib/auth/` | Email OTP（主）＋Magic Link（輔）；**登入信（OTP 碼＋magic link）由 Supabase Auth 寄送（走 Auth SMTP，非 Resend；Custom SMTP 寄件人見 T83）**；`requireUser()`／`requireAdmin()` 路由保護；`find-or-create-member`（member 無 INSERT policy，走 service role）；`normalize-email`、`safe-redirect` | Supabase Auth、rate-limit |
 | 限流 | `src/lib/rate-limit.ts`、`redis.ts`、`get-client-ip.ts` | OTP 請求（email＋IP 雙桶）與驗證（IP）sliding window；對帳連續 403 計數；IP fallback（XFF 取最左） | Upstash Redis |
 | 商品／配置器 | `src/app/products/[slug]/`、`src/app/collections/`、`src/components/product-configurator.tsx`、`src/lib/product/` | PDP＋資料驅動配置器（三層白名單）；品類目錄；`check-product-availability`（T117 暫停販售）；加入購物袋建 `guest_token` cookie | anon 讀（RLS 公開唯讀 `active`）、service role 寫 cart |
 | 購物車 | `src/app/cart/`、`src/lib/cart/` | 讀取／改數量／刪除；擁有權檢查（cart.guest_token＝cookie）；徽章計數；**會員登入併車**（`merge-guest-cart`、`resolve-cart-identity`、`get-or-create-member-cart`，T81） | service role（cart RLS 全拒） |
@@ -78,7 +78,7 @@ flowchart TB
 | 電子發票 | `src/lib/order/issue-invoice.ts`、`invoice-meta.ts`、`src/lib/ecpay/invoice/` | T42：付款成功後開立 B2C 電子發票（冪等，issued 短路＋GetIssue 判別）；`issue.ts`／`invoice-client.ts`／`relate-number.ts`／`validate.ts`；**發票失敗不阻塞金流** | ECPay 發票 API、AES |
 | ECPay 金流 | `src/lib/ecpay/`、`src/app/checkout/pay/`、`src/app/api/ecpay/` | 見 §2.2 | env.server、check-mac-value、aes-payload |
 | 排程 Cron | `src/app/api/cron/*`、`src/lib/cron/require-cron-auth.ts` | 3 支：`ecpay-reconcile`（對帳三臂＋2 sweep）、`cart-cleanup`（清逾期訪客車）、`pending-payment-expire`（T66 逾期取消）；`CRON_SECRET` Bearer timing-safe 驗證 | query-trade-info、ensure-paid、state-machine、Sentry |
-| Email | `src/lib/email/`、`src/lib/notification/senders.ts` | **5 種信**：下單確認、新訂單通知、出貨通知、**退款通知（T47）**、售後通知；共用 `escape-html`；`senders.ts` 註冊表（含 `eligibleStatuses` 適寄判斷） | Resend、service role |
+| Email（交易信） | `src/lib/email/`、`src/lib/notification/senders.ts` | **Resend 5 種交易信**：下單確認、新訂單通知、出貨通知、**退款通知（T47）**、售後通知；共用 `escape-html`；`senders.ts` 註冊表（含 `eligibleStatuses` 適寄判斷）。⚠️ **登入信（OTP＋magic link）不在此列**——走 Supabase Auth SMTP（見 Auth 列） | Resend、service role |
 | 通知去重 | `src/lib/notification/send-once.ts` | `notification(order_id, type)` unique 佔位 → 寄送 → 回填 sent/failed；failed／stale reclaim（條件式 UPDATE 防並發重寄）；保證不外拋 | service role |
 | 後台 | `src/app/admin/*` | 訂單列表／詳情、狀態推進、出貨、Admin Override、**退款登記**、售後案件、PII 揭露＋稽核；**商品 CRUD（T10/T11）、選項 CRUD（T12/T13）**、代客建單；`action-result.ts` 統一回傳 | requireAdmin、state-machine、refund-order、storage |
 | 售後 | `src/lib/support/`、`src/app/account/orders/[id]/support/` | 商品問題回報（`return_defect`）；後台手動建 `repair_maintenance`；service role 重驗擁有權 | support_request、email |
@@ -311,7 +311,7 @@ PDP 配置器（前端計價，僅顯示用）
 | 服務 | 用途 | 認證 | 呼叫點 | 失敗處理 |
 | ---- | ---- | ---- | ------ | -------- |
 | Supabase Postgres | 主資料庫＋4 RPC | anon／service role | 幾乎所有 server 邏輯 | `{data,error}` 每次解構檢查；金流路徑 error → throw |
-| Supabase Auth | OTP／Magic Link／admin.createUser | anon＋service role | login、checkout（結帳即會員）、proxy | 回錯誤物件，映射使用者訊息 |
+| Supabase Auth | OTP／Magic Link／admin.createUser；**寄登入信（OTP 碼＋magic link，走 Auth SMTP，非 Resend）** | anon＋service role | login（`signInWithOtp`）、checkout（結帳即會員）、proxy | 回錯誤物件，映射使用者訊息 |
 | Supabase Storage | 商品圖 | service role | admin 商品 CRUD | 上傳失敗回 action error |
 | ECPay AioCheckOut | 付款頁 | MerchantID＋HashKey/IV（SHA256） | 瀏覽器 form POST | 失敗由 OrderResultURL 導 `/checkout/failed`，可重試（新 trade no） |
 | ECPay ReturnURL | 入帳通知（inbound webhook） | CheckMacValue＋金額核對 | `/api/ecpay/notify` | 非 `1\|OK` ECPay 重送；handler 全冪等 |
