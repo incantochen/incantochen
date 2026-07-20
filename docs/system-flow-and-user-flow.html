@@ -196,6 +196,7 @@
         <tbody>
           <tr><td>配置器</td><td>三層白名單（類別 applies_to→款式 ProductOption→值 ProductOptionValue）</td><td>選值在白名單內</td><td>前端不得繞過；非法值後端拒絕</td></tr>
           <tr><td>加入購物袋</td><td>寫 unit_price_snapshot＋config_snapshot 快照</td><td>cart.guest_token＝httpOnly cookie（擁有權檢查）</td><td>token 不符→拒絕（防亂猜 id 動別人車）</td></tr>
+          <tr><td>購物袋頁·失效偵測 <span style="font-family:var(--mono);font-size:9.5px;color:var(--warn);border:1px solid var(--warn-line);border-radius:100px;padding:0 6px;white-space:nowrap">T138 規劃中</span></td><td>getCart 對每筆 cart_item 比對現況（商品仍 active＋已選 option_type/value 仍在白名單顯示）</td><td>全部有效</td><td>任一失效→標「該商品或選項已不存在，請重新下單」＋<b>停用「前往結帳」</b>直到移除；查詢失敗 fail-open（結帳端 verify-prices 為最終兜底）。與 T117（PDP 擋新加）互補——本項擋已加入購物車的失效品</td></tr>
           <tr><td>結帳驗價</td><td>🔴 verify-prices 依 DB 白名單重算，絕不信前端</td><td>前端價＝後端價</td><td>不一致→更新快照＋回 priceUpdated、<b>不建單</b>（R/S/Q loop）</td></tr>
           <tr><td>Email 辨識</td><td>以 Email 找/建會員</td><td>全新 email→自動建會員</td><td>命中既有會員（T71）→不靜默掛單，導 /login OTP 驗證</td></tr>
           <tr><td>建立訂單</td><td>create_order_with_items RPC（待付款）＋同意時間戳</td><td>驗價通過</td><td>—</td></tr>
