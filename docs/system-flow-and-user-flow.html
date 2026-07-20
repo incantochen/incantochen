@@ -1,0 +1,364 @@
+<title>系統流程與 User Flow — incantochen</title>
+<style>
+  :root{
+    --ground:#F1F3F0; --surface:#FBFCFA; --surface-2:#F4F6F2;
+    --ink:#171A18; --muted:#5B615C; --faint:#858B85;
+    --hairline:#E0E3DD; --hairline-strong:#CFD4CC;
+    --accent:#0B6E63; --accent-soft:#0B6E6314; --accent-ink:#095A51;
+    --warn:#9A5E08; --warn-bg:#F7ECD6; --warn-line:#E4C98F;
+    --good:#1B7343; --good-bg:#E1EFE6; --good-line:#A9D4BA;
+    --danger:#AA342D; --danger-bg:#F5E2E0; --danger-line:#E1AFAB;
+    --info:#1F5F8B; --info-bg:#E1EAF2; --info-line:#A9C4DC;
+    --radius:12px; --radius-sm:8px;
+    --shadow:0 1px 2px rgba(20,28,24,.05),0 6px 20px -12px rgba(20,28,24,.18);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --serif:ui-serif,"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ground:#0F1312; --surface:#161A19; --surface-2:#1B201E;
+    --ink:#E7EAE6; --muted:#9AA19B; --faint:#757C76;
+    --hairline:#262C29; --hairline-strong:#333A36;
+    --accent:#45C3B1; --accent-soft:#45C3B11f; --accent-ink:#6fd3c4;
+    --warn:#E0B267; --warn-bg:#2E2413; --warn-line:#5A4A24;
+    --good:#6FCB92; --good-bg:#12271A; --good-line:#2C4E37;
+    --danger:#E8938C; --danger-bg:#2C1715; --danger-line:#58312D;
+    --info:#8FB8DA; --info-bg:#152430; --info-line:#2C4356;
+  }}
+  :root[data-theme="light"]{
+    --ground:#F1F3F0; --surface:#FBFCFA; --surface-2:#F4F6F2;
+    --ink:#171A18; --muted:#5B615C; --faint:#858B85;
+    --hairline:#E0E3DD; --hairline-strong:#CFD4CC;
+    --accent:#0B6E63; --accent-soft:#0B6E6314; --accent-ink:#095A51;
+    --warn:#9A5E08; --warn-bg:#F7ECD6; --warn-line:#E4C98F;
+    --good:#1B7343; --good-bg:#E1EFE6; --good-line:#A9D4BA;
+    --danger:#AA342D; --danger-bg:#F5E2E0; --danger-line:#E1AFAB;
+    --info:#1F5F8B; --info-bg:#E1EAF2; --info-line:#A9C4DC;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0F1312; --surface:#161A19; --surface-2:#1B201E;
+    --ink:#E7EAE6; --muted:#9AA19B; --faint:#757C76;
+    --hairline:#262C29; --hairline-strong:#333A36;
+    --accent:#45C3B1; --accent-soft:#45C3B11f; --accent-ink:#6fd3c4;
+    --warn:#E0B267; --warn-bg:#2E2413; --warn-line:#5A4A24;
+    --good:#6FCB92; --good-bg:#12271A; --good-line:#2C4E37;
+    --danger:#E8938C; --danger-bg:#2C1715; --danger-line:#58312D;
+    --info:#8FB8DA; --info-bg:#152430; --info-line:#2C4356;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1080px;margin:0 auto;padding:clamp(28px,5vw,60px) clamp(18px,4vw,44px) 96px;}
+
+  header{border-bottom:1px solid var(--hairline);padding-bottom:28px;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-ink);display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+  .eyebrow::before{content:"";width:22px;height:1px;background:var(--accent);display:inline-block;}
+  h1{font-family:var(--serif);font-weight:600;letter-spacing:-.01em;font-size:clamp(29px,5vw,44px);line-height:1.08;margin:0 0 14px;text-wrap:balance;}
+  .lede{color:var(--muted);font-size:15px;max-width:calc(64ch + 2em);margin:0;text-align:justify;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:20px;font-family:var(--mono);font-size:12px;color:var(--faint);}
+  .meta b{color:var(--muted);font-weight:500;}
+
+  .topnav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--ground) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--hairline);margin:0 0 4px;padding:11px 0;display:flex;flex-wrap:wrap;gap:7px;}
+  .topnav a{font-family:var(--mono);font-size:11.5px;text-decoration:none;padding:5px 12px;border-radius:100px;border:1px solid var(--hairline-strong);background:var(--surface);color:var(--muted);transition:border-color .14s,color .14s,background .14s;white-space:nowrap;}
+  .topnav a:hover{border-color:var(--accent);color:var(--accent-ink);}
+  .topnav a.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  @media (prefers-color-scheme:dark){.topnav a.active{color:#0F1312;}}
+  :root[data-theme="dark"] .topnav a.active{color:#0F1312;}
+  :root[data-theme="light"] .topnav a.active{color:#fff;}
+
+  section{margin-top:52px;scroll-margin-top:72px;}
+  .sec-head{display:flex;align-items:baseline;gap:13px;margin-bottom:8px;flex-wrap:wrap;}
+  .lvl{font-family:var(--mono);font-size:11px;font-weight:600;padding:2px 9px;border-radius:100px;letter-spacing:.04em;}
+  .lvl.l1{color:var(--info);background:var(--info-bg);border:1px solid var(--info-line);}
+  .lvl.l2{color:var(--accent-ink);background:var(--accent-soft);border:1px solid var(--hairline-strong);}
+  .lvl.l3{color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-line);}
+  .lvl.l4{color:var(--danger);background:var(--danger-bg);border:1px solid var(--danger-line);}
+  .lvl.ap{color:var(--good);background:var(--good-bg);border:1px solid var(--good-line);}
+  h2{font-family:var(--serif);font-weight:600;font-size:clamp(20px,3vw,25px);margin:0;letter-spacing:-.01em;}
+  .sec-sub{color:var(--muted);font-size:13.5px;margin:0 0 22px;max-width:calc(68ch + 5em);text-align:justify;}
+  .sec-sub code,td code,.card code,.note code{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--hairline);border-radius:4px;padding:0 4px;color:var(--accent-ink);}
+
+  /* overview 4-layer stack */
+  .stack{display:flex;flex-direction:column;gap:10px;margin-bottom:8px;}
+  .layer{display:grid;grid-template-columns:120px 1fr;gap:16px;align-items:center;background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 18px;border-left:3px solid var(--lc,var(--accent));}
+  @media (max-width:620px){.layer{grid-template-columns:1fr;gap:6px;}}
+  .layer.c1{--lc:var(--info);} .layer.c2{--lc:var(--accent);} .layer.c3{--lc:var(--warn);} .layer.c4{--lc:var(--danger);}
+  .layer .lt{font-family:var(--serif);font-size:16px;font-weight:600;color:var(--ink);}
+  .layer .lt span{display:block;font-family:var(--mono);font-size:10.5px;color:var(--lc,var(--accent));margin-top:2px;letter-spacing:.03em;}
+  .layer .ld{font-size:13px;color:var(--muted);}
+
+  /* flow cards */
+  .flows{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media (max-width:720px){.flows{grid-template-columns:1fr;}}
+  .card{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px;}
+  .card .fh{display:flex;align-items:baseline;gap:9px;margin-bottom:8px;}
+  .card .fid{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);}
+  .card .ft{font-family:var(--serif);font-size:16px;font-weight:600;}
+  .card .flowline{font-size:12.5px;color:var(--ink);margin:0 0 9px;}
+  .card .exp{font-size:12.5px;color:var(--muted);padding-top:9px;border-top:1px solid var(--hairline);}
+  .card .exp b{color:var(--accent-ink);}
+
+  /* tables */
+  .tbl-scroll{overflow-x:auto;border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:18px;}
+  table{border-collapse:collapse;width:100%;min-width:560px;background:var(--surface);font-size:13px;}
+  thead th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:12px 15px;border-bottom:1px solid var(--hairline-strong);background:var(--surface-2);}
+  tbody td{padding:11px 15px;border-bottom:1px solid var(--hairline);vertical-align:top;color:var(--muted);}
+  tbody tr:last-child td{border-bottom:0;}
+  tbody td:first-child{color:var(--ink);white-space:nowrap;}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:100px;white-space:nowrap;}
+  .pill.self{color:var(--good);background:var(--good-bg);border:1px solid var(--good-line);}
+  .pill.manual{color:var(--danger);background:var(--danger-bg);border:1px solid var(--danger-line);}
+  .pill.p0{color:var(--danger);background:var(--danger-bg);border:1px solid var(--danger-line);}
+
+  /* note / callout */
+  .note{border:1px solid var(--hairline);border-left:3px solid var(--nc,var(--accent));border-radius:var(--radius);background:var(--surface);padding:15px 18px;margin-bottom:16px;}
+  .note.warn{--nc:var(--warn);} .note.danger{--nc:var(--danger);}
+  .note h3{margin:0 0 8px;font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:var(--nc,var(--accent-ink));}
+  .note ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}
+  .note ul li{position:relative;padding-left:16px;font-size:13px;color:var(--muted);}
+  .note ul li::before{content:"▸";position:absolute;left:0;top:0;color:var(--accent);font-size:10px;}
+  .note ul li b{color:var(--ink);}
+
+  .subhead{font-family:var(--mono);font-size:11.5px;letter-spacing:.05em;color:var(--accent-ink);margin:22px 0 12px;display:flex;align-items:center;gap:10px;}
+  .subhead::after{content:"";flex:1;height:1px;background:var(--hairline);}
+
+  .xref{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+  .xref a{font-family:var(--mono);font-size:11.5px;text-decoration:none;color:var(--accent-ink);border:1px solid var(--hairline-strong);border-radius:100px;padding:6px 13px;background:var(--surface);transition:border-color .14s;}
+  .xref a:hover{border-color:var(--accent);}
+
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--hairline);font-family:var(--mono);font-size:11.5px;color:var(--faint);display:flex;flex-wrap:wrap;gap:6px 20px;}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">incantochen · 四層系統流程</div>
+    <h1>系統流程與 User Flow 統整</h1>
+    <p class="lede">從「使用者看到什麼」一路往下拆到「壞掉時誰來救」——四層對齊視圖：使用者流程 → 系統流程（成立條件/例外）→ 系統錯誤自動處置 → 人工救援。本頁為 <code>system-flow-and-user-flow.md</code> 的儀表板視圖，內容以程式碼與 ops-runbook 接地。</p>
+    <div class="meta">
+      <span><b>現況</b> M2 進行中 · 核心閉環程式已跑通</span>
+      <span><b>權威</b> 程式碼 · ops-runbook.md</span>
+    </div>
+  </header>
+
+  <nav class="topnav" id="topnav">
+    <a href="#s-l1">L1 使用者流程</a>
+    <a href="#s-l2">L2 系統流程</a>
+    <a href="#s-l3">L3 錯誤處理</a>
+    <a href="#s-l4">L4 人工救援</a>
+    <a href="#s-ap">附錄</a>
+  </nav>
+
+  <!-- 四層總覽 -->
+  <section id="s-overview" style="scroll-margin-top:72px;margin-top:40px;">
+    <div class="stack">
+      <div class="layer c1"><div class="lt">使用者流程<span>LEVEL 1 · EXPERIENCE</span></div><div class="ld">使用者看到什麼、體驗如何——四條主動線與體驗關鍵。</div></div>
+      <div class="layer c2"><div class="lt">系統流程<span>LEVEL 2 · SYSTEM</span></div><div class="ld">每個節點的成立條件與例外處置——含跨流程訂單狀態機。</div></div>
+      <div class="layer c3"><div class="lt">錯誤處理<span>LEVEL 3 · AUTO-HEAL</span></div><div class="ld">防禦性規則＋金流失敗自癒矩陣——暫時性故障自癒。</div></div>
+      <div class="layer c4"><div class="lt">人工救援<span>LEVEL 4 · OPS</span></div><div class="ld">錢務裁決永不自動修——救援情境與權威修復順序。</div></div>
+    </div>
+    <p class="sec-sub" style="margin-top:14px">核心哲學：<b>越往上越貼近人（體驗），越往下越貼近錢（救援）</b>；暫時性故障在 L3 自癒，錢務問題落到 L4 人工裁決、絕不自動壓掉。</p>
+  </section>
+
+  <!-- Level 1 -->
+  <section id="s-l1">
+    <div class="sec-head"><span class="lvl l1">Level 1</span><h2>User Flow & Experience</h2></div>
+    <p class="sec-sub">四條主動線，體驗原則：<b>自助、價格透明、低摩擦、不推銷</b>（呼應高端客群主導性、反感推銷）。</p>
+    <div class="flows">
+      <div class="card">
+        <div class="fh"><span class="fid">F1</span><span class="ft">首購下單</span></div>
+        <p class="flowline">目錄 → 詳情頁（配戴情境圖）→ 頁內配置器（寶石色→金屬色→規格→數量）→ 即時報價 → 購物袋 → 結帳 → 同意客製條款 → 綠界付款 → 結果頁</p>
+        <div class="exp"><b>結帳即會員</b>（免先註冊）；付款結果頁「數秒內給明確結果」，絕不讓客人看到「待付款」而驚慌</div>
+      </div>
+      <div class="card">
+        <div class="fh"><span class="fid">F2</span><span class="ft">回訪查單</span></div>
+        <p class="flowline">輸入 Email → 收信（<b>OTP 驗證碼為主＋magic link 為輔</b>）→ 輸碼登入 → 會員中心 → 訂單狀態時間軸／物流單號</p>
+        <div class="exp"><b>OTP 讓 session 精準落在當下裝置</b>（手機輸入、桌機收信也不卡）；magic link 落地頁「再按一次才消耗 token」防掃描器點掉</div>
+      </div>
+      <div class="card">
+        <div class="fh"><span class="fid">F3</span><span class="ft">售後申請</span></div>
+        <p class="flowline">訂單詳情 →「商品問題回報」→ 填說明＋同意告知 → 店家後台審核 → 狀態同步回客人端</p>
+        <div class="exp">半客製＝<b>法定客製品、無七天鑑賞退</b>；客戶端只有單一入口，退款走人工確認</div>
+      </div>
+      <div class="card">
+        <div class="fh"><span class="fid">F4</span><span class="ft">全客製預約</span></div>
+        <p class="flowline">首頁 custom 入口 → 說明頁 → 需求表單（品項/預算/想法/聯絡）→ 通知店家 → 人工一對一</p>
+        <div class="exp">MVP 僅捕捉需求，<b>不接金流、不建訂單</b>（完整報價鎖價＝Phase 3）</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Level 2 -->
+  <section id="s-l2">
+    <div class="sec-head"><span class="lvl l2">Level 2</span><h2>系統流程（成立條件與例外）</h2></div>
+    <p class="sec-sub">以 F1 首購下單（核心閉環）為主。<b>正常路徑成立條件</b>：白名單選項合法 → 前端價＝後端重算價 → 勾選客製同意 → 綠界回報成功。</p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>節點</th><th>系統動作</th><th>成立條件</th><th>例外處置</th></tr></thead>
+        <tbody>
+          <tr><td>配置器</td><td>三層白名單（類別 applies_to→款式 ProductOption→值 ProductOptionValue）</td><td>選值在白名單內</td><td>前端不得繞過；非法值後端拒絕</td></tr>
+          <tr><td>加入購物袋</td><td>寫 unit_price_snapshot＋config_snapshot 快照</td><td>cart.guest_token＝httpOnly cookie（擁有權檢查）</td><td>token 不符→拒絕（防亂猜 id 動別人車）</td></tr>
+          <tr><td>結帳驗價</td><td>🔴 verify-prices 依 DB 白名單重算，絕不信前端</td><td>前端價＝後端價</td><td>不一致→更新快照＋回 priceUpdated、<b>不建單</b>（R/S/Q loop）</td></tr>
+          <tr><td>Email 辨識</td><td>以 Email 找/建會員</td><td>全新 email→自動建會員</td><td>命中既有會員（T71）→不靜默掛單，導 /login OTP 驗證</td></tr>
+          <tr><td>建立訂單</td><td>create_order_with_items RPC（待付款）＋同意時間戳</td><td>驗價通過</td><td>—</td></tr>
+          <tr><td>付款判定</td><td><b>背景 webhook 為權威</b>；驗 CheckMacValue、冪等去重、條件式 UPDATE</td><td>webhook 回報成功</td><td>前端 redirect 早於 webhook→結果頁輪詢</td></tr>
+          <tr><td>三態對帳</td><td>成功頁未確認→主動呼叫綠界訂單查詢 API</td><td>綠界明確回成功/失敗</td><td>「尚未確認」≠失敗：<b>不可顯示「失敗請重試」</b>（會雙重扣款）</td></tr>
+          <tr><td>付款成功</td><td>訂單→已付款、寄確認信＋通知店家＋開電子發票</td><td>—</td><td>serverless 一律 await（禁 fire-and-forget）</td></tr>
+          <tr><td>逾期未付</td><td>T66：pending 逾期（72h）自動取消；重試換新 trade no</td><td>—</td><td>有 paid payment 就不准取消（取消守衛）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <h3>F2 / F3 / F4 成立與例外</h3>
+      <ul>
+        <li><b>F2 查單</b>：OTP 正確且未過期（碼長不固定，雲端 8 碼、本機 6 碼，採 4–10 位彈性）→ 建 session；碼錯/過期→友善錯誤＋一鍵重寄。magic link 落地頁須「再按一次」才消耗 token（防掃描器預取）。</li>
+        <li><b>F3 售後</b>：訂單狀態可申請（非待付款/取消/退款）→ service role 重驗擁有權 → 建 support_request → 通知店家；重複申請不硬擋（人工處理，按鈕 disabled 防連點）。</li>
+        <li><b>F4 預約</b>：欄位完整→建詢問紀錄→通知店家；不接金流、不建訂單。</li>
+        <li><b>跨流程狀態機</b>：待付款→已付款/處理中→製作中→已出貨→已完成；分支 已取消/已退款。每次變更寫 order_status_log，狀態推進與稽核 log 交易化（RPC，log 寫不進整筆 rollback）。詳見附錄。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Level 3 -->
+  <section id="s-l3">
+    <div class="sec-head"><span class="lvl l3">Level 3</span><h2>System Error and Handling</h2></div>
+    <p class="sec-sub">核心哲學：<b>暫時性故障自癒、錢務問題永不自動修</b>。全鏈路靜默失敗點皆接 Sentry。</p>
+
+    <div class="subhead">防禦性程式規則（動對應模組必守）</div>
+    <div class="note warn">
+      <ul>
+        <li><b>SDK 錯誤必檢查</b>：Supabase/Resend 用回傳值帶錯誤，每次解構檢查 error；「查詢失敗」≠「查無資料」。</li>
+        <li><b>並發去重用條件式 UPDATE</b>，且 SET 必須改動 WHERE 用到的欄位（否則 EvalPlanQual 兩邊都搶到）。</li>
+        <li><b>numeric 比對前先 Number()</b>；<b>serverless 禁 fire-and-forget</b>（一律 await/after）；<b>識別碼互轉單一出處</b>；<b>客人輸入插 HTML 前先 escape</b>。</li>
+      </ul>
+    </div>
+
+    <div class="subhead">金流失敗自癒矩陣（webhook 已失靈為前提，客人已扣款）</div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>失敗點</th><th>客人體驗</th><th>自動處置</th><th>自癒時間</th></tr></thead>
+        <tbody>
+          <tr><td>① 訂單推進失敗（DB 暫時錯）</td><td>付了款仍顯示待付款</td><td>Sentry＋cron unexpected+1</td><td><span class="pill self">隔日對帳重試</span></td></tr>
+          <tr><td>② payment 翻 paid 失敗</td><td>幾乎無感（訂單已 paid、信照寄）</td><td>隔日 CAS 補翻（短暫漂移屬正常）</td><td><span class="pill self">隔日</span></td></tr>
+          <tr><td>③ 確認信寄送失敗（T88）</td><td>信晚到</td><td>webhook 回 0 觸發重送 reclaim＋每日 sweep 補寄</td><td><span class="pill self">最慢隔天</span></td></tr>
+          <tr><td>④ webhook 側卡單（paid/pending）</td><td>付了款仍待付款</td><td>T127 漂移臂隔日冪等推進＋補確認信</td><td><span class="pill self">隔日</span></td></tr>
+          <tr><td>⑤⑥ 錢收在已取消/退款訂單</td><td>訂單已取消卻被扣款</td><td>durable 稽核臂每日告警</td><td><span class="pill manual">需人工</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-sub"><b>兜底層次</b>：Webhook（權威）→ 成功頁主動對帳查詢（即時）→ 每日 reconcile cron（<a href="#s-ap" style="color:var(--accent-ink)">三臂</a>）→ email-pending 最後安全網。</p>
+
+    <div class="note danger">
+      <h3>金額不符（P0）</h3>
+      <ul>
+        <li>webhook 端 <code>TradeAmt ≠ 系統金額</code> → <b>拒絕處理</b>、訂單停 pending_payment、不記帳。理論上不該發生（伺服器驗價），出現即當日開 bug 調查。</li>
+      </ul>
+    </div>
+
+    <div class="subhead">webhook 失敗機率量級（工程推估，非實測）</div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>層</th><th>單次失敗率</th><th>綠界重送能救</th><th>最終漏接</th></tr></thead>
+        <tbody>
+          <tr><td>網路暫時故障</td><td>~0.01–0.1%</td><td>✅ 幾乎必救</td><td>接近 0</td></tr>
+          <tr><td>Vercel 平台事故</td><td>≈99.95%+ 可用</td><td>⚠️ 看事故長度</td><td>~0.01–0.05%</td></tr>
+          <tr><td>應用層（DB 暫時錯/bug）</td><td>~0.01–0.1%/請求</td><td>✅ 回 ERR 觸發重送</td><td>接近 0</td></tr>
+          <tr><td><b>設定錯誤（ReturnURL/金鑰）</b></td><td><b>每次動設定 5–20% 人為出錯</b></td><td>❌ 全滅型、不自癒</td><td>一筆真實交易 100% 驗出</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-sub"><b>結論</b>：設定正確前提下單筆「webhook 徹底失靈、要靠對帳搶救」約 0.01–0.1%（幾個月到幾年一次）。<b>風險大頭在設定層</b>，集中在 T35 換正式網域＋金鑰時——唯一預防是改完立刻打一筆真實小額交易驗 webhook 到達。</p>
+  </section>
+
+  <!-- Level 4 -->
+  <section id="s-l4">
+    <div class="sec-head"><span class="lvl l4">Level 4</span><h2>Operation Handling（人工救援）</h2></div>
+    <p class="sec-sub">出處 <code>ops-runbook.md</code>。紀律：修復 SQL 前先跑診斷；能走 /admin/orders（寫稽核 log）就不裸改 SQL；<b>帳務表永禁 DELETE</b>。</p>
+
+    <div class="note danger">
+      <h3>權威修復順序</h3>
+      <ul>
+        <li>綠界後台 ＞ payment ＞ orders ＞ 通知信——永遠從權威端往下游同步、不反向。</li>
+        <li>先 payment、再 orders、最後補通知；一次一單（帶 order_no/merchant_trade_no ＋狀態守衛）。</li>
+      </ul>
+    </div>
+
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>情境</th><th>判斷</th><th>處置</th></tr></thead>
+        <tbody>
+          <tr><td>訂單卡待付款、客人聲稱已付</td><td>綠界後台以 merchant_trade_no 查權威狀態</td><td>①等對帳兜底 ②手動觸發 cron ③仍不行才 SQL 改 payment＋Admin Override 推訂單</td></tr>
+          <tr><td><span class="pill p0">P0</span> 金額不符告警</td><td>比對 orders/綠界/raw_callback</td><td><b>不可標 paid</b>；多收退刷、少收請補刷；開 bug</td></tr>
+          <tr><td>缺 gateway_trade_no</td><td>綠界查 TradeNo</td><td>UPDATE 回填</td></tr>
+          <tr><td>通知信卡 failed（T88 已自動重試）</td><td>連續 2–3 天同筆＝永久性</td><td>Resend 查退信→聯絡客人→補寄→標 sent</td></tr>
+          <tr><td>疑似重複扣款</td><td>兩筆都在綠界顯示已收款</td><td>保留最早成功那筆，其餘綠界退刷、系統標 refunded</td></tr>
+          <tr><td>退款（T47 記錄式）</td><td>售後確認需退款</td><td>綠界退刷 → 退款區塊登記（refund_order RPC 原子）</td></tr>
+          <tr><td>錢收在已取消/退款訂單</td><td>每日 durable 稽核臂告警</td><td>先聯絡客人：退款 or Admin Override 恢復訂單</td></tr>
+          <tr><td>對帳 Cron 失敗</td><td>Vercel Cron 紀錄＋pending 筆數是否累積</td><td>查 cron 啟用/route 200；ECPay 403 限流有退避隔日重試</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-sub"><b>何時聯絡綠界（02-2655-1775）</b>：綠界查無交易但客人有扣款證明、退刷失敗、查詢 API 持續 403。準備 MerchantID、MerchantTradeNo（19 碼）、綠界 TradeNo、交易日期與金額。</p>
+  </section>
+
+  <!-- 附錄 -->
+  <section id="s-ap">
+    <div class="sec-head"><span class="lvl ap">附錄</span><h2>訂單狀態機與對帳三臂</h2></div>
+    <p class="sec-sub">這兩塊有完整的視覺化專頁（含每條邊守衛/後續動作、TOCTOU 時序、三態複查 QA）——此處僅摘要。</p>
+
+    <div class="subhead">A · 訂單狀態機</div>
+    <div class="note">
+      <ul>
+        <li><b>7 狀態</b>：pending_payment → paid → in_production → shipped → completed；分支 cancelled / refunded（僅這兩個是終止態）。</li>
+        <li><b>PAID_LINEAGE</b>＝paid 及其後續（決定哪些狀態視為付款已成立、該補寄確認信）。</li>
+        <li><b>所有寫入走 transition_order_status RPC</b>：CAS UPDATE＋order_status_log INSERT 同一交易，任一失敗整段 rollback（T110）。</li>
+        <li><b>守衛</b>：取消守衛（有 paid 就不准取消）、退款守衛（有 paid 殘留不准轉 refunded）、TOCTOU 補查。</li>
+      </ul>
+    </div>
+
+    <div class="subhead">B · 金流兜底對帳三臂（每日台北 02:00）</div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>臂</th><th>候選鍵</th><th>動作</th><th>處置</th></tr></thead>
+        <tbody>
+          <tr><td>主臂</td><td>payment=pending</td><td>打綠界確認→推進訂單→翻 payment→補通知</td><td><span class="pill self">自癒</span></td></tr>
+          <tr><td>漂移臂</td><td>paid ∧ orders=pending</td><td>不打綠界，信任財務事實冪等推進＋清 sibling</td><td><span class="pill self">自癒</span></td></tr>
+          <tr><td>稽核臂</td><td>paid ∧ orders∈{cancelled,refunded}</td><td>只偵測，durable 每日告警</td><td><span class="pill manual">人工裁決</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-sub">另掛 failed-notification sweep（補寄失敗信）與 uninvoiced sweep（補開發票），皆冪等、限流 break 也照跑；任一子臂查詢失敗整支回 HTTP 500（fail-visible）。</p>
+
+    <div class="xref">
+      <a href="#">＊ 完整視覺化見 order-state-machine.html（狀態機＋三臂＋QA 情境）</a>
+      <a href="#">＊ 架構總覽見 architecture.html</a>
+    </div>
+  </section>
+
+  <footer>
+    <span>incantochen · 高端半客製彩色寶石電商</span>
+    <span>system-flow-and-user-flow.md 儀表板視圖 · 權威以程式碼與 ops-runbook 為準</span>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var map = Array.prototype.slice.call(document.querySelectorAll('#topnav a'))
+      .map(function (a) { return { link: a, sec: document.querySelector(a.getAttribute('href')) }; })
+      .filter(function (m) { return m.sec; });
+    if (!map.length) return;
+    var OFFSET = 90;
+    function setActive(link) { map.forEach(function (m) { m.link.classList.toggle('active', m.link === link); }); }
+    function currentIndex() {
+      var atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 2;
+      if (atBottom) return map.length - 1;
+      var idx = 0;
+      for (var i = 0; i < map.length; i++) { if (map[i].sec.getBoundingClientRect().top - OFFSET <= 1) idx = i; }
+      return idx;
+    }
+    var ticking = false;
+    function onScroll() { if (ticking) return; ticking = true; requestAnimationFrame(function () { ticking = false; setActive(map[currentIndex()].link); }); }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    map.forEach(function (m) { m.link.addEventListener('click', function () { setActive(m.link); }); });
+    setActive(map[currentIndex()].link);
+  })();
+</script>
