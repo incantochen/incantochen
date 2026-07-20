@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { isProductUnavailable } from "@/lib/product/check-product-availability";
 import { CATEGORY_LABELS } from "@/lib/product/category-labels";
 import {
   ProductConfigurator,
@@ -48,6 +50,14 @@ export default async function ProductDetailPage({
   if (!product) {
     notFound();
   }
+
+  // T117：anon 查詢看不到被隱藏的必選選項（整組從結果消失），故另用 service
+  // role 比對真相，判斷此商品是否因必選選項被隱藏而暫停販售。只取回 boolean，
+  // service role 明細不外流到 client。
+  const unavailable = await isProductUnavailable(
+    createServiceRoleClient(),
+    product.id,
+  );
 
   const options = [...product.product_option].sort(
     (a, b) => a.sort_order - b.sort_order,
@@ -114,6 +124,7 @@ export default async function ProductDetailPage({
               productId={product.id}
               basePrice={product.base_price}
               options={configuratorOptions}
+              unavailable={unavailable}
             />
           </div>
         </div>

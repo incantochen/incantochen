@@ -25,10 +25,14 @@ export function ProductConfigurator({
   productId,
   basePrice,
   options,
+  unavailable = false,
 }: {
   productId: string
   basePrice: number
   options: ConfiguratorOption[]
+  // T117：此商品有必選選項因後台隱藏（類別或最後一個顯示值）而無法完成配置
+  // ——停用加入購物袋、改顯示「暫停販售」，別讓客人白配置一輪到結帳才被擋。
+  unavailable?: boolean
 }) {
   const [selected, setSelected] = useState(() => defaultSelection(options))
   const [quantity, setQuantity] = useState(1)
@@ -158,28 +162,45 @@ export function ProductConfigurator({
         </div>
       </div>
 
-      <div className="mt-4 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
-        ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong> 天，將於結帳再次告知。
-      </div>
+      {unavailable ? (
+        <>
+          <button
+            type="button"
+            disabled
+            className="mt-5 w-full cursor-not-allowed rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase opacity-50"
+          >
+            暫停販售
+          </button>
+          <p className="mt-2 text-sm text-ash">
+            此商品目前暫停販售，敬請期待或洽詢客服。
+          </p>
+        </>
+      ) : (
+        <>
+          <div className="mt-4 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
+            ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong> 天，將於結帳再次告知。
+          </div>
 
-      <button
-        type="button"
-        disabled={isPending}
-        onClick={handleAddToCart}
-        className="mt-5 w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase hover:bg-primary-700 disabled:opacity-60"
-      >
-        {isPending ? "處理中…" : "加入購物袋"}
-      </button>
-      {feedback && (
-        <p
-          className={
-            feedback.type === "success"
-              ? "mt-2 text-sm text-success"
-              : "mt-2 text-sm text-destructive"
-          }
-        >
-          {feedback.message}
-        </p>
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={handleAddToCart}
+            className="mt-5 w-full rounded-[2px] bg-primary px-8 py-4 text-[11.5px] font-medium tracking-[0.2em] text-primary-foreground uppercase hover:bg-primary-700 disabled:opacity-60"
+          >
+            {isPending ? "處理中…" : "加入購物袋"}
+          </button>
+          {feedback && (
+            <p
+              className={
+                feedback.type === "success"
+                  ? "mt-2 text-sm text-success"
+                  : "mt-2 text-sm text-destructive"
+              }
+            >
+              {feedback.message}
+            </p>
+          )}
+        </>
       )}
     </div>
   )
