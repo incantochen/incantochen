@@ -4,6 +4,11 @@ import { vi, describe, it, expect } from "vitest";
 // client-component 錯誤，比照 notify route.test.ts 以空模組 mock 掉。
 vi.mock("server-only", () => ({}));
 
+const revalidatePath = vi.fn();
+vi.mock("next/cache", () => ({
+  revalidatePath: (...a: unknown[]) => revalidatePath(...a),
+}));
+
 import { POST } from "../route";
 
 // order_no 格式 INC-YYYYMMDD-XXXXXX（3+8+6=17 碼去 hyphen）
@@ -27,6 +32,22 @@ describe("order-result route", () => {
     const location = res.headers.get("location") ?? "";
     expect(location).toContain("/checkout/success?order=INC-20260702-ABC123");
     expect(location).not.toContain("XY");
+  });
+
+  it("RtnCode=1 → 失效根 layout 快取，結帳後購物袋徽章歸零（T118）", async () => {
+    revalidatePath.mockClear();
+    await POST(
+      buildRequest({ MerchantTradeNo: MERCHANT_TRADE_NO, RtnCode: "1" }),
+    );
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  it("RtnCode≠1 → 不失效 layout（購物車未清空，付款失敗可重試）", async () => {
+    revalidatePath.mockClear();
+    await POST(
+      buildRequest({ MerchantTradeNo: MERCHANT_TRADE_NO, RtnCode: "10100252" }),
+    );
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("RtnCode≠1 → 導向 /checkout/failed，訂單號不含 2 碼隨機尾碼", async () => {
