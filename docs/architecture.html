@@ -57,7 +57,24 @@
   .meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:20px;font-family:var(--mono);font-size:12px;color:var(--faint);}
   .meta b{color:var(--muted);font-weight:500;}
 
-  section{margin-top:52px;}
+  section{margin-top:52px;scroll-margin-top:72px;}
+
+  /* top section nav */
+  .topnav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--ground) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--hairline);margin:0 0 4px;padding:11px 0;display:flex;flex-wrap:wrap;gap:7px;}
+  .topnav a{font-family:var(--mono);font-size:11.5px;text-decoration:none;padding:5px 12px;border-radius:100px;border:1px solid var(--hairline-strong);background:var(--surface);color:var(--muted);transition:border-color .14s,color .14s,background .14s;white-space:nowrap;}
+  .topnav a:hover{border-color:var(--accent);color:var(--accent-ink);}
+  .topnav a.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  @media (prefers-color-scheme:dark){.topnav a.active{color:#0F1312;}}
+  :root[data-theme="dark"] .topnav a.active{color:#0F1312;}
+  :root[data-theme="light"] .topnav a.active{color:#fff;}
+
+  /* module tier labels */
+  .tier-label{display:flex;align-items:center;gap:10px;margin:22px 0 12px;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;color:var(--tl,var(--accent-ink));}
+  .tier-label::after{content:"";flex:1;height:1px;background:var(--hairline);}
+  .tier-label.t1{--tl:var(--good);}
+  .tier-label.t2{--tl:var(--info);}
+  .tier-label.t3{--tl:var(--warn);}
+  .tier-label b{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--ink);}
   .sec-head{display:flex;align-items:baseline;gap:13px;margin-bottom:8px;}
   .sec-num{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.1em;}
   h2{font-family:var(--serif);font-weight:600;font-size:clamp(20px,3vw,25px);margin:0;letter-spacing:-.01em;}
@@ -90,6 +107,20 @@
   .modgroup li .m{font-family:var(--mono);font-size:11.5px;color:var(--ink);font-weight:600;white-space:nowrap;}
   .modgroup li .d{color:var(--muted);font-size:12.5px;}
   .modgroup li .d code{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--hairline);border-radius:4px;padding:0 4px;color:var(--accent-ink);}
+  .modgroup.hidden{display:none;}
+  .mods{align-items:start;}
+  .mchips{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:18px;}
+  .mchip{font-family:var(--mono);font-size:11.5px;padding:5px 12px;border-radius:100px;border:1px solid var(--hairline-strong);background:var(--surface);color:var(--muted);cursor:pointer;transition:border-color .14s,color .14s,background .14s;}
+  .mchip:hover{border-color:var(--accent);color:var(--accent-ink);}
+  .mchip.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  @media (prefers-color-scheme:dark){.mchip.active{color:#0F1312;}}
+  :root[data-theme="dark"] .mchip.active{color:#0F1312;}
+  :root[data-theme="light"] .mchip.active{color:#fff;}
+  .mtier-sep{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--faint);text-transform:uppercase;padding:0 2px 0 10px;}
+  .modgroup h3 .tier{font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:100px;border:1px solid var(--hairline-strong);color:var(--faint);font-weight:400;margin-left:7px;text-transform:none;letter-spacing:0;}
+  .modgroup h3 .tier.biz{color:var(--good);border-color:var(--good-line);}
+  .modgroup h3 .tier.cross{color:var(--info);border-color:var(--info-line);}
+  .modgroup h3 .tier.act{color:var(--warn);border-color:var(--warn-line);}
 
   /* rpc cards */
   .rpcs{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
@@ -151,8 +182,18 @@
     </div>
   </header>
 
+  <nav class="topnav" id="topnav">
+    <a href="#s-layer">系統分層</a>
+    <a href="#s-modules">模組盤點</a>
+    <a href="#s-db">資料庫</a>
+    <a href="#s-pay">金流</a>
+    <a href="#s-data">資料模型</a>
+    <a href="#s-third">第三方服務</a>
+    <a href="#s-gap">架構 Gap</a>
+  </nav>
+
   <!-- 1. 分層總覽 -->
-  <section>
+  <section id="s-layer">
     <div class="sec-head"><span class="sec-num">01</span><h2>系統分層</h2></div>
     <p class="sec-sub">請求由瀏覽器進入 proxy（刷新 session＋每請求動態 CSP nonce），分派到伺服器邏輯；寫入集中走 service role 繞過 RLS。</p>
     <div class="stack">
@@ -210,53 +251,82 @@
   </section>
 
   <!-- 2. 模組盤點 -->
-  <section>
+  <section id="s-modules">
     <div class="sec-head"><span class="sec-num">02</span><h2>模組盤點</h2></div>
-    <p class="sec-sub">模組邊界清楚、關鍵邏輯皆單一出處：金額（<code>verify-prices</code>／<code>validate-settle-amount</code>）、狀態轉換（<code>state-machine</code>＋4 RPC）、通知去重（<code>send-once</code>）、識別碼互轉（<code>merchant-trade-no</code>）。</p>
+    <p class="sec-sub">三層分類——<b>業務域為主軸，橫切關注與操作面各自獨立成層</b>（一組一軸、每模組唯一歸屬）。</p>
+    <div class="tier-label t1"><b>第一層 · 業務域</b>（順客人旅程）</div>
     <div class="mods">
-      <div class="modgroup">
-        <h3>入口 / 身份</h3>
+      <div class="modgroup" data-group="product">
+        <h3>① 商品與選項 <span class="tier biz">業務域</span></h3>
         <ul>
-          <li><span class="m">proxy.ts</span><span class="d">刷新 session＋每請求動態 CSP（nonce＋strict-dynamic，T97）</span></li>
-          <li><span class="m">auth/</span><span class="d">OTP 主＋Magic Link 輔（登入信走 <b>Supabase Auth SMTP</b>，非 Resend）；requireUser／requireAdmin</span></li>
-          <li><span class="m">rate-limit</span><span class="d">OTP 雙桶＋對帳 403 計數（Upstash）</span></li>
-          <li><span class="m">supabase/</span><span class="d">三 client：anon／SSR／service-role</span></li>
+          <li><span class="m">product/</span><span class="d">配置器三層白名單・暫停販售（T117）・品類目錄</span></li>
+          <li><span class="m">option/</span><span class="d">選項類型/值 schema 與標籤</span></li>
+          <li><span class="m">storage/</span><span class="d">商品圖上傳 Supabase Storage（T11）</span></li>
         </ul>
       </div>
-      <div class="modgroup">
-        <h3>商品 / 購物車</h3>
+      <div class="modgroup" data-group="cart">
+        <h3>② 購物車 <span class="tier biz">業務域</span></h3>
         <ul>
-          <li><span class="m">product/</span><span class="d">配置器三層白名單、暫停販售、目錄</span></li>
-          <li><span class="m">cart/</span><span class="d">擁有權檢查、徽章、會員併車（T81）</span></li>
-          <li><span class="m">quote/verify-prices</span><span class="d">🔴 伺服器驗價紅線</span></li>
-          <li><span class="m">storage/</span><span class="d">商品圖上傳（T11）</span></li>
+          <li><span class="m">cart/</span><span class="d">讀寫・擁有權檢查（guest_token）・徽章・會員登入併車（T81）</span></li>
         </ul>
       </div>
-      <div class="modgroup">
-        <h3>訂單 / 金流</h3>
+      <div class="modgroup" data-group="order">
+        <h3>③ 訂單與金流 <span class="tier biz">業務域</span></h3>
         <ul>
-          <li><span class="m">order/state-machine</span><span class="d">轉換＋取消/退款守衛</span></li>
-          <li><span class="m">order/ensure-paid</span><span class="d">冪等推進＋清車＋補通知</span></li>
-          <li><span class="m">order/refund-order</span><span class="d">記錄式退款（T47）</span></li>
-          <li><span class="m">order/issue-invoice</span><span class="d">電子發票開立（T42）</span></li>
-          <li><span class="m">ecpay/</span><span class="d">簽章／付款／查詢／發票／AES</span></li>
+          <li><span class="m">quote/verify-prices</span><span class="d">🔴 伺服器驗價紅線（addToCart＋結帳皆呼叫）</span></li>
+          <li><span class="m">checkout＋create-order</span><span class="d">建單 RPC 交易化（T76）・付款成功才清車（T75）</span></li>
+          <li><span class="m">order/state-machine</span><span class="d">轉換＋取消/退款守衛・ensure-paid 冪等推進</span></li>
+          <li><span class="m">ecpay/</span><span class="d">簽章／付款／查詢／AES</span></li>
+          <li><span class="m">cron 對帳兜底</span><span class="d">對帳三臂＋2 sweep</span></li>
+          <li><span class="m">refund-order</span><span class="d">記錄式退款 RPC（T47・帳務）</span></li>
+          <li><span class="m">issue-invoice</span><span class="d">電子發票開立（T42・帳務）</span></li>
         </ul>
       </div>
-      <div class="modgroup">
-        <h3>兜底 / 通知 / 後台</h3>
+      <div class="modgroup" data-group="support">
+        <h3>④ 售後 <span class="tier biz">業務域</span></h3>
         <ul>
-          <li><span class="m">cron ×3</span><span class="d">對帳三臂＋逾期取消＋清車</span></li>
-          <li><span class="m">notification/send-once</span><span class="d">unique 佔位去重＋reclaim</span></li>
-          <li><span class="m">email/ ×5</span><span class="d">確認・店家・出貨・退款・售後</span></li>
-          <li><span class="m">admin/</span><span class="d">訂單・退款登記・CRUD・PII 揭露</span></li>
-          <li><span class="m">pii/</span><span class="d">遮罩＋稽核落表（T80）</span></li>
+          <li><span class="m">support/</span><span class="d">商品問題回報（return_defect）・後台維修登錄（repair_maintenance）</span></li>
         </ul>
       </div>
     </div>
+    <div class="tier-label t2"><b>第二層 · 橫切／平台</b>（跨所有域）</div>
+    <div class="mods">
+      <div class="modgroup" data-group="identity">
+        <h3>⑤ 身份與存取・安全 <span class="tier cross">橫切</span></h3>
+        <ul>
+          <li><span class="m">proxy.ts</span><span class="d">刷新 session＋每請求動態 CSP nonce（T97）</span></li>
+          <li><span class="m">auth/</span><span class="d">OTP＋magic link（登入信走 Auth SMTP）・requireUser/Admin</span></li>
+          <li><span class="m">rate-limit</span><span class="d">OTP 雙桶＋對帳 403 計數（Upstash）</span></li>
+          <li><span class="m">pii/</span><span class="d">遮罩＋稽核落表（T80）</span></li>
+          <li><span class="m">安全 headers</span><span class="d">next.config（HSTS・X-Frame 等）</span></li>
+        </ul>
+      </div>
+      <div class="modgroup" data-group="platform">
+        <h3>⑥ 平台基礎 <span class="tier cross">橫切</span></h3>
+        <ul>
+          <li><span class="m">env</span><span class="d">前端可見／server-only 兩檔・fail-fast</span></li>
+          <li><span class="m">supabase/</span><span class="d">三 client：anon／SSR／service-role</span></li>
+          <li><span class="m">DB schema</span><span class="d">16 表＋4 RPC＋RLS（0001–0021）</span></li>
+          <li><span class="m">email/ ×5</span><span class="d">確認・店家・出貨・退款・售後（Resend）</span></li>
+          <li><span class="m">notification/send-once</span><span class="d">unique 佔位去重＋reclaim</span></li>
+          <li><span class="m">Sentry</span><span class="d">三端監控＋金流關鍵路徑告警</span></li>
+        </ul>
+      </div>
+    </div>
+    <div class="tier-label t3"><b>第三層 · 操作面</b>（跨域 actor）</div>
+    <div class="mods">
+      <div class="modgroup" data-group="admin">
+        <h3>⑦ 後台 <span class="tier act">操作面</span></h3>
+        <ul>
+          <li><span class="m">admin/</span><span class="d">訂單推進・退款登記・Admin Override・商品/選項 CRUD・代客建單・PII 揭露（跨域 actor 面）</span></li>
+        </ul>
+      </div>
+    </div>
+    <p class="sec-sub" style="margin-top:16px">CI（<code>ci.yml</code>）／測試（<code>vitest</code>）／開發護欄（<code>.claude/hooks</code>）等非 runtime 工程項不列入模組盤點。</p>
   </section>
 
   <!-- 3. 交易化 RPC -->
-  <section>
+  <section id="s-db">
     <div class="sec-head"><span class="sec-num">03</span><h2>資料庫端交易化（4 RPC）</h2></div>
     <p class="sec-sub">多段寫入包進 plpgsql function＝同一交易單元，任一段失敗整段 rollback，消滅「半套狀態」中間態。RPC 是機制，是「塞進同一函式」讓它原子。</p>
     <div class="rpcs">
@@ -268,7 +338,7 @@
   </section>
 
   <!-- 4. 金流兜底縱深 -->
-  <section>
+  <section id="s-pay">
     <div class="sec-head"><span class="sec-num">04</span><h2>金流兜底縱深</h2></div>
     <p class="sec-sub">四層防線，每層守衛條件明確、靜默失敗點皆接 Sentry。付款判定以背景 webhook 為權威。</p>
     <div class="stack">
@@ -284,7 +354,7 @@
   </section>
 
   <!-- 5. 資料表 -->
-  <section>
+  <section id="s-data">
     <div class="sec-head"><span class="sec-num">05</span><h2>資料模型（16 表）</h2></div>
     <p class="sec-sub">外鍵策略：帳務鏈 <b>RESTRICT</b>（禁連動刪）、設定圖與暫態 <b>CASCADE</b>。<code>uq_payment_one_paid_per_order</code> 保證一張訂單最多一筆 paid payment。</p>
     <div class="dbgroups">
@@ -298,7 +368,7 @@
   </section>
 
   <!-- 6. 第三方 -->
-  <section>
+  <section id="s-third">
     <div class="sec-head"><span class="sec-num">06</span><h2>第三方服務</h2></div>
     <div class="tbl-scroll">
       <table>
@@ -321,7 +391,7 @@
   </section>
 
   <!-- 7. Gap -->
-  <section>
+  <section id="s-gap">
     <div class="sec-head"><span class="sec-num">07</span><h2>架構 Gap 狀態</h2></div>
     <p class="sec-sub">自初版以來絕大多數缺口已落地。仍開放的架構級風險如下（依風險排序）。</p>
     <div class="gaps">
@@ -343,3 +413,35 @@
     <span>architecture.md 儀表板視圖 · 圖示為開發層對齊</span>
   </footer>
 </div>
+
+<script>
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('#topnav a'));
+    if (!links.length) return;
+    var map = links.map(function (a) {
+      return { link: a, sec: document.querySelector(a.getAttribute('href')) };
+    }).filter(function (m) { return m.sec; });
+
+    // 平滑捲動
+    links.forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        var sec = document.querySelector(a.getAttribute('href'));
+        if (!sec) return;
+        e.preventDefault();
+        sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+
+    // 捲動高亮目前區塊
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        var id = en.target.getAttribute('id');
+        map.forEach(function (m) {
+          m.link.classList.toggle('active', m.sec.getAttribute('id') === id);
+        });
+      });
+    }, { rootMargin: '-72px 0px -60% 0px', threshold: 0 });
+    map.forEach(function (m) { io.observe(m.sec); });
+  })();
+</script>

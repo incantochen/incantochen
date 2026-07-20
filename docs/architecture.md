@@ -60,36 +60,76 @@ flowchart TB
 
 ## 2. 模組盤點
 
-### 2.1 模組總表
+### 2.1 模組總表（7 組・三層）
+
+> 分類原則：**業務域為主軸，橫切關注與操作面各自獨立成層**——一組只用一個軸、每模組唯一歸屬。分三層：**第一層業務域 4**（商品與選項／購物車／訂單與金流／售後）、**第二層橫切平台 2**（身份存取安全／平台基礎）、**第三層操作面 1**（後台）。（CI／測試／`.claude/hooks` 等非 runtime 工程項不列入模組盤點，見 §6 部署與 `CLAUDE.md`。）
+
+#### 第一層 ▍業務域（順客人旅程）
+
+**① 商品與選項**
 
 | 模組 | 位置 | 職責 | 主要相依 |
 | ---- | ---- | ---- | -------- |
-| 路由攔截＋CSP | `src/proxy.ts` | 每請求刷新 Supabase session；注入 `x-pathname`；**每請求動態產生 CSP（nonce＋strict-dynamic，T97/F-010）**——CSP 單一出處已從 next.config 搬來 | `@supabase/ssr`、env |
-| 環境變數 | `src/lib/env.ts`（前端可見）、`env.server.ts`（server-only） | 前端：`NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`；server：service role、ECPay 金鑰、Resend、Upstash、發票字軌、`ADMIN_EMAIL`、`CRON_SECRET`；皆 fail-fast，`import "server-only"` 防洩漏 | — |
-| Supabase clients | `src/lib/supabase/` | 三種 client：`client.ts`（瀏覽器 anon）、`server.ts`（SSR anon＋cookie）、`service-role.ts`（繞過 RLS，server-only） | env |
-| Auth | `src/app/login/`、`src/app/auth/confirm/`、`src/lib/auth/` | Email OTP（主）＋Magic Link（輔）；**登入信（OTP 碼＋magic link）由 Supabase Auth 寄送（走 Auth SMTP，非 Resend；Custom SMTP 寄件人見 T83）**；`requireUser()`／`requireAdmin()` 路由保護；`find-or-create-member`（member 無 INSERT policy，走 service role）；`normalize-email`、`safe-redirect` | Supabase Auth、rate-limit |
-| 限流 | `src/lib/rate-limit.ts`、`redis.ts`、`get-client-ip.ts` | OTP 請求（email＋IP 雙桶）與驗證（IP）sliding window；對帳連續 403 計數；IP fallback（XFF 取最左） | Upstash Redis |
 | 商品／配置器 | `src/app/products/[slug]/`、`src/app/collections/`、`src/components/product-configurator.tsx`、`src/lib/product/` | PDP＋資料驅動配置器（三層白名單）；品類目錄；`check-product-availability`（T117 暫停販售）；加入購物袋建 `guest_token` cookie | anon 讀（RLS 公開唯讀 `active`）、service role 寫 cart |
+| 選項 | `src/lib/option/`、`src/app/admin/options/` | 選項類型/值 schema 與標籤；CRUD 見後台 | service role |
+| 商品圖 Storage | `src/lib/storage/`、`src/app/admin/products/` | 商品圖上傳到 Supabase Storage（`product-images` bucket）；`product_image` 表 sort 完整性（0013） | Supabase Storage |
+
+**② 購物車**
+
+| 模組 | 位置 | 職責 | 主要相依 |
+| ---- | ---- | ---- | -------- |
 | 購物車 | `src/app/cart/`、`src/lib/cart/` | 讀取／改數量／刪除；擁有權檢查（cart.guest_token＝cookie）；徽章計數；**會員登入併車**（`merge-guest-cart`、`resolve-cart-identity`、`get-or-create-member-cart`，T81） | service role（cart RLS 全拒） |
-| 報價／驗價 | `src/lib/quote/verify-prices.ts` | 🔴 安全紅線：Zod 驗 config_snapshot → DB 白名單重查 base_price＋option_value → 重建快照、回 `priceChanged` | service role |
+
+**③ 訂單與金流**（含帳務：發票／退款／對帳）
+
+| 模組 | 位置 | 職責 | 主要相依 |
+| ---- | ---- | ---- | -------- |
+| 報價／驗價 | `src/lib/quote/verify-prices.ts` | 🔴 安全紅線：Zod 驗 config_snapshot → DB 白名單重查 base_price＋option_value → 重建快照、回 `priceChanged`（addToCart 與結帳皆呼叫） | service role |
 | 結帳／建單 | `src/app/checkout/`、`src/lib/checkout/`、`src/lib/order/create-order-from-cart.ts` | 結帳即會員 → 驗價 → **`create_order_with_items` RPC 交易化建 orders＋order_item（T76）** → redirect `/checkout/pay`；付款成功才清車（T75） | verify-prices、Supabase admin API、RPC |
 | 訂單狀態機 | `src/lib/order/` | `order-status.ts`（7 狀態＋合法轉換表＋PAID_LINEAGE）；`state-machine.ts`（transitionOrder／adminOverrideStatus＋取消/退款守衛）；`ensure-paid.ts`（冪等推進＋補通知＋清車）；`find-paid-payment`、`mark-pending-payments-failed`、`order-access-token`（T73）、`shipping-tracking` | service role、RPC |
-| 退款 | `src/lib/order/refund-order.ts`、`api` 無（後台觸發） | T47 記錄式退款：`refund_order` RPC（payment refunded＋訂單 CAS＋稽核 log 原子）；誤走 Override 的補登記走 `repair_refunded_payment` RPC | service role、RPC、email |
-| 電子發票 | `src/lib/order/issue-invoice.ts`、`invoice-meta.ts`、`src/lib/ecpay/invoice/` | T42：付款成功後開立 B2C 電子發票（冪等，issued 短路＋GetIssue 判別）；`issue.ts`／`invoice-client.ts`／`relate-number.ts`／`validate.ts`；**發票失敗不阻塞金流** | ECPay 發票 API、AES |
 | ECPay 金流 | `src/lib/ecpay/`、`src/app/checkout/pay/`、`src/app/api/ecpay/` | 見 §2.2 | env.server、check-mac-value、aes-payload |
-| 排程 Cron | `src/app/api/cron/*`、`src/lib/cron/require-cron-auth.ts` | 3 支：`ecpay-reconcile`（對帳三臂＋2 sweep）、`cart-cleanup`（清逾期訪客車）、`pending-payment-expire`（T66 逾期取消）；`CRON_SECRET` Bearer timing-safe 驗證 | query-trade-info、ensure-paid、state-machine、Sentry |
-| Email（交易信） | `src/lib/email/`、`src/lib/notification/senders.ts` | **Resend 5 種交易信**：下單確認、新訂單通知、出貨通知、**退款通知（T47）**、售後通知；共用 `escape-html`；`senders.ts` 註冊表（含 `eligibleStatuses` 適寄判斷）。⚠️ **登入信（OTP＋magic link）不在此列**——走 Supabase Auth SMTP（見 Auth 列） | Resend、service role |
-| 通知去重 | `src/lib/notification/send-once.ts` | `notification(order_id, type)` unique 佔位 → 寄送 → 回填 sent/failed；failed／stale reclaim（條件式 UPDATE 防並發重寄）；保證不外拋 | service role |
-| 後台 | `src/app/admin/*` | 訂單列表／詳情、狀態推進、出貨、Admin Override、**退款登記**、售後案件、PII 揭露＋稽核；**商品 CRUD（T10/T11）、選項 CRUD（T12/T13）**、代客建單；`action-result.ts` 統一回傳 | requireAdmin、state-machine、refund-order、storage |
+| 排程 Cron（對帳兜底） | `src/app/api/cron/*`、`src/lib/cron/require-cron-auth.ts` | 3 支：`ecpay-reconcile`（對帳三臂＋2 sweep）、`cart-cleanup`（清逾期訪客車）、`pending-payment-expire`（T66 逾期取消）；`CRON_SECRET` Bearer timing-safe | query-trade-info、ensure-paid、state-machine、Sentry |
+| 退款（帳務） | `src/lib/order/refund-order.ts`（後台觸發） | T47 記錄式退款：`refund_order` RPC（payment refunded＋訂單 CAS＋稽核 log 原子）；誤走 Override 的補登記走 `repair_refunded_payment` RPC | service role、RPC、email |
+| 電子發票（帳務） | `src/lib/order/issue-invoice.ts`、`invoice-meta.ts`、`src/lib/ecpay/invoice/` | T42：付款成功後開立 B2C 電子發票（冪等，issued 短路＋GetIssue 判別）；**發票失敗不阻塞金流** | ECPay 發票 API、AES |
+
+**④ 售後**
+
+| 模組 | 位置 | 職責 | 主要相依 |
+| ---- | ---- | ---- | -------- |
 | 售後 | `src/lib/support/`、`src/app/account/orders/[id]/support/` | 商品問題回報（`return_defect`）；後台手動建 `repair_maintenance`；service role 重驗擁有權 | support_request、email |
-| 商品圖 Storage | `src/lib/storage/`、`src/app/admin/products/` | 商品圖上傳到 Supabase Storage（`product-images` bucket）；`product_image` 表 sort 完整性（0013） | Supabase Storage |
-| PII | `src/lib/pii/` | `mask.ts` 遮罩顯示；`audit.ts` 存取稽核（**落 `pii_access_log` 表，T80** — 已從 stdout 改建表） | service role |
-| 監控 | `src/instrumentation.ts`、`instrumentation-client.ts`、`global-error.tsx` | Sentry：server/edge/client 三端 init（僅 production）、`onRequestError`、金流關鍵路徑手動 capture | `@sentry/nextjs` |
-| 安全 headers | `next.config.ts` | HSTS（僅 production）、X-Frame-Options／nosniff／Referrer-Policy／Permissions-Policy；**CSP 已移出**（改 proxy 動態 nonce），僅補靜態路徑最小 CSP（`script-src 'none'`） | — |
+
+#### 第二層 ▍橫切／平台
+
+**⑤ 身份與存取・安全**
+
+| 模組 | 位置 | 職責 | 主要相依 |
+| ---- | ---- | ---- | -------- |
+| 路由攔截＋CSP | `src/proxy.ts` | 每請求刷新 Supabase session；注入 `x-pathname`；**每請求動態產生 CSP（nonce＋strict-dynamic，T97/F-010）** | `@supabase/ssr`、env |
+| Auth | `src/app/login/`、`src/app/auth/confirm/`、`src/lib/auth/` | Email OTP（主）＋Magic Link（輔）；**登入信走 Supabase Auth SMTP（非 Resend，T83）**；`requireUser()`／`requireAdmin()`；`find-or-create-member`；`normalize-email`、`safe-redirect` | Supabase Auth、rate-limit |
+| 限流 | `src/lib/rate-limit.ts`、`redis.ts`、`get-client-ip.ts` | OTP 請求（email＋IP 雙桶）與驗證（IP）sliding window；對帳連續 403 計數；IP fallback | Upstash Redis |
+| PII | `src/lib/pii/` | `mask.ts` 遮罩顯示；`audit.ts` 存取稽核（**落 `pii_access_log` 表，T80**） | service role |
+| 安全 headers | `next.config.ts` | HSTS（僅 production）、X-Frame-Options／nosniff／Referrer-Policy／Permissions-Policy；CSP 已移至 proxy | — |
+
+**⑥ 平台基礎**（資料存取・通知・監控）
+
+| 模組 | 位置 | 職責 | 主要相依 |
+| ---- | ---- | ---- | -------- |
+| 環境變數 | `src/lib/env.ts`、`env.server.ts` | 前端可見與 server-only 兩檔；fail-fast、`import "server-only"` 防洩漏 | — |
+| Supabase clients | `src/lib/supabase/` | 三 client：`client.ts`（瀏覽器 anon）、`server.ts`（SSR anon＋cookie）、`service-role.ts`（繞過 RLS） | env |
 | DB schema | `supabase/migrations/0001`–`0021` | 16 張表＋4 RPC＋RLS＋索引；只增不改 | Supabase CLI |
-| CI | `.github/workflows/ci.yml` | **PR／push master 跑 `pnpm typecheck → lint → test`（T101）**——lint/test 已在合併關卡上 | GitHub Actions |
-| 測試 | `vitest` ＋ 各 `__tests__/`、`*.test.ts` | 驗價、CheckMacValue、AES、狀態機、退款、sendOnce、notify webhook、reconcile 三臂、createOrder、發票、support、PII、cart 併車 等 | vitest＋vite-tsconfig-paths |
-| 開發護欄 | `.claude/hooks/` | protect-env／protect-migration／dangerous-bash／completion-check／auto-format／session-start | Claude Code hooks |
+| Email（交易信） | `src/lib/email/`、`src/lib/notification/senders.ts` | **Resend 5 種交易信**（確認/店家/出貨/退款/售後）；共用 `escape-html`；`senders.ts` 註冊表（`eligibleStatuses`）。⚠️ 登入信不在此列（走 Auth SMTP） | Resend、service role |
+| 通知去重 | `src/lib/notification/send-once.ts` | `notification(order_id, type)` unique 佔位 → 寄送 → 回填；failed／stale reclaim（條件式 UPDATE）；保證不外拋 | service role |
+| 監控 | `src/instrumentation.ts`、`instrumentation-client.ts`、`global-error.tsx` | Sentry：三端 init（僅 production）、`onRequestError`、金流關鍵路徑手動 capture | `@sentry/nextjs` |
+
+#### 第三層 ▍操作面
+
+**⑦ 後台**
+
+| 模組 | 位置 | 職責 | 主要相依 |
+| ---- | ---- | ---- | -------- |
+| 後台 | `src/app/admin/*` | 訂單列表／詳情、狀態推進、出貨、Admin Override、**退款登記**、售後案件、PII 揭露＋稽核；**商品 CRUD（T10/T11）、選項 CRUD（T12/T13）**、代客建單；`action-result.ts` 統一回傳（跨域操作 actor 面） | requireAdmin、state-machine、refund-order、storage |
+
+> CI（`ci.yml`）／測試（`vitest`）／開發護欄（`.claude/hooks/`）等**非 runtime 請求路徑**的工程項，見 §6 部署架構與 `CLAUDE.md`，不列入本模組盤點。
 
 ### 2.2 ECPay 子模組（金流核心）
 
