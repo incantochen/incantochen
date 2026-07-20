@@ -6,8 +6,10 @@ import { escapeHtml } from "@/lib/email/escape-html"
 
 // TODO(T35): switch to verified custom domain before go-live
 const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
-// TODO(T35): move to env var when custom domain is set up
-const OWNER_EMAIL = "fishead02290@gmail.com"
+// 營運通知收件人讀 env（消滅寫死複本，換信箱只需改 Vercel Dashboard 一處）。
+// 現況與 requireAdmin() 共用 ADMIN_EMAIL；「後台權限身分 vs 營運通知收件人」
+// 長期拆兩個 env var 屬 T09 範圍，此處不做。
+const OWNER_EMAIL = serverEnv.ADMIN_EMAIL
 
 const selectionSchema = {
   parse(raw: unknown): { label: string }[] {
