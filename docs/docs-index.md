@@ -23,7 +23,7 @@
 | `PRD.md` | 產品需求文件。目標客群、Persona、MVP 成功指標、功能範圍界定。 |
 | `user-flow.md` | 使用者流程。首購下單／回訪查單／售後申請等主要動線。 |
 | `system-flow-and-user-flow.md` | **四層系統流程統整**（2026-07-20 產出）。Level 1 User Flow→Level 2 系統流程（成立條件/例外）→Level 3 系統錯誤自動處置→Level 4 人工救援；附錄含訂單狀態機細節與金流兜底對帳三臂（主臂/漂移臂/稽核臂）。跨層對齊，內容以程式碼與 `ops-runbook.md` 接地。 |
-| `order-state-machine.html` | **訂單狀態機視覺化**（自帶樣式單檔，瀏覽器直接開）。七狀態六邊的觸發者/守衛/副作用/例外、取消守衛 TOCTOU 並發時序、對帳三臂、守衛分層總表。`system-flow-and-user-flow.md` 附錄 A/B 的圖解版。 |
+| `order-state-machine.html` | **訂單狀態機視覺化**（自帶樣式單檔，瀏覽器直接開）。七狀態六邊的觸發者/守衛/後續動作/例外、取消守衛 TOCTOU 並發時序、對帳三臂、守衛分層總表。`system-flow-and-user-flow.md` 附錄 A/B 的圖解版。 |
 | `IA.md` | 資訊架構。網站地圖、導覽結構、URL 規劃（SEO）。 |
 | `brand-guide.md` | 品牌指南。色票（Primary Emerald `#063B2F`、Secondary Gold `#C5A059`）、字體、設計語言。 |
 | `competitive-analysis.md` | 競品分析。高端訂製珠寶站的配置器／呈現／結帳比較。（位於 `../docs/`，見下方） |

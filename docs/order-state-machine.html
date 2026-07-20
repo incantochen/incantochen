@@ -231,7 +231,7 @@
   <header>
     <div class="eyebrow">incantochen · 訂單生命週期</div>
     <h1>訂單狀態機：觸發者、守衛與並發時序</h1>
-    <p class="lede">七個狀態、六類轉換邊，全數經過單一 <code>transition_order_status</code> RPC 原子寫入。這張圖標註每條邊由誰觸發、被哪道守衛把關、成功後的副作用與失敗時的例外分流，並拆解兩個並發競態的實際時序。</p>
+    <p class="lede">七個狀態、六類轉換邊，全數經過單一 <code>transition_order_status</code> RPC 原子寫入。這張圖標註每條邊由誰觸發、被哪道守衛把關、成功後的後續動作與失敗時的例外分流，並拆解兩個並發競態的實際時序。</p>
     <div class="meta">
       <span><b>權威來源</b> state-machine.ts · order-status.ts · api/cron/ecpay-reconcile</span>
       <span><b>RPC</b> migration 0017 / 0020 / 0021</span>
@@ -296,7 +296,7 @@
 
   <!-- ===== 2. 邊的細節 ===== -->
   <section>
-    <div class="sec-head"><span class="sec-num">02</span><h2>每條邊：觸發者 / 守衛 / 副作用 / 例外</h2></div>
+    <div class="sec-head"><span class="sec-num">02</span><h2>每條邊：觸發者 / 守衛 / 後續動作 / 例外</h2></div>
     <p class="sec-sub">合法邊白名單 <code>VALID_TRANSITIONS</code> 的單一權威在 TS 端；所有寫入皆走 RPC，在 DB 端單一交易內完成 <code>CAS UPDATE orders</code> ＋ <code>INSERT order_status_log</code>，任一段失敗整段 rollback（T110）。</p>
 
     <div class="edges">
@@ -306,7 +306,7 @@
         <ul class="rowlist">
           <li><span class="k">觸發</span><span class="v">ECPay <b>webhook</b>（權威）／ reconcile cron（兜底）— <code>ensureOrderPaid</code></span></li>
           <li><span class="k">守衛</span><span class="v">條件式 CAS <code>WHERE status='pending_payment'</code>，只有搶到的請求推進</span></li>
-          <li><span class="k">副作用</span><span class="v">清購物車（T75, best-effort）· 寄確認信 · 通知店家 · 開電子發票</span></li>
+          <li><span class="k">後續動作</span><span class="v">清購物車（T75, best-effort）· 寄確認信 · 通知店家 · 開電子發票</span></li>
           <li><span class="k">例外</span><span class="v excep">CAS 沒搶到 → 複查：在 lineage＝<span class="pill ok">already-settled</span>；非 lineage＝<span class="pill">closed</span>（P0 告警）；查不到＝<span class="pill">indeterminate</span></span></li>
         </ul>
       </div>
@@ -316,7 +316,7 @@
         <ul class="rowlist">
           <li><span class="k">觸發</span><span class="v"><b>逾期 cron</b>（T66, 72h）／ 後台取消 — <code>transitionOrder</code></span></li>
           <li><span class="k">守衛</span><span class="v">canTransition ✅ <b>且無 paid payment</b>（<code>findPaidPayment</code>）— 取消守衛下沉於此，所有取消路徑必經</span></li>
-          <li><span class="k">副作用</span><span class="v">寫稽核 log；TOCTOU 補查（見 §3）</span></li>
+          <li><span class="k">後續動作</span><span class="v">寫稽核 log；TOCTOU 補查（見 §3）</span></li>
           <li><span class="k">例外</span><span class="v excep">有 paid → <span class="pill">PaidOrderCancelBlockedError</span>；cron 記 <code>paidConflict</code>＋告警、結帳回錯不建新單、admin 導退款</span></li>
         </ul>
       </div>
@@ -326,7 +326,7 @@
         <ul class="rowlist">
           <li><span class="k">觸發</span><span class="v"><b>後台手動</b> — <code>transitionOrder</code></span></li>
           <li><span class="k">守衛</span><span class="v">canTransition ✅ · CAS <code>WHERE status='paid'</code></span></li>
-          <li><span class="k">副作用</span><span class="v">寫稽核 log（含 actorId）</span></li>
+          <li><span class="k">後續動作</span><span class="v">寫稽核 log（含 actorId）</span></li>
           <li><span class="k">例外</span><span class="v excep">被別流程搶動 → <span class="pill">OrderTransitionRaceError</span>（良性競態，跳過非失敗）</span></li>
         </ul>
       </div>
@@ -336,7 +336,7 @@
         <ul class="rowlist">
           <li><span class="k">觸發</span><span class="v"><b>後台手動</b> — <code>transitionOrder</code></span></li>
           <li><span class="k">守衛</span><span class="v">canTransition ✅ · CAS</span></li>
-          <li><span class="k">副作用</span><span class="v">寫 <code>tracking_no</code> · 寄出貨通知信</span></li>
+          <li><span class="k">後續動作</span><span class="v">寫 <code>tracking_no</code> · 寄出貨通知信</span></li>
           <li><span class="k">例外</span><span class="v excep">狀態已轉但單號寫入失敗 → 回 <b>warning</b>（非 error），提示用「修正物流單號」補填</span></li>
         </ul>
       </div>
@@ -346,7 +346,7 @@
         <ul class="rowlist">
           <li><span class="k">觸發</span><span class="v"><b>後台手動</b> — <code>transitionOrder</code></span></li>
           <li><span class="k">守衛</span><span class="v">canTransition ✅ · CAS</span></li>
-          <li><span class="k">副作用</span><span class="v">寫稽核 log</span></li>
+          <li><span class="k">後續動作</span><span class="v">寫稽核 log</span></li>
           <li><span class="k">例外</span><span class="v excep">競態 → <span class="pill">OrderTransitionRaceError</span></span></li>
         </ul>
       </div>
@@ -356,7 +356,7 @@
         <ul class="rowlist">
           <li><span class="k">觸發</span><span class="v">後台<b>退款區塊</b>（T47）— <code>refundOrder</code> → <code>refund_order</code> RPC</span></li>
           <li><span class="k">守衛</span><span class="v"><b>先翻 payment=refunded 再 CAS 轉訂單</b>，單一交易；退款守衛判「無 paid 殘留」</span></li>
-          <li><span class="k">副作用</span><span class="v">payment refunded · order refunded · 稽核 log · 退款通知信（sendOnce 去重）</span></li>
+          <li><span class="k">後續動作</span><span class="v">payment refunded · order refunded · 稽核 log · 退款通知信（sendOnce 去重）</span></li>
           <li><span class="k">例外</span><span class="v excep">仍有 paid 殘留 → <span class="pill">RefundPaymentNotFlippedError</span>；pending／cancelled 不可走退款區塊（server 端擋）</span></li>
         </ul>
       </div>
