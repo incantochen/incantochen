@@ -177,7 +177,7 @@
       <div class="layer l-supa">
         <div class="layer-label"><span class="name">Supabase — 雲端 production</span><span class="tag">RLS deny-by-default</span></div>
         <div class="nodes">
-          <div class="node"><b>Auth</b> <span class="s">Email OTP＋Magic Link</span></div>
+          <div class="node"><b>Auth</b> <span class="s">Email OTP＋Magic Link · 登入信走 Auth SMTP</span></div>
           <div class="node"><b>Postgres</b> <span class="s">16 表＋4 RPC</span></div>
           <div class="node"><b>Storage</b> <span class="s">product-images</span></div>
         </div>
@@ -204,7 +204,7 @@
         <h3>入口 / 身份</h3>
         <ul>
           <li><span class="m">proxy.ts</span><span class="d">刷新 session＋每請求動態 CSP（nonce＋strict-dynamic，T97）</span></li>
-          <li><span class="m">auth/</span><span class="d">OTP 主＋Magic Link 輔；requireUser／requireAdmin</span></li>
+          <li><span class="m">auth/</span><span class="d">OTP 主＋Magic Link 輔（登入信走 <b>Supabase Auth SMTP</b>，非 Resend）；requireUser／requireAdmin</span></li>
           <li><span class="m">rate-limit</span><span class="d">OTP 雙桶＋對帳 403 計數（Upstash）</span></li>
           <li><span class="m">supabase/</span><span class="d">三 client：anon／SSR／service-role</span></li>
         </ul>
@@ -291,7 +291,7 @@
         <thead><tr><th>服務</th><th>用途</th><th>失敗處理</th></tr></thead>
         <tbody>
           <tr><td>Supabase Postgres</td><td>主資料庫＋4 RPC</td><td>{data,error} 每次解構檢查；金流路徑 error→throw</td></tr>
-          <tr><td>Supabase Auth</td><td>OTP／Magic Link／建帳號</td><td>回錯誤物件，映射使用者訊息</td></tr>
+          <tr><td>Supabase Auth</td><td>OTP／Magic Link／建帳號；<b>寄登入信（走 Auth SMTP，非 Resend）</b></td><td>回錯誤物件，映射使用者訊息</td></tr>
           <tr><td>Supabase Storage</td><td>商品圖</td><td>上傳失敗回 action error</td></tr>
           <tr><td>ECPay AioCheckOut</td><td>付款頁</td><td>導 /checkout/failed，可重試（新 trade no）</td></tr>
           <tr><td>ECPay ReturnURL</td><td>入帳 webhook</td><td>非 1|OK ECPay 重送；handler 全冪等</td></tr>
