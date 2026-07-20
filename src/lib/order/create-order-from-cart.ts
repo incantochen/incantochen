@@ -270,15 +270,32 @@ export async function createOrderFromCart(
   // Insert order + order_items in one transaction (retry once on order_no
   // collision). T76：改用 RPC，order_item insert 失敗會讓整個 function 連
   // orders 一起 rollback，不再留孤兒訂單。
-  const itemsPayload = orderItemPayloadSchema.parse(
-    verifiedItems.map((item) => ({
-      product_id: item.productId,
-      product_name_snapshot: item.productName,
-      quantity: item.quantity,
-      unit_price_snapshot: item.verifiedUnitPrice,
-      config_snapshot: item.configSnapshot,
-    })),
-  );
+  // T113：parse 目前不可觸發——上游 verifyCartPrices 已嚴格驗過形狀，走到這裡
+  // 形狀必定吻合。包 try/catch 純屬防呆：未來上游邏輯改動導致契約漂移（欄位
+  // 改名／漏欄位／型別走鐘）時，把未包裝的 ZodError 攔在這裡，轉成與函式其餘
+  // 部分一致的結構化 {ok:false,error}，客人／admin 看到明確訊息而非 Next.js
+  // 遮罩的通用例外。契約漂移是靜默破口，必須留遙測（§0.2）讓 ops 知道
+  // verifiedItems→RPC payload 形狀失同步，而非只反覆呈現成客人的「請稍後再試」。
+  let itemsPayload: z.infer<typeof orderItemPayloadSchema>;
+  try {
+    itemsPayload = orderItemPayloadSchema.parse(
+      verifiedItems.map((item) => ({
+        product_id: item.productId,
+        product_name_snapshot: item.productName,
+        quantity: item.quantity,
+        unit_price_snapshot: item.verifiedUnitPrice,
+        config_snapshot: item.configSnapshot,
+      })),
+    );
+  } catch (e) {
+    console.error(
+      "[createOrderFromCart] order_item payload 形狀驗證失敗（契約漂移）",
+      { cartId, memberId },
+      e,
+    );
+    Sentry.captureException(e, { extra: { cartId, memberId } });
+    return { ok: false, error: "訂單資料格式錯誤，請稍後再試" };
+  }
   const consentAt = new Date().toISOString();
 
   async function callCreateOrderRpc(no: string) {
