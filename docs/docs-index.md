@@ -70,6 +70,7 @@
 | 檔案 | 用途 |
 |------|------|
 | `ops-runbook.md` | **人工救援 Runbook**（T90，2026-07-08 初版）。已知異常情境的判斷方法、修復 SQL／操作步驟、修復順序與風險、何時聯絡綠界。 |
+| `security-account-key-ops.md` | **T91 帳號與金鑰營運安全執行清單**（2026-07-20）。可逐項打勾：帳號 2FA／金鑰清冊與分級輪替／Dependabot＋secret scanning／Vercel WAF＋BotID 平台級防護／監控告警／定期節奏／洩漏應變劇本。與 `security-foundation.md`（程式地基漂移）互補。 |
 | `ecpay-blueprint/` | **ECPay 金流架構藍圖**（2026-07-07 產出，與專案無關的可重用規劃，19 份文件）。服務全景／API 能力矩陣／架構／流程／測試藍圖；閱讀路徑見其 `README.md`。 |
 | `ecpg-migration-plan.md` | **站內付 2.0 取代 AIO 信用卡規劃**（2026-07-08 產出，📋 未定案）。執行方案（五階段）、影響範圍、測試規劃、Pass Criteria；建議 MVP 上線後才動工。 |
 
