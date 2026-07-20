@@ -24,6 +24,12 @@ import type { OrderStatus } from "@/lib/order/order-status";
 // （漂移臂推進到一半被中斷會延後自癒，見各 sweep 的冪等註解）。
 export const maxDuration = 300;
 
+// 主候選單輪容量上限。容量假設（明碼化，T102）：正常運作下 pending payment
+// 積壓應遠低於此——每筆最壞約 1.4s（ECPay 往返＋400ms 節流），30 筆≈45s，對
+// maxDuration=300s 有約 6 倍餘裕。pending 積壓「持續」逼近／撈滿 30 筆不是對帳
+// 容量問題，而是 webhook 大面積失靈（付款回呼沒進來）的 P0 事故訊號——真正的
+// 修復在 webhook 端（ops-runbook §1.1），對帳只是安全網。故撈滿時發 warning
+// 當早期預警（見主候選查詢後的 candidatesSaturated 判定），而非放大批量硬撐。
 const CANDIDATE_LIMIT = 30;
 const MIN_AGE_MS = 10 * 60 * 1000;
 // 冷卻必須明顯短於 cron 週期（每日一次）：last_reconciled_at 的蓋章時間晚於
@@ -184,6 +190,10 @@ type Summary = {
   // 退款」補翻 payment＋補寄信，ops-runbook §6.1）。
   paidOnRefunded: number;
   paidOnRefundedTruncated: boolean;
+  // 主候選查詢撈滿 CANDIDATE_LIMIT（T102）：pending 積壓逼近單輪容量＝webhook
+  // 大面積失靈的早期訊號（成因與修復在 webhook 端，非對帳，見 CANDIDATE_LIMIT
+  // 註解）。與 driftTruncated 等 backlog 旗標同慣例：summary 旗標＋Sentry 並存。
+  candidatesSaturated: boolean;
   mismatches: number;
   failed: number;
   unexpected: number;
@@ -518,6 +528,7 @@ export async function GET(request: Request) {
     paidOnCancelledTruncated: false,
     paidOnRefunded: 0,
     paidOnRefundedTruncated: false,
+    candidatesSaturated: false,
     mismatches: 0,
     failed: 0,
     unexpected: 0,
@@ -550,6 +561,18 @@ export async function GET(request: Request) {
       .limit(CANDIDATE_LIMIT);
 
     if (error) throw new Error(`候選查詢失敗: ${error.message}`);
+
+    // T102：撈滿 CANDIDATE_LIMIT＝pending 積壓逼近單輪容量。這是 webhook 大面積
+    // 失靈的早期訊號（成因與修復在 webhook 端，非對帳），發 warning 當預警——
+    // 不放大批量硬撐（見 CANDIDATE_LIMIT 註解）。恰好等於上限即告警（不多撈 +1
+    // 偵測溢出）：這是「早期」訊號，寧可對「剛好滿載」也提早示警。
+    if ((candidates?.length ?? 0) >= CANDIDATE_LIMIT) {
+      summary.candidatesSaturated = true;
+      Sentry.captureMessage("reconcile: candidate list saturated", {
+        level: "warning",
+        extra: { candidateLimit: CANDIDATE_LIMIT },
+      });
+    }
 
     // 本次排程只要有任一筆 queryTradeInfo 成功回應（證明金鑰正常），就把
     // 連續-403 計數歸零一次；flag 避免每筆成功都打一次 redis.del。

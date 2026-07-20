@@ -453,6 +453,54 @@ describe("候選查詢的 .or() 過濾字串格式", () => {
   });
 });
 
+describe("主候選撈滿 CANDIDATE_LIMIT（T102 容量早期預警）", () => {
+  it("撈滿 30 筆 → candidatesSaturated=true＋warning 告警", async () => {
+    candidates = Array.from({ length: 30 }, (_, i) => ({
+      id: `p${i}`,
+      order_id: `o${i}`,
+      merchant_trade_no: `M${i}`,
+      amount: 25000,
+    }));
+    // tradeStatus='0'（還沒付款）：不動狀態，讓測試專注在飽和判定本身。
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "0",
+      tradeAmt: 0,
+      tradeNo: null,
+      raw: { TradeStatus: "0" },
+    });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.candidatesSaturated).toBe(true);
+    expect(sentryCaptureMessage).toHaveBeenCalledWith(
+      "reconcile: candidate list saturated",
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("未撈滿（少於 30 筆）→ candidatesSaturated=false、不告警", async () => {
+    candidates = [
+      { id: "p1", order_id: "o1", merchant_trade_no: "M1", amount: 25000 },
+    ];
+    queryTradeInfo.mockResolvedValue({
+      tradeStatus: "0",
+      tradeAmt: 0,
+      tradeNo: null,
+      raw: { TradeStatus: "0" },
+    });
+
+    const res = await GET(buildRequest("Bearer test-cron-secret"));
+    const body = await res.json();
+
+    expect(body.candidatesSaturated).toBe(false);
+    expect(sentryCaptureMessage).not.toHaveBeenCalledWith(
+      "reconcile: candidate list saturated",
+      expect.anything(),
+    );
+  });
+});
+
 describe("認證", () => {
   it("缺 Authorization header → 401", async () => {
     const res = await GET(buildRequest());
@@ -485,6 +533,7 @@ describe("認證", () => {
       paidOnCancelledTruncated: false,
       paidOnRefunded: 0,
       paidOnRefundedTruncated: false,
+      candidatesSaturated: false,
       mismatches: 0,
       failed: 0,
       unexpected: 0,
