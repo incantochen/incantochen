@@ -219,6 +219,34 @@
   .sweep-note b { color: var(--ink); }
   .sweep-note code { font-family: var(--mono); font-size: 11.5px; color: var(--accent-ink); }
 
+  /* ---- QA 與情境 ---- */
+  .tri { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 26px; }
+  @media (max-width: 760px) { .tri { grid-template-columns: 1fr; } }
+  .tri-card { background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius); box-shadow: var(--shadow); padding: 15px 17px; border-top: 3px solid var(--tc, var(--accent)); }
+  .tri-card.ok { --tc: var(--good); }
+  .tri-card.warn { --tc: var(--danger); }
+  .tri-card.mid { --tc: var(--warn); }
+  .tri-card .name { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--tc, var(--accent-ink)); }
+  .tri-card .cond { font-family: var(--mono); font-size: 11px; color: var(--faint); margin: 4px 0 9px; }
+  .tri-card .mean { font-size: 12.5px; color: var(--ink); }
+  .tri-card .act { font-size: 12px; color: var(--muted); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hairline); }
+
+  .qa { display: flex; flex-direction: column; gap: 14px; }
+  .qa-item { background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .qa-q { display: flex; gap: 9px; align-items: baseline; padding: 14px 18px 12px; font-family: var(--serif); font-size: 15.5px; font-weight: 600; color: var(--ink); border-bottom: 1px solid var(--hairline); background: var(--surface-2); }
+  .qa-q::before { content: "Q"; font-family: var(--mono); font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 5px; padding: 1px 6px; flex: 0 0 auto; align-self: center; }
+  .qa-a { padding: 15px 18px; font-size: 13.5px; color: var(--ink); }
+  .qa-a p { margin: 0 0 10px; }
+  .qa-a p:last-child { margin-bottom: 0; }
+  .qa-a code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 4px; padding: 1px 5px; color: var(--accent-ink); }
+  .qa-a b { color: var(--ink); }
+  .qa-a ul { margin: 8px 0 10px; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+  .qa-a ul li { display: grid; grid-template-columns: 16px 1fr; gap: 8px; color: var(--muted); }
+  .qa-a ul li::before { content: "▸"; color: var(--accent); font-size: 11px; }
+  .qa-a ul li b { color: var(--ink); }
+  .tldr { margin-top: 10px; padding: 10px 13px; border-radius: var(--radius-sm); background: var(--accent-soft); border: 1px solid var(--hairline); font-size: 12.5px; color: var(--muted); }
+  .tldr b { color: var(--accent-ink); font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; }
+
   footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--hairline); font-family: var(--mono); font-size: 11.5px; color: var(--faint); display: flex; flex-wrap: wrap; gap: 6px 20px; }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -571,6 +599,118 @@
           <tr><td>reconcile 稽核臂</td><td class="layer-note">每日掃 <code>payment=paid ∧ orders∈{cancelled,refunded}</code></td><td class="layer-note">Override 逃生口／TOCTOU 窄窗留下的半套狀態</td></tr>
         </tbody>
       </table>
+    </div>
+  </section>
+
+  <!-- ===== 6. QA 與情境 ===== -->
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>QA 與情境</h2></div>
+    <p class="sec-sub">把 <code>ensure-paid.ts</code> 在「CAS 沒搶到 payment 推進」後的三態複查（<code>already-settled</code> / <code>closed</code> / <code>indeterminate</code>）與其真實情境展開——這是理解本狀態機在並發/重送/兜底下如何保持冪等又不誤報的關鍵。</p>
+
+    <div class="tri">
+      <div class="tri-card ok">
+        <div class="name">already-settled</div>
+        <div class="cond">CAS 沒搶到 ∧ 現況 ∈ PAID_LINEAGE</div>
+        <div class="mean">付款其實早就成立過了，這次是重複進來、沒事可做。</div>
+        <div class="act">安靜返回，不計 promoted、不重複寄信/開票/記帳。</div>
+      </div>
+      <div class="tri-card warn">
+        <div class="name">closed</div>
+        <div class="cond">CAS 沒搶到 ∧ 現況 = cancelled/refunded</div>
+        <div class="mean">訂單已進終態，卻確認收到錢——錢與訂單狀態矛盾。</div>
+        <div class="act">P0 告警 → 人工裁決（退款或恢復訂單，ops-runbook §6.1）。</div>
+      </div>
+      <div class="tri-card mid">
+        <div class="name">indeterminate</div>
+        <div class="cond">CAS 沒搶到 ∧ 複查失敗/查無此單</div>
+        <div class="mean">連訂單現況都查不到，無法確認。</div>
+        <div class="act">P0 告警＋保守不動作，留給下次重試判定。</div>
+      </div>
+    </div>
+
+    <div class="qa">
+
+      <div class="qa-item">
+        <div class="qa-q">already-settled 是什麼情況？</div>
+        <div class="qa-a">
+          <p>CAS 用條件式 <code>UPDATE ... WHERE status='pending_payment'</code>，搶不到（0 rows）代表訂單已被別人搶先推進。複查發現它在 PAID_LINEAGE 上，就是這態。「別人」是誰：</p>
+          <ul>
+            <li><b>綠界 webhook 重送</b>：第一次已翻 paid/寄信/開票，第二次重送搶不到——冪等的核心，重送不重複扣帳/寄信。</li>
+            <li><b>webhook 與對帳併發</b>：webhook 先推進，稍後對帳主臂也來，CAS 搶不到（不重複計 promoted）。</li>
+            <li><b>對帳隔日重跑</b>：前一天已推進，今天再撈到。</li>
+            <li><b>admin 已推進到製作/出貨</b>：付款成立後你把訂單推到 <code>in_production</code>，遲到的重送才進來。</li>
+          </ul>
+          <p><b>為什麼判斷用整條 PAID_LINEAGE 而非只認 paid？</b>看最後一種：若只認 <code>paid</code>，訂單已被推到 <code>in_production</code> 就會被誤判成「付款卡住」發 P0——但那是正常演進。用「paid 及其一切後續」判斷，才不會把正常狀態推進誤報成錢務異常。</p>
+          <div class="tldr"><b>TL;DR</b>　「不是我推進的，但它已經是（或越過）paid 了，一切正常，我什麼都不用做。」</div>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q">closed（錢收在已關閉訂單）的實際情境？</div>
+        <div class="qa-a">
+          <p>不是 bug，是<b>取消/退款與付款的時間差競賽</b>。最典型：</p>
+          <ul>
+            <li><b>逾期取消 vs 遲到付款</b>：72h 逾期取消 cron 執行時 payment 還 pending → 取消放行 → 客人卻在快到期時才付、款項在取消後才於綠界完成 → 錢收了、訂單已 cancelled。</li>
+            <li><b>人工取消後客人才付</b>：你在後台取消 pending 單，客人拿還開著的舊連結付了款。</li>
+            <li><b>取消守衛 TOCTOU 毫秒窄窗</b>：pre-guard 查的瞬間還沒 paid → 放行取消 → commit 後 webhook 才翻 paid。</li>
+            <li><b>退款後兄弟交易才成立</b>：客人刷兩次，你依已付那筆退款結案，綠界之後才回報第二筆也成功 → 掛在已退款單上（客人被扣兩次、你只退一筆）。</li>
+            <li><b>Admin Override 逃生口</b>：直接把訂單改 refunded 但不翻 payment → 半套狀態。</li>
+          </ul>
+          <p><b>偵測</b>：對帳主臂/漂移臂 → <code>money received on closed order</code>；取消當下複查 → <code>money received on order cancelled during transition</code>；每日 durable 稽核臂 → <code>paid payment on cancelled/refunded order</code>（每日重複告警直到處理）。</p>
+          <p><b>為什麼 payment 照翻/維持 paid？</b><code>gateway_trade_no</code>／<code>raw_callback</code> 是日後退款的唯一依據，錢的事實必須落地。</p>
+          <div class="tldr"><b>TL;DR</b>　唯一「錢收了卻可能對不上」的路徑，<b>永不自動修</b>、每日告警催辦，人工裁決退款或恢復訂單。</div>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q">indeterminate 什麼情況會發生？</div>
+        <div class="qa-a">
+          <p>CAS 沒搶到後的複查「查不到現況」，兩個子情況：</p>
+          <ul>
+            <li><b>複查 SELECT 暫時失敗（statusError）</b>：Postgres timeout、連線池耗盡、與 Supabase 的網路抖動——Supabase 回 <code>{error}</code> 不 throw。</li>
+            <li><b>查無此單（!current）</b>：orderId 對不到任何列（正常流程近乎不可能，帳務表禁硬刪，屬防禦性處理）。</li>
+          </ul>
+          <p><b>為什麼跟 closed 嚴格分開？</b>closed＝<b>讀到了</b>、確認是 cancelled/refunded；indeterminate＝<b>根本沒讀到</b>。不能憑「我沒查到」就啟動退款/恢復訂單的錢務裁決——那是基於未知資訊對錢做決定。</p>
+          <div class="tldr"><b>TL;DR</b>　「我這輪確認不了」，不是「確認有問題」——只告警＋保守不動，判定留給重試。</div>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q">indeterminate 之後，重查就會出現真狀態嗎？</div>
+        <div class="qa-a">
+          <p><b>絕大多數會——這正是設計的自癒。</b>暫時性故障會恢復，下次重試 DB 正常就讀到真狀態。但兩個前提：</p>
+          <ul>
+            <li><b>重試真的會發生</b>：webhook 重送額度有限，<b>對帳 cron 才是 durable 保證</b>——只要 payment 還 pending/訂單漂移，下輪一定再撈到。</li>
+            <li><b>例外：查無此單那種不會變好</b>：它的真狀態就是「不存在」，重查一直回查無，是異常本身、要人工查。</li>
+          </ul>
+          <div class="tldr"><b>TL;DR</b>　暫時性抖動→重查會好（cron 保證重查會再發生）；查無此單→重試不會好、要查。</div>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q">「連續多輪同一筆 indeterminate」＝真問題，實際是什麼？</div>
+        <div class="qa-a">
+          <p>不是抖動、是結構性壞掉。先用「單筆 vs 多筆」分根因（看 Sentry <code>extra.status</code> 是「查詢失敗」還是「查無此訂單」）：</p>
+          <ul>
+            <li><b>只有某一筆持續（多半 !current）</b>：orderId 指向不存在的訂單。成因＝<b>識別碼互轉算錯</b>（merchant_trade_no↔order_no 重組 slice 錯、複本失同步，本專案 T67 踩過的坑）或<b>孤兒 payment</b>。重試不會好，要查為什麼 payment 指向不存在的訂單。</li>
+            <li><b>很多筆同時持續（多半 statusError）</b>：DB 層結構性問題——<b>Supabase 長事故</b>、<b>連線池耗盡成常態</b>、或 <b>migration 在 orders 加了約束/RLS/trigger 讓查詢持續失敗</b>（回歸）。要查 DB 健康與最近的 migration。</li>
+          </ul>
+          <p>⚠️ 背後常是<b>客人已付款卻卡 pending、確認信沒寄</b>——不是可放著的噪音，要優先查根因。</p>
+          <div class="tldr"><b>判準</b>　偶發一次＝正常抖動放著會好；連續多輪同一筆＝真問題要查（單筆查 code/資料、多筆查 DB/migration）。</div>
+        </div>
+      </div>
+
+      <div class="qa-item">
+        <div class="qa-q">名詞：「兜底」與「後續動作」</div>
+        <div class="qa-a">
+          <ul>
+            <li><b>兜底</b>：安全網／最後防線——「A 失敗時 B 接住補救」，層層往下接確保沒東西無聲掉落。例：金流兜底＝webhook 漏接時由每日對帳接住。</li>
+            <li><b>後續動作</b>（原稱副作用）：相對於「狀態轉換」這個主作用，因轉換而連帶觸發的其他動作（清車/寄信/開票/寫 log）。它們可獨立失敗、各有冪等與兜底，<b>失敗不得回滾狀態轉換</b>（開票失敗不擋金流）。</li>
+            <li><b>PAID_LINEAGE</b>：付款成立契約集合＝<code>paid / in_production / shipped / completed</code>；決定哪些狀態視為「付款已成立」（補寄確認信、already-settled 判斷都用它）。</li>
+          </ul>
+        </div>
+      </div>
+
     </div>
   </section>
 
