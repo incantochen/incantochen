@@ -109,6 +109,12 @@
   .modgroup li .d code{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--hairline);border-radius:4px;padding:0 4px;color:var(--accent-ink);}
   .modgroup.hidden{display:none;}
   .mods{align-items:start;}
+  /* 第一層專用：左疊 ①②④、右整欄 ③，兩側白框上下緣對齊 */
+  .mods-biz{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch;}
+  @media (max-width:740px){.mods-biz{grid-template-columns:1fr;}}
+  .mods-biz .col-left{display:flex;flex-direction:column;gap:14px;justify-content:space-between;}
+  .mods-biz .col-right{display:flex;}
+  .mods-biz .col-right .modgroup{flex:1;}
   .mchips{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:18px;}
   .mchip{font-family:var(--mono);font-size:11.5px;padding:5px 12px;border-radius:100px;border:1px solid var(--hairline-strong);background:var(--surface);color:var(--muted);cursor:pointer;transition:border-color .14s,color .14s,background .14s;}
   .mchip:hover{border-color:var(--accent);color:var(--accent-ink);}
@@ -255,38 +261,42 @@
     <div class="sec-head"><span class="sec-num">02</span><h2>模組盤點</h2></div>
     <p class="sec-sub">三層分類——<b>業務域為主軸，橫切關注與操作面各自獨立成層</b>（一組一軸、每模組唯一歸屬）。</p>
     <div class="tier-label t1"><b>第一層 · 業務域</b>（順客人旅程）</div>
-    <div class="mods">
-      <div class="modgroup" data-group="product">
-        <h3>① 商品與選項 <span class="tier biz">業務域</span></h3>
-        <ul>
-          <li><span class="m">product/</span><span class="d">配置器三層白名單・暫停販售（T117）・品類目錄</span></li>
-          <li><span class="m">option/</span><span class="d">選項類型/值 schema 與標籤</span></li>
-          <li><span class="m">storage/</span><span class="d">商品圖上傳 Supabase Storage（T11）</span></li>
-        </ul>
+    <div class="mods-biz">
+      <div class="col-left">
+        <div class="modgroup" data-group="product">
+          <h3>① 商品與選項 <span class="tier biz">業務域</span></h3>
+          <ul>
+            <li><span class="m">product/</span><span class="d">配置器三層白名單・暫停販售（T117）・品類目錄</span></li>
+            <li><span class="m">option/</span><span class="d">選項類型/值 schema 與標籤</span></li>
+            <li><span class="m">storage/</span><span class="d">商品圖上傳 Supabase Storage（T11）</span></li>
+          </ul>
+        </div>
+        <div class="modgroup" data-group="cart">
+          <h3>② 購物車 <span class="tier biz">業務域</span></h3>
+          <ul>
+            <li><span class="m">cart/</span><span class="d">讀寫・擁有權檢查（guest_token）・徽章・會員登入併車（T81）</span></li>
+          </ul>
+        </div>
+        <div class="modgroup" data-group="support">
+          <h3>④ 售後 <span class="tier biz">業務域</span></h3>
+          <ul>
+            <li><span class="m">support/</span><span class="d">商品問題回報（return_defect）・後台維修登錄（repair_maintenance）</span></li>
+          </ul>
+        </div>
       </div>
-      <div class="modgroup" data-group="cart">
-        <h3>② 購物車 <span class="tier biz">業務域</span></h3>
-        <ul>
-          <li><span class="m">cart/</span><span class="d">讀寫・擁有權檢查（guest_token）・徽章・會員登入併車（T81）</span></li>
-        </ul>
-      </div>
-      <div class="modgroup" data-group="order">
-        <h3>③ 訂單與金流 <span class="tier biz">業務域</span></h3>
-        <ul>
-          <li><span class="m">quote/verify-prices</span><span class="d">🔴 伺服器驗價紅線（addToCart＋結帳皆呼叫）</span></li>
-          <li><span class="m">checkout＋create-order</span><span class="d">建單 RPC 交易化（T76）・付款成功才清車（T75）</span></li>
-          <li><span class="m">order/state-machine</span><span class="d">轉換＋取消/退款守衛・ensure-paid 冪等推進</span></li>
-          <li><span class="m">ecpay/</span><span class="d">簽章／付款／查詢／AES</span></li>
-          <li><span class="m">cron 對帳兜底</span><span class="d">對帳三臂＋2 sweep</span></li>
-          <li><span class="m">refund-order</span><span class="d">記錄式退款 RPC（T47・帳務）</span></li>
-          <li><span class="m">issue-invoice</span><span class="d">電子發票開立（T42・帳務）</span></li>
-        </ul>
-      </div>
-      <div class="modgroup" data-group="support">
-        <h3>④ 售後 <span class="tier biz">業務域</span></h3>
-        <ul>
-          <li><span class="m">support/</span><span class="d">商品問題回報（return_defect）・後台維修登錄（repair_maintenance）</span></li>
-        </ul>
+      <div class="col-right">
+        <div class="modgroup" data-group="order">
+          <h3>③ 訂單與金流 <span class="tier biz">業務域</span></h3>
+          <ul>
+            <li><span class="m">quote/verify-prices</span><span class="d">🔴 伺服器驗價紅線（addToCart＋結帳皆呼叫）</span></li>
+            <li><span class="m">checkout＋create-order</span><span class="d">建單 RPC 交易化（T76）・付款成功才清車（T75）</span></li>
+            <li><span class="m">order/state-machine</span><span class="d">轉換＋取消/退款守衛・ensure-paid 冪等推進</span></li>
+            <li><span class="m">ecpay/</span><span class="d">簽章／付款／查詢／AES</span></li>
+            <li><span class="m">cron 對帳兜底</span><span class="d">對帳三臂＋2 sweep</span></li>
+            <li><span class="m">refund-order</span><span class="d">記錄式退款 RPC（T47・帳務）</span></li>
+            <li><span class="m">issue-invoice</span><span class="d">電子發票開立（T42・帳務）</span></li>
+          </ul>
+        </div>
       </div>
     </div>
     <div class="tier-label t2"><b>第二層 · 橫切／平台</b>（跨所有域）</div>
