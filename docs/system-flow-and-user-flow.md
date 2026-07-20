@@ -179,9 +179,9 @@ pending_payment → paid → in_production → shipped → completed
 
 終止狀態只剩 `cancelled` 與 `refunded`；`completed` 因售後退款需求**不再是終止狀態**。付款成立契約集合 `PAID_LINEAGE = [paid, in_production, shipped, completed]`（決定哪些狀態下該補寄確認信、視為付款已成立）。
 
-### A.2 每條邊：觸發者 / 守衛 / 副作用 / 例外
+### A.2 每條邊：觸發者 / 守衛 / 後續動作 / 例外
 
-| 邊 | 觸發者 | 成立條件 | 副作用 | 例外處理 |
+| 邊 | 觸發者 | 成立條件 | 後續動作 | 例外處理 |
 |----|--------|----------|--------|----------|
 | `pending → paid` | **webhook**（權威）／**reconcile cron**（兜底），走 `ensureOrderPaid` | CAS `WHERE status='pending_payment'` 搶到 | 清購物車（T75）＋寄確認信＋通知店家＋開發票 | CAS 沒搶到 → 複查：`already-settled`（正常冪等）／`closed`（P0 告警）／`indeterminate`（不可當 closed） |
 | `pending → cancelled` | **逾期 cron**（T66, 72h）／admin，走 `transitionOrder` | canTransition ✅ **且無 paid payment** | 寫稽核 log | 有 paid → `PaidOrderCancelBlockedError`；cron 記 `paidConflict`＋告警、結帳回錯不建新單、admin 導退款 |
