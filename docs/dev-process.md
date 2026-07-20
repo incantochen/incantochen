@@ -100,7 +100,7 @@ flowchart TD
 |------|----------------------|--------------|----------------|
 | 需求分析 | 輸入：PRD、user-flow、競品分析 → 輸出：decisions.csv | 人工討論（App Chat＋Claude Code） | — |
 | 規劃 | 輸入：decisions → 輸出：tasks.csv 任務列（含依賴/批次） | /dev-review（審查衍生任務）、plan mode | 決策已拍板 |
-| 文件撰寫 | docs-index.md 為目錄；風格依 `incantochen-docs.skill` | — | 新文件須回登 docs-index |
+| 文件撰寫 | docs-index.md 為目錄；風格對齊既有 `docs/*.md` 慣例 | — | 新文件須回登 docs-index |
 | 任務挑選 | 輸入：tasks.csv → 輸出：本次任務＋計畫 | **/dev-next skill** | 依賴任務已完成；批次耦合同批做 |
 | 開發 | 輸入：coding-system.md（必讀）、brand-guide＋wireframe（UI）、data-model（schema）→ 輸出：feature branch | plan mode（高風險必進）；**hooks**：protect-env／protect-migration／dangerous-bash／auto-format／session-start | 高風險先 plan mode；migration 需真人放行 |
 | Migration | migration-guide（規則）＋migration-runbook（操作） | Supabase CLI（db push／gen types）；protect-migration hook | **先 db push 再 merge**；已套用不可改 |
