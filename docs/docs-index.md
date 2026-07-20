@@ -33,7 +33,8 @@
 
 | 檔案 | 用途 |
 |------|------|
-| `architecture.md` | **系統架構盤點**。模組職責、相依關係、Runtime Flow、第三方服務互動、部署架構、Gap Analysis（2026-07-07 產出）。 |
+| `architecture.md` | **系統架構盤點**。模組職責、相依關係、Runtime Flow、第三方服務互動、部署架構、Gap Analysis（2026-07-20 全面刷新，對齊 M2 現況：16 表／4 RPC／3 Cron／對帳三臂／退款／發票／CI）。 |
+| `architecture.html` | **architecture 儀表板視圖**（自帶樣式單檔，瀏覽器直接開）。分層堆疊、模組盤點、4 交易化 RPC、金流兜底縱深、16 表、第三方服務、Gap 狀態板。 |
 | `data-model.md` | 資料模型說明。14 張表定義（含 T33 `support_request`）、欄位說明、關聯邏輯、快照契約。 |
 | `jewelry_mvp_ER.mermaid` | ER Diagram 原始碼（Mermaid 格式），隨時可讀。 |
 | `jewelry_mvp_ER.pdf` | ER Diagram 視覺版（171KB）。**非必要載入**，需要視覺參考時再開。 |
