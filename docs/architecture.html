@@ -53,7 +53,7 @@
   .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-ink);display:flex;align-items:center;gap:10px;margin-bottom:16px;}
   .eyebrow::before{content:"";width:22px;height:1px;background:var(--accent);display:inline-block;}
   h1{font-family:var(--serif);font-weight:600;letter-spacing:-.01em;font-size:clamp(30px,5vw,44px);line-height:1.08;margin:0 0 14px;text-wrap:balance;}
-  .lede{color:var(--muted);font-size:15px;max-width:64ch;margin:0;}
+  .lede{color:var(--muted);font-size:15px;max-width:calc(64ch + 2em);margin:0;}
   .meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:20px;font-family:var(--mono);font-size:12px;color:var(--faint);}
   .meta b{color:var(--muted);font-weight:500;}
 
@@ -426,32 +426,42 @@
 
 <script>
   (function () {
-    var links = Array.prototype.slice.call(document.querySelectorAll('#topnav a'));
-    if (!links.length) return;
-    var map = links.map(function (a) {
-      return { link: a, sec: document.querySelector(a.getAttribute('href')) };
-    }).filter(function (m) { return m.sec; });
+    var map = Array.prototype.slice.call(document.querySelectorAll('#topnav a'))
+      .map(function (a) { return { link: a, sec: document.querySelector(a.getAttribute('href')) }; })
+      .filter(function (m) { return m.sec; });
+    if (!map.length) return;
 
-    // 平滑捲動
-    links.forEach(function (a) {
-      a.addEventListener('click', function (e) {
-        var sec = document.querySelector(a.getAttribute('href'));
-        if (!sec) return;
-        e.preventDefault();
-        sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
+    var OFFSET = 90; // 略大於 sticky nav 高度＋section scroll-margin
+
+    function setActive(link) {
+      map.forEach(function (m) { m.link.classList.toggle('active', m.link === link); });
+    }
+
+    // 目前區塊＝top 已越過 OFFSET 的最後一個；捲到底時強制最後一個。
+    function currentIndex() {
+      var atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 2;
+      if (atBottom) return map.length - 1;
+      var idx = 0;
+      for (var i = 0; i < map.length; i++) {
+        if (map[i].sec.getBoundingClientRect().top - OFFSET <= 1) idx = i;
+      }
+      return idx;
+    }
+
+    var ticking = false;
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function () { ticking = false; setActive(map[currentIndex()].link); });
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+
+    // 點擊：立即高亮該標籤（原生錨點直接跳定點，無平滑捲動）；捲動事件隨後也會校正。
+    map.forEach(function (m) {
+      m.link.addEventListener('click', function () { setActive(m.link); });
     });
 
-    // 捲動高亮目前區塊
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (en) {
-        if (!en.isIntersecting) return;
-        var id = en.target.getAttribute('id');
-        map.forEach(function (m) {
-          m.link.classList.toggle('active', m.sec.getAttribute('id') === id);
-        });
-      });
-    }, { rootMargin: '-72px 0px -60% 0px', threshold: 0 });
-    map.forEach(function (m) { io.observe(m.sec); });
+    setActive(map[currentIndex()].link);
   })();
 </script>
