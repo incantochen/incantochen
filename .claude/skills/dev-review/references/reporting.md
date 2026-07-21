@@ -1,4 +1,4 @@
-# 產出流程：去重、findings md、tasks.csv、GitHub issues
+# 產出流程：去重、findings md、tasks-todo.csv、GitHub issues
 
 ## 產出管線總覽（md 中繼，支援無人值守）
 
@@ -6,10 +6,10 @@
 審查發現 → docs/review-findings.md（自動寫入，無需確認）
          → 後續 session 回歸審查：比對＋更新同一份 md
          → 使用者在 md 上確認（改狀態為「確認」或「不採納」）
-         → 經確認的項目才轉入 tasks.csv＋GitHub issues
+         → 經確認的項目才轉入 tasks-todo.csv＋GitHub issues
 ```
 
-`docs/review-findings.md` 是審查的工作底稿與唯一累積點：無人值守執行時只寫這份 md，不動 tasks.csv、不開 issues。
+`docs/review-findings.md` 是審查的工作底稿與唯一累積點：無人值守執行時只寫這份 md，不動 tasks-todo.csv、不開 issues。
 
 ## 步驟 0：去重比對（強制，輸出前執行）
 
@@ -17,7 +17,7 @@
 
 1. 讀 `docs/review-findings.md`（若存在）——上次審查的全部發現與各自狀態
 2. `gh issue list --repo incantochen/incantochen --state all --limit 100`
-3. 讀 `docs/tasks.csv` 中所有「審查發現」開頭的任務（T67 起）
+3. 讀 `docs/tasks-todo.csv`（待辦）＋`docs/tasks-done.md`（已完成/已修）中所有「審查發現」相關任務（T67 起）
 
 分類處理：
 - **已列管、未修**：不重報。報告末尾列「既有任務回歸狀態」一行帶過（任務編號＋狀態）。
@@ -41,7 +41,7 @@
 - md 尾端維護**檔案覆蓋表**：`路徑｜最後審查日期｜審查次數`，母集＝`git ls-files` 排除純資產（見 code-checklist.md 步驟 0）。每次審查後更新本次讀過的檔案；這張表同時是使用者的覆蓋率儀表板
 - 同時在對話輸出摘要報告：先講結論，分區（bug→安全→可靠性→回歸狀態），結尾給修復優先序與相依關係，**固定加兩節老化提醒**：①待確認超過 14 天的發現清單 ②覆蓋表中從未審查過的檔案數（＞0 時列出）
 
-## 步驟 2：寫入 tasks.csv（僅限 md 中狀態＝「確認」的項目）
+## 步驟 2：寫入 tasks-todo.csv（僅限 md 中狀態＝「確認」的項目）
 
 欄位：`ID,階段,模組,任務,說明,依賴,預估(人天),累積人天,優先級,狀態`
 
@@ -54,7 +54,7 @@
 - 優先級：P0＝正在影響客人或會弄壞資料；P1＝上線前必修；P2＝品質改善
 - commit 慣例：docs 類經使用者同意可直接進 master；訊息格式 `docs(tasks): ...`
 
-**批次耦合分析（轉任務時強制）**：新任務與既有未修任務做耦合分析——①同檔案（改 A 會碰到 B 的程式碼）②同機制（如同一生命週期、同一格式的多個解析點、共用函式）③行為連鎖（修 A 改變系統行為導致 B 的前提失效，例：改 webhook 回 0|Error 觸發重送→寄信去重必須同時上）。有耦合的任務在 tasks.csv 說明加【批次N：…】註記＋依賴欄補前置任務，並在相關 issues 互相留言註明同批修復與順序。
+**批次耦合分析（轉任務時強制）**：新任務與既有未修任務做耦合分析——①同檔案（改 A 會碰到 B 的程式碼）②同機制（如同一生命週期、同一格式的多個解析點、共用函式）③行為連鎖（修 A 改變系統行為導致 B 的前提失效，例：改 webhook 回 0|Error 觸發重送→寄信去重必須同時上）。有耦合的任務在 tasks-todo.csv 說明加【批次N：…】註記＋依賴欄補前置任務，並在相關 issues 互相留言註明同批修復與順序。
 
 轉入完成後，把 md 中該發現的狀態改為「已轉任務(T##)」。
 
@@ -71,7 +71,7 @@ gh issue create --repo incantochen/incantochen --label "<類型>,<優先級>" --
 ## 修法
 <具體步驟>
 
-出處：tasks.csv T##
+出處：tasks-todo.csv T##
 '@
 ```
 
