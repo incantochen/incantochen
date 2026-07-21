@@ -19,7 +19,7 @@
 | RWD | Responsive Web Design | 響應式設計。同一頁面在手機／平板／桌機自動調整版面。 |
 | SEO | Search Engine Optimization | 搜尋引擎最佳化，讓 Google 更容易收錄與排名。 |
 | CRUD | Create/Read/Update/Delete | 資料的新增／讀取／更新／刪除，泛指後台管理功能。 |
-| CSV | Comma-Separated Values | 逗號分隔的純文字表格（如 `tasks.csv`）。 |
+| CSV | Comma-Separated Values | 逗號分隔的純文字表格（如 `tasks-todo.csv`）。 |
 | MCP | Model Context Protocol | 讓 AI 代理連接外部工具／資料源的協定。 |
 | SDK | Software Development Kit | 第三方提供的程式庫（如 Supabase SDK、Resend SDK）。 |
 | TS | TypeScript | 本專案的程式語言（`.ts`／`.tsx`）；「TS 端」指應用程式碼，對照「DB 端」的 SQL 函式。 |
