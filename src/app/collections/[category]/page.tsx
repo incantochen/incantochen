@@ -1,13 +1,42 @@
 import Link from "next/link"
+import type { Metadata } from "next"
 import { notFound } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/product/category-labels"
 import type { CategoryCode } from "@/lib/product/category-labels"
 import { ALL_SORT_KEYS, type SortKey } from "@/lib/product/collection-sort"
 import { GEM_COLOR_OPTION_CODE, METAL_COLOR_OPTION_CODE } from "@/lib/product/option-type-codes"
+import { computeStartPrice } from "@/lib/product/start-price"
+import { buildBreadcrumbJsonLd } from "@/lib/seo/breadcrumb-json-ld"
+import { getSiteUrl } from "@/lib/seo/site-url"
 import { ProductCard, type ProductCardData } from "@/components/product-card"
 import { CollectionSortSelect } from "@/components/collection-sort-select"
 import { Breadcrumb } from "@/components/breadcrumb"
+import { JsonLd } from "@/components/json-ld"
+
+// T59 SEO：品類頁 metadata。canonical 一律指向無 ?sort= 參數的乾淨網址——
+// 排序變體內容相同，不讓搜尋引擎個別收錄。
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ category: string }>
+}): Promise<Metadata> {
+  const { category } = await params
+  if (!ALL_CATEGORIES.includes(category as CategoryCode)) {
+    return {}
+  }
+  const label = CATEGORY_LABELS[category as CategoryCode]
+  const canonicalPath = `/collections/${category}`
+
+  const title = `${label}系列`
+  const description = `incantochen 半客製${label}系列——以彩色寶石為主角，選妳的寶石顏色、金屬與尺寸，即時計價，下單後專屬訂製。`
+  return {
+    title,
+    description,
+    alternates: { canonical: canonicalPath },
+    openGraph: { title, description, url: canonicalPath },
+  }
+}
 
 // 每個品類最多先撈這麼多筆；MVP 目錄規模遠小於此，真正的分頁/無限捲動留給
 // 目錄成長到需要時再做（CLAUDE.md：不為假設中的規模預先設計），這裡只是
@@ -103,22 +132,36 @@ export default async function CollectionPage({
     )?.option_value
     const metaParts = [metalDefault?.label, gemDefault?.label].filter((v): v is string => Boolean(v))
 
-    // 「起」價＝底價＋每組選項「預設值」的加價總和，比照 product-configurator.tsx
-    // 對 PDP 預設組合的算法——只用 base_price 的話，一旦某必選項的預設值本身
-    // 帶加價，目錄頁顯示的價格會比 PDP／結帳實際金額低。
-    const defaultPriceDeltaSum = product.product_option.reduce((sum, po) => {
-      const def = po.product_option_value.find((v) => v.is_default) ?? po.product_option_value[0]
-      return sum + (def?.price_delta ?? 0)
-    }, 0)
-
     return {
       slug: product.slug,
       name: product.name,
-      basePrice: Number(product.base_price) + Number(defaultPriceDeltaSum),
+      // 「起」價算法抽至 computeStartPrice（T59 起與 PDP metadata／JSON-LD 共用）
+      basePrice: computeStartPrice(product.base_price, product.product_option),
       meta: metaParts.length > 0 ? metaParts.join(" · ") : null,
       gemColor: gemDefault?.swatch_hex ?? null,
     }
   })
+
+  const breadcrumbItems = [
+    { label: "首頁", href: "/" },
+    { label: "商品" },
+    { label: CATEGORY_LABELS[categoryCode] },
+  ]
+
+  // T59 GEO：BreadcrumbList＋ItemList JSON-LD——ItemList 讓 AI 引擎能列舉
+  // 本品類商品（名稱＋網址即可，價格細節在各 PDP 的 Product JSON-LD）。
+  const siteUrl = getSiteUrl()
+  const itemListJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    name: `incantochen ${CATEGORY_LABELS[categoryCode]}系列`,
+    itemListElement: cards.map((card, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      name: card.name,
+      url: new URL(`/products/${card.slug}`, siteUrl).toString(),
+    })),
+  }
 
   function buildCategoryHref(c: CategoryCode) {
     return sortKey !== "featured" ? `/collections/${c}?sort=${sortKey}` : `/collections/${c}`
@@ -126,13 +169,9 @@ export default async function CollectionPage({
 
   return (
     <div className="mx-auto max-w-[1240px] px-6 py-8">
-      <Breadcrumb
-        items={[
-          { label: "首頁", href: "/" },
-          { label: "商品" },
-          { label: CATEGORY_LABELS[categoryCode] },
-        ]}
-      />
+      <JsonLd data={buildBreadcrumbJsonLd(breadcrumbItems)} />
+      <JsonLd data={itemListJsonLd} />
+      <Breadcrumb items={breadcrumbItems} />
 
       <div className="mt-6">
         <div className="eyebrow">COLLECTIONS</div>

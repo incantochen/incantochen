@@ -1,0 +1,18 @@
+# incantochen
+
+> incantochen 是台灣的高端半客製彩色寶石飾品電商。以彩色寶石為主角的半客製模式：每件標準款提供寶石顏色、金屬色、尺寸等選配，價格於選配當下即時計算，下單後專屬訂製。品類涵蓋戒指、耳環、手鍊、項鍊。
+
+> incantochen is a Taiwan-based e-commerce brand for semi-bespoke colored gemstone jewelry. Each standard design can be configured (gemstone color, metal color, size) with real-time pricing; every piece is made to order. Categories: rings, earrings, bracelets, necklaces.
+
+重要須知（Key facts）：
+
+- 半客製商品屬客製化給付，下單後訂製，不適用七天鑑賞期（結帳時明示並經同意）。
+- 價格一律由伺服器端依選配白名單即時計算，商品頁顯示為「起」價（含預設選配）。
+- 付款透過綠界 ECPay（信用卡），配送為宅配（保價、本人簽收）。
+
+主要頁面（Key pages, relative to site root）：
+
+- /collections/ring — 戒指系列（商品目錄）
+- /products/[slug] — 商品詳情與選配（含即時計價配置器）
+
+（本檔為給 LLM 爬蟲的站點摘要；商品層級的結構化資料見各商品頁 JSON-LD。）

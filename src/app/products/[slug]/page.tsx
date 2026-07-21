@@ -1,28 +1,31 @@
+import { cache } from "react";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { isProductUnavailable } from "@/lib/product/check-product-availability";
 import { CATEGORY_LABELS } from "@/lib/product/category-labels";
+import { computeStartPrice } from "@/lib/product/start-price";
+import { buildBreadcrumbJsonLd } from "@/lib/seo/breadcrumb-json-ld";
+import { getSiteUrl } from "@/lib/seo/site-url";
 import {
   ProductConfigurator,
   type ConfiguratorOption,
 } from "@/components/product-configurator";
 import { Breadcrumb } from "@/components/breadcrumb";
+import { JsonLd } from "@/components/json-ld";
 import { PlaceholderImage } from "@/components/placeholder-image";
 
 const GALLERY_CAPTIONS = ["正面", "側面", "配戴情境", "生活情境"];
 
-export default async function ProductDetailPage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
-  const { slug } = await params;
+// React cache()：generateMetadata 與 page 在同一請求各要一次商品——去重成
+// 單一 DB 查詢（T59）。
+//
+// option_type / option_value 的 !inner 必要：RLS（0014）會濾掉 is_active=false
+// 的列，非 inner 的多對一 embed 會變成 null 欄位（取屬性即炸），!inner 才是
+// 「隱藏項目整列從陣列消失」
+const getActiveProduct = cache(async (slug: string) => {
   const supabase = await createClient();
-
-  // option_type / option_value 的 !inner 必要：RLS（0014）會濾掉 is_active=false
-  // 的列，非 inner 的多對一 embed 會變成 null 欄位（取屬性即炸），!inner 才是
-  // 「隱藏項目整列從陣列消失」
   const { data: product, error } = await supabase
     .from("product")
     .select(
@@ -47,6 +50,50 @@ export default async function ProductDetailPage({
   if (error) {
     throw new Error(`查詢商品失敗：${error.message}`);
   }
+  return product;
+});
+
+// T59 SEO：商品頁 metadata。description 由商品資料組合（不杜撰內容）；
+// canonical 指向乾淨的 /products/[slug]。查無商品回空物件即可——page 端
+// 的 notFound() 才是 404 的決定者，metadata 不重複判。
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const product = await getActiveProduct(slug);
+  if (!product) {
+    return {};
+  }
+
+  const categoryLabel = CATEGORY_LABELS[product.category];
+  const startPrice = computeStartPrice(
+    product.base_price,
+    product.product_option,
+  );
+  const description = `半客製${categoryLabel}「${product.name}」，NT$ ${startPrice.toLocaleString()} 起。可選寶石顏色與金屬色，即時計價，下單後專屬訂製。`;
+  const canonicalPath = `/products/${product.slug}`;
+
+  return {
+    title: product.name,
+    description,
+    alternates: { canonical: canonicalPath },
+    openGraph: {
+      title: product.name,
+      description,
+      url: canonicalPath,
+    },
+  };
+}
+
+export default async function ProductDetailPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+  const product = await getActiveProduct(slug);
   if (!product) {
     notFound();
   }
@@ -78,15 +125,43 @@ export default async function ProductDetailPage({
       })),
   }));
 
+  const breadcrumbItems = [
+    { label: "首頁", href: "/" },
+    { label: categoryLabel, href: `/collections/${product.category}` },
+    { label: product.name },
+  ];
+
+  // T59 GEO：Product JSON-LD——AI 引擎與搜尋引擎讀結構化資料遠勝讀 DOM
+  // （配置器價格在 client component，多數爬蟲不執行 JS）。
+  // price＝「起」價（與目錄卡／metadata 同算法）；availability 接 T117 的
+  // unavailable 訊號；image 待 T116 素材到位再補（不放佔位圖騙爬蟲）。
+  const startPrice = computeStartPrice(
+    product.base_price,
+    product.product_option,
+  );
+  const productJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: product.name,
+    description: `半客製${categoryLabel}，可選寶石顏色與金屬色，下單後專屬訂製。`,
+    category: categoryLabel,
+    brand: { "@type": "Brand", name: "incantochen" },
+    offers: {
+      "@type": "Offer",
+      priceCurrency: "TWD",
+      price: startPrice,
+      availability: unavailable
+        ? "https://schema.org/OutOfStock"
+        : "https://schema.org/InStock",
+      url: new URL(`/products/${product.slug}`, getSiteUrl()).toString(),
+    },
+  };
+
   return (
     <div className="mx-auto max-w-[1240px] px-6 py-8">
-      <Breadcrumb
-        items={[
-          { label: "首頁", href: "/" },
-          { label: categoryLabel, href: `/collections/${product.category}` },
-          { label: product.name },
-        ]}
-      />
+      <JsonLd data={productJsonLd} />
+      <JsonLd data={buildBreadcrumbJsonLd(breadcrumbItems)} />
+      <Breadcrumb items={breadcrumbItems} />
 
       <div className="mt-8 grid grid-cols-1 items-start gap-12 lg:grid-cols-[1.05fr_0.95fr]">
         {/* Gallery */}
