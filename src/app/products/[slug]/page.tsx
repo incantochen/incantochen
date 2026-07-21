@@ -8,6 +8,7 @@ import { CATEGORY_LABELS } from "@/lib/product/category-labels";
 import { computeStartPrice } from "@/lib/product/start-price";
 import { buildBreadcrumbJsonLd } from "@/lib/seo/breadcrumb-json-ld";
 import { getSiteUrl } from "@/lib/seo/site-url";
+import { pageOpenGraph } from "@/lib/seo/site-meta";
 import {
   ProductConfigurator,
   type ConfiguratorOption,
@@ -85,11 +86,13 @@ export async function generateMetadata({
     title: product.name,
     description,
     alternates: { canonical: canonicalPath },
-    openGraph: {
+    // pageOpenGraph 帶回 siteName/locale/type（Next 對 openGraph 是淺層取代，
+    // 只給 title/description/url 會蓋掉 layout 的基底欄位）。
+    openGraph: pageOpenGraph({
       title: product.name,
       description,
       url: canonicalPath,
-    },
+    }),
   };
 }
 
@@ -154,10 +157,14 @@ export default async function ProductDetailPage({
     description: `半客製${categoryLabel}，可選寶石顏色與金屬色，下單後專屬訂製。`,
     category: categoryLabel,
     brand: { "@type": "Brand", name: "incantochen" },
+    // AggregateOffer + lowPrice（非單一 Offer.price）：半客製商品價格隨選配變動，
+    // 用單一 price 標「起」價會與客人加選後的實際金額不符，Google 可能判定
+    // 結構化價格與頁面價格矛盾而抑制 rich result。lowPrice＝起價（預設選配）；
+    // 不放 highPrice（選配上界隨白名單變動、非固定，寧缺勿錯報）。
     offers: {
-      "@type": "Offer",
+      "@type": "AggregateOffer",
       priceCurrency: "TWD",
-      price: startPrice,
+      lowPrice: startPrice,
       availability: unavailable
         ? "https://schema.org/OutOfStock"
         : "https://schema.org/InStock",

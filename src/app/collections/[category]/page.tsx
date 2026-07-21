@@ -9,6 +9,7 @@ import { GEM_COLOR_OPTION_CODE, METAL_COLOR_OPTION_CODE } from "@/lib/product/op
 import { computeStartPrice } from "@/lib/product/start-price"
 import { buildBreadcrumbJsonLd } from "@/lib/seo/breadcrumb-json-ld"
 import { getSiteUrl } from "@/lib/seo/site-url"
+import { pageOpenGraph } from "@/lib/seo/site-meta"
 import { ProductCard, type ProductCardData } from "@/components/product-card"
 import { CollectionSortSelect } from "@/components/collection-sort-select"
 import { Breadcrumb } from "@/components/breadcrumb"
@@ -34,7 +35,8 @@ export async function generateMetadata({
     title,
     description,
     alternates: { canonical: canonicalPath },
-    openGraph: { title, description, url: canonicalPath },
+    // pageOpenGraph 帶回 siteName/locale/type（Next openGraph 淺層取代）。
+    openGraph: pageOpenGraph({ title, description, url: canonicalPath }),
   }
 }
 

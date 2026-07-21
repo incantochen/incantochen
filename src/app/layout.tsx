@@ -11,6 +11,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { JsonLd } from "@/components/json-ld";
 import { getSiteUrl, isIndexingEnabled } from "@/lib/seo/site-url";
+import { SITE_NAME, SITE_TITLE, SITE_DESCRIPTION } from "@/lib/seo/site-meta";
 
 const headLatin = EB_Garamond({
   variable: "--font-head-latin",
@@ -40,11 +41,6 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
-
-const SITE_NAME = "incantochen";
-const SITE_TITLE = "incantochen｜半客製彩色寶石飾品";
-const SITE_DESCRIPTION =
-  "incantochen 高端半客製彩色寶石飾品——戒指、耳環、手鍊、項鍊。以彩色寶石為主角，選妳的寶石顏色、金屬與尺寸，即時計價、下單後專屬訂製。";
 
 // T59 SEO 基礎：metadataBase 讓各頁的相對 canonical／og:url 解析成絕對網址；
 // 非 production（preview／本機）全站 noindex——理由見 lib/seo/site-url.ts。

@@ -7,6 +7,15 @@
 //
 // price_delta／base_price 過 Number()：PostgREST 對 numeric 欄位可能回傳
 // 字串（§6），直接相加會變字串串接。
+//
+// ⚠️ 無 is_default 時的 fallback＝取 product_option_value[0]（DB 查詢原始順序），
+// 沿用原 collections inline 的行為。此時配置器（product-configurator.tsx）的
+// defaultSelection 是先依 option_value.sort_order 排序再取首位——正常情況每個
+// 必選項都有一個 is_default（T13 的 set_default RPC），兩者選到同一個值、價格
+// 一致；只有「某必選項完全沒有預設值」這種後台誤設狀態下，兩者的 fallback 可能
+// 選到不同值而讓「起」價與配置器預設價微幅不符。屬邊界誤設、影響僅顯示層
+// （結帳仍以 verify-prices 伺服器重算為準），故不為此在 collections 查詢額外
+// 撈 sort_order；後台正常設定即無此問題。
 
 type OptionValueLike = {
   is_default: boolean;
