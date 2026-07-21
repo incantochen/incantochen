@@ -1,6 +1,6 @@
 ---
 name: dev-review
-description: 軟體開發審查（審查, review, code review, 環境審查, schema 審查, 上線前檢查）。以兩遍式流程系統性審查本專案的程式碼、資料庫 schema、雲端環境設定與開發流程：第一遍開放式對抗性審查發現未知問題，第二遍用缺陷類別清單回歸掃描。產出依嚴重度排序的發現，落地為 tasks.csv 任務與 GitHub issues。範圍參數：code｜schema｜env｜flow｜full（預設 full）。
+description: 軟體開發審查（審查, review, code review, 環境審查, schema 審查, 上線前檢查）。以兩遍式流程系統性審查本專案的程式碼、資料庫 schema、雲端環境設定與開發流程：第一遍開放式對抗性審查發現未知問題，第二遍用缺陷類別清單回歸掃描。產出依嚴重度排序的發現，落地為 tasks-todo.csv 任務與 GitHub issues。範圍參數：code｜schema｜env｜flow｜full（預設 full）。
 ---
 
 # 軟體開發審查（dev-review）
@@ -24,7 +24,7 @@ description: 軟體開發審查（審查, review, code review, 環境審查, sch
 | 第二遍 code | `references/code-checklist.md` | 缺陷類別清單＋閱讀地圖＋校準範例 |
 | 第二遍 schema | `references/schema-checklist.md` | schema 缺陷類別清單 |
 | 第二遍 env | `references/env-audit.md` | 唯讀指令全集、SQL、安全紅線、Dashboard 人工清單 |
-| 產出 | `references/reporting.md` | 報告格式、tasks.csv 寫入規則、gh issue 範本 |
+| 產出 | `references/reporting.md` | 報告格式、tasks-todo.csv 寫入規則、gh issue 範本 |
 
 ## 審查原則（所有範圍共通）
 
@@ -35,8 +35,8 @@ description: 軟體開發審查（審查, review, code review, 環境審查, sch
    - **P2**＝品質改善（一致性、可維護性、可觀測性）
 3. **每個發現必附**：檔案位置（`path:line`）、具體失敗情境（什麼輸入／狀態→什麼錯誤結果）、建議修法。**無法給出失敗情境的不算發現**——這條同時是防幻覺機制：強迫推理而非模式比對。
 4. **看「設計了但沒用到什麼」**：schema 的約束／欄位／表若程式從未使用，防線可能形同虛設。每個防護機制都要找到程式使用點。
-5. **先建立基準**：開始前讀 `CLAUDE.md`、`docs/tasks.csv`、`git log --oneline -15`。
-6. **輸出前強制去重**：所有發現先與 `docs/tasks.csv`（審查發現類任務）＋ `gh issue list --state all` 比對——**依根本原因比對、不是依檔案位置**。已列管未修的不重報（報告末尾帶過狀態）；標示已修的要驗證修法正確，修錯＝新發現；部分重疊的報新增部分並註明關聯。完整程序見 `references/reporting.md` 步驟 0。不可因「該區域已有列管問題」就跳過不看——那裡曾出過問題，代表值得再看。
+5. **先建立基準**：開始前讀 `CLAUDE.md`、`docs/tasks-todo.csv`（待辦/已列管未修）＋`docs/tasks-done.md`（已完成/已修，判斷是否驗證修法）、`git log --oneline -15`。
+6. **輸出前強制去重**：所有發現先與 `docs/tasks-todo.csv`（待辦）＋`docs/tasks-done.md`（已完成/已修）＋ `gh issue list --state all` 比對——**依根本原因比對、不是依檔案位置**。已列管未修的不重報（報告末尾帶過狀態）；標示已修的要驗證修法正確，修錯＝新發現；部分重疊的報新增部分並註明關聯。完整程序見 `references/reporting.md` 步驟 0。不可因「該區域已有列管問題」就跳過不看——那裡曾出過問題，代表值得再看。
 
 ## 執行流程
 
@@ -48,7 +48,7 @@ description: 軟體開發審查（審查, review, code review, 環境審查, sch
    - 告警缺口：「哪些故障會在客人抱怨之前被發現？」逐一檢視 webhook 失敗／email 失敗／訂單卡 pending
    - 文件一致性：`docs/data-model.md`、`user-flow.md` 是否跟上實作演進
    - 依賴安全：`pnpm audit`
-5. 依 `references/reporting.md` 產出：發現自動寫入 `docs/review-findings.md`（無人值守亦可）；**只有 md 中使用者標「確認」的項目**才轉 tasks.csv＋GitHub issues
+5. 依 `references/reporting.md` 產出：發現自動寫入 `docs/review-findings.md`（無人值守亦可）；**只有 md 中使用者標「確認」的項目**才轉 tasks-todo.csv＋GitHub issues
 
 ## 歷史審查記錄
 

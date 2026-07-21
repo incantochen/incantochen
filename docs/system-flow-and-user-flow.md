@@ -1,7 +1,7 @@
 # incantochen 系統流程與 User Flow 統整
 
 > 文件產出日期：2026-07-20
-> 用途：把散落於 `user-flow.md`、`ops-runbook.md`、`tasks.csv` 與程式碼的行為，收斂成四層對齊視圖（User Flow → 系統流程 → 系統錯誤處理 → 人工救援）。
+> 用途：把散落於 `user-flow.md`、`ops-runbook.md`、`tasks-todo.csv` 與程式碼的行為，收斂成四層對齊視圖（User Flow → 系統流程 → 系統錯誤處理 → 人工救援）。
 > 權威來源：程式碼（`src/lib/order/`、`src/app/api/`）與 `docs/ops-runbook.md` 為準；本檔為開發層對齊，過時就以程式碼修正。
 > 現況座標：M-1/M0/M1 全完成 → **M2 進行中**（金流兜底、購物車失效偵測、自動化測試收尾）→ M3（後台 CRUD）→ M4（打磨/SEO）→ M5（上線必備）。核心閉環（瀏覽→配置→結帳→綠界付款→查單→售後）程式已跑通。
 
