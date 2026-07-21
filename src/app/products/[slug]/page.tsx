@@ -67,12 +67,18 @@ export async function generateMetadata({
     return {};
   }
 
-  const categoryLabel = CATEGORY_LABELS[product.category];
+  // ?? category：DB enum 若新增品類但程式尚未重新部署的窗口期，label 查無會是
+  // undefined，直接串進 meta description 會外露「undefined」到搜尋摘要——退回
+  // 原始 code 字串至少不出亂字。
+  const categoryLabel = CATEGORY_LABELS[product.category] ?? product.category;
   const startPrice = computeStartPrice(
     product.base_price,
     product.product_option,
   );
-  const description = `半客製${categoryLabel}「${product.name}」，NT$ ${startPrice.toLocaleString()} 起。可選寶石顏色與金屬色，即時計價，下單後專屬訂製。`;
+  // toLocaleString 明示 zh-TW：不指定 locale 時千分位格式取決於 runtime ICU
+  // 預設語系（非 Vercel／自架環境可能變成「27.500」歐式句點），會被搜尋摘要與
+  // 分享卡誤讀成價格。
+  const description = `半客製${categoryLabel}「${product.name}」，NT$ ${startPrice.toLocaleString("zh-TW")} 起。可選寶石顏色與金屬色，即時計價，下單後專屬訂製。`;
   const canonicalPath = `/products/${product.slug}`;
 
   return {
@@ -110,7 +116,9 @@ export default async function ProductDetailPage({
     (a, b) => a.sort_order - b.sort_order,
   );
 
-  const categoryLabel = CATEGORY_LABELS[product.category];
+  // ?? category：DB enum 新增品類但程式未重部署的窗口期，label 查無退回 code
+  //（同 generateMetadata），避免麵包屑／JSON-LD 出現 undefined。
+  const categoryLabel = CATEGORY_LABELS[product.category] ?? product.category;
 
   const configuratorOptions: ConfiguratorOption[] = options.map((option) => ({
     id: option.id,
