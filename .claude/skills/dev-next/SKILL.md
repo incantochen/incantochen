@@ -1,6 +1,6 @@
 ---
 name: dev-next
-description: 開發迴圈的實作與結案階段（下一個任務, next task, 開始修, 實作任務, 結案, close out）。從 tasks.csv 依優先級與批次耦合挑出下一個該做的任務（或指定 T##），走 feature branch 實作→測試→PR；merge 後執行結案回寫（tasks.csv／GitHub issues／review-findings.md）。與 dev-review 組成完整 harness loop：審查→裁決→轉任務→實作→驗收→結案→回歸。
+description: 開發迴圈的實作與結案階段（下一個任務, next task, 開始修, 實作任務, 結案, close out）。從 tasks-todo.csv 依優先級與批次耦合挑出下一個該做的任務（或指定 T##），走 feature branch 實作→測試→PR；merge 後執行結案回寫（從 tasks-todo.csv 移除該任務、於 tasks-done.md 加一行結案索引／GitHub issues／review-findings.md）。與 dev-review 組成完整 harness loop：審查→裁決→轉任務→實作→驗收→結案→回歸。
 ---
 
 # dev-next：實作與結案（harness loop 第④⑥段）
@@ -10,7 +10,7 @@ description: 開發迴圈的實作與結案階段（下一個任務, next task, 
 ```
 ①dev-review 排程審查 → review-findings.md（自動）
 ②使用者標「確認」（人工裁決）
-③轉任務＋批次耦合分析 → tasks.csv＋issues（半自動）
+③轉任務＋批次耦合分析 → tasks-todo.csv＋issues（半自動）
 ④/dev-next：挑任務→實作→PR          ← 本 skill
 ⑤使用者跑 /code-review ultra → merge（人工驗收）
 ⑥/dev-next close T##：結案回寫        ← 本 skill
@@ -27,7 +27,7 @@ description: 開發迴圈的實作與結案階段（下一個任務, next task, 
 
 ### 1. 挑任務（無指定時）
 
-讀 `docs/tasks.csv`，依序過濾：
+讀 `docs/tasks-todo.csv`（待辦唯一權威，只含未開始/進行中），依序過濾：
 1. 狀態＝未開始、且依賴欄的任務全部完成
 2. 優先級 P0 → P1 → P2；同級依里程碑（M2 先於 M5）
 3. **批次耦合**：任務說明含【批次N】者，整批一起做、不可單獨拆出；批次有前置（如 T85 先於批次1）則前置優先
@@ -56,7 +56,11 @@ description: 開發迴圈的實作與結案階段（下一個任務, next task, 
 確認 PR 已 merge（`gh pr view` 狀態 MERGED）後，一次完成：
 
 1. `git checkout master && git pull`
-2. `docs/tasks.csv`：該任務（含批次成員）狀態改「完成」，說明補「✅ 完成（日期）：一句話摘要＋PR 編號」
+2. **任務移動（tasks-todo.csv → tasks-done.md）**：該任務（含批次成員）
+   - 從 `docs/tasks-todo.csv` **刪除該列**（不再是待辦）
+   - 於 `docs/tasks-done.md` 對應階段區段**加一行結案索引**：`- **T##** 任務標題 · ✅完成 · PR #n — 一句摘要`（摘要一句即可，**完整細節看 PR/git，不重抄長敘事**）
+   - 若任務被取消：同樣從 todo 移除、done 加一行標 `🚫取消`＋原因一句
+   - ⚠️ 決策若有更動 → 回寫 `docs/decisions.csv`（決策唯一權威），不寫進任務列
 3. GitHub issues：若 PR 未帶 `Closes #NN` 自動關閉，補 `gh issue close #NN --comment "已於 PR #MM 修復"`
 4. `docs/review-findings.md`：對應 F 項狀態改「已修復」附 PR 編號；若修的是 T 任務也更新回歸狀態區
 5. `docs/security-foundation.md`：merge 的 PR 若動到資安地基（RLS／service role 擁有權／guest token／驗價／cron 驗證／timing-safe／webhook 冪等／email escape／CSP／IP 信任／限流／{error} 檢查），**同步增修對應不變式條目**（新防線加條目、錨點變更改錨點）——清單過時＝每週漂移檢核失效

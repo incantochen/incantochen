@@ -10,12 +10,12 @@
 
 ## 0. 目前實際狀態與 Durable 架構規則
 
-> **（2026-07-08 瘦身改版）** 任務進度唯一權威來源＝`docs/tasks.csv`，逐次作業細節見 `docs/work-log.md`——完成任務**不再**逐條追記於本檔。本節只保留「寫程式時隨時要記得」的環境事實與跨任務規則；歷次任務的完整敘事（原 2026-07-04 版頂部狀態區）備份於 `../backup/_backup_docs_20260707/CLAUDE.md`。
+> **（2026-07-22 瘦身改版）** 任務進度唯一權威＝`docs/tasks-todo.csv`（待辦）＋`docs/tasks-done.md`（完成索引）；決策見 `docs/decisions.csv`；逐次作業/接手見 `docs/work-log.md`——完成任務**不再**逐條追記於本檔。本節只保留「寫程式時隨時要記得」的環境事實與跨任務規則；歷次任務的完整敘事（原 2026-07-04 版頂部狀態區）備份於 `../backup/_backup_docs_20260707/CLAUDE.md`。
 
 ### 0.1 環境事實
 
 - 技術棧全數已安裝可用：Next.js 16.2.9 骨架、shadcn/ui＋品牌 token（`globals.css @theme`）、Supabase、Zod、Resend、vitest、ECPay 串接、Sentry、Upstash Redis。
-- **DB**：雲端 production（project-ref `wdmigbqdhernmrfpzzxk`）已套用 migrations `0001`–`0007`（14 張表＋RLS deny-by-default）。改 schema 一律**新增** migration（已套用不可改）、**先 `db push` 再 merge/部署**、改完 `gen types`。
+- **DB**：雲端 production（project-ref `wdmigbqdhernmrfpzzxk`）已套用 migrations `0001`–`0021`（16 張表＋4 RPC＋RLS deny-by-default）。改 schema 一律**新增** migration（已套用不可改）、**先 `db push` 再 merge/部署**、改完 `gen types`。
 - `.env.local` 接**雲端 production**（非本機 `127.0.0.1:54321`）；seed／測試資料本機＋雲端各跑一次（本機 `db reset --local`＋雲端 `db query --linked --file`）。
 - Vercel env vars／Supabase secret／各家 Dashboard 一律**使用者本人**操作，不經過 Claude。
 - Production：`https://jewelry-shop-delta.vercel.app`；staging preview 別名：`https://jewelry-shop-git-staging-fishead02290-3279s-projects.vercel.app`。
@@ -42,7 +42,7 @@
 - **產品**：**incantochen** — 高端半客製彩色寶石飾品電商。MVP 做「半客製」——標準款 + 客人選配，價格選配當下即時計算，走標準電商結帳。**全品類**：戒指／耳環／手鍊／項鍊。
 - **全客製**（報價→確認書→鎖價）為 Phase 3，**MVP 僅做預約／詢問表單**。
 - **核心策略**：單人開發、骨架優先、**戒指起步**，其他品類（耳環／項鍊／手鍊）日後靠後台自行擴充。
-- **目前階段**：M-1／M0／M1 ✅ 全數完成（T48 暫緩；商品圖策略已拍板 C-1〔2026-07-14〕：T55／T56 取消，改 T116 AI 批次生成全矩陣＋T17 組合鍵查圖）→ **M2 進行中**（完成／待修清單見 `docs/tasks.csv`）→ M3 → M4 → M5。**開發流程全貌見 [`docs/dev-process.md`](docs/dev-process.md)；人工救援程序見 [`docs/ops-runbook.md`](docs/ops-runbook.md)；上線必要子集（🚀 分級）見 [`docs/launch-scope.md`](docs/launch-scope.md)。**
+- **目前階段**：M-1／M0／M1 ✅ 全數完成（T48 暫緩；商品圖策略已拍板 C-1〔2026-07-14〕：T55／T56 取消，改 T116 AI 批次生成全矩陣＋T17 組合鍵查圖）→ **M2 進行中**（待辦見 `docs/tasks-todo.csv`、完成索引見 `docs/tasks-done.md`）→ M3 → M4 → M5。**開發流程全貌見 [`docs/dev-process.md`](docs/dev-process.md)；人工救援程序見 [`docs/ops-runbook.md`](docs/ops-runbook.md)；上線必要子集（🚀 分級）見 [`docs/launch-scope.md`](docs/launch-scope.md)。**
 
 ---
 
@@ -75,7 +75,7 @@
 
 - `tsconfig.json` 啟用 `strict: true`，並額外開 **`noUncheckedIndexedAccess: true`**（金流／電商必備，強制處理取值可能為 undefined）。
 - 路徑別名 `@/*` → `./src/*`。
-- **Supabase 型別自動生成**：每次改 schema 後跑 `supabase gen types typescript`，產出 14 張表的型別，查詢要有端到端型別安全。
+- **Supabase 型別自動生成**：每次改 schema 後跑 `supabase gen types typescript`，產出 16 張表的型別，查詢要有端到端型別安全。
 - 環境變數集中於有型別的 env 模組，不在各處散用 `process.env.XXX`。
 
 **版本策略：**
@@ -95,7 +95,7 @@
 - `src/components` — 全站共用元件；`src/components/ui` — shadcn/ui 元件（新增用 `pnpm dlx shadcn@latest add <component>`）
 - `src/lib` — 工具函式與模組：`supabase/`（三支 client）、`quote/`（報價引擎，**伺服器端為準**）、`ecpay/`、`email/`、`notification/`、`order/`、`auth/`、`cart/`、`support/`、`pii/`、`env.ts`＋`env.server.ts`（集中、有型別的環境變數）
 - `src/types` — 共用型別；`database.types.ts`（Supabase 生成，14 表）
-- `supabase/` — migration SQL（`0001`–`0007`）、`seed.sql`
+- `supabase/` — migration SQL（`0001`–`0021`）、`seed.sql`
 - `docs/` — 所有規劃與規範文件（見 `docs/docs-index.md`）
 - `public/brand/` — 品牌素材：logo、favicon、3D 合成商品圖、OG/social 圖（⏳ 待產出）
 
@@ -126,7 +126,7 @@
 
 ---
 
-## 5. 資料模型（15 張表，勿隨意增刪表；破例僅限已核決策：T33 `support_request`、T80 `pii_access_log`〔決策 #13，migration 0009 已套用〕）
+## 5. 資料模型（16 張表，勿隨意增刪表；破例僅限已核決策：T33 `support_request`、T80 `pii_access_log`〔決策 #13〕、T11 `product_image`〔migration 0012〕）
 
 - **商品與選項**：Product、OptionType、OptionValue、ProductOption、ProductOptionValue
 - **會員與購物車**：Member、Cart、CartItem
@@ -153,7 +153,7 @@
 
 **其他硬性規則：**
 
-- ✅ **RLS（T46 已完成）**：13 表全 enable、deny-by-default。商品/選項公開唯讀且限 `status='active'`；帳務表禁硬刪；後台 admin 走 service role。
+- ✅ **RLS（T46 已完成）**：16 表全 enable、deny-by-default。商品/選項公開唯讀且限 `status='active'`；帳務表禁硬刪；後台 admin 走 service role。
 - **卡號不落地**：信用卡資訊全程交給綠界。
 - **金流冪等**：Webhook＋主動對帳 API 共用冪等鎖；逾時 ≠ 失敗；重付前先查是否已付款。
 - **登入防護**：magic link 落地頁需使用者再按一次才消耗 token；token 高熵／單次／短效。

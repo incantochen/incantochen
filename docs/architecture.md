@@ -2,7 +2,7 @@
 
 > 文件更新日期：2026-07-20（自 2026-07-07 初版全面刷新，對齊 M2 進行中現況）
 > 用途：全專案系統架構總覽——模組職責、相依關係、資料流、第三方服務互動、部署架構、架構 Gap Analysis。
-> 維護原則：架構有變（新模組／新第三方服務／流程改向）時更新對應章節與圖；Gap 條目落地成任務後移除、改在 `tasks.csv` 追蹤。
+> 維護原則：架構有變（新模組／新第三方服務／流程改向）時更新對應章節與圖；Gap 條目落地成任務後移除、改在 `tasks-todo.csv` 追蹤。
 > 交叉參考：訂單狀態機與金流兜底對帳三臂的完整敘事見 [`system-flow-and-user-flow.md`](system-flow-and-user-flow.md)（附錄 A/B）與其視覺化版 `order-state-machine.html`；人工救援見 `ops-runbook.md`。
 
 ---
@@ -428,7 +428,7 @@ flowchart LR
 | 產品範圍 | `docs/PRD.md`、`docs/IA.md`、`docs/brand-guide.md`、`docs/launch-scope.md` |
 | 工程品質 | `docs/coding-system.md`（寫碼前必讀）、`docs/review-findings.md`、`docs/test-plan.md` |
 | 營運救援 | `docs/ops-runbook.md`、`docs/security-foundation.md` |
-| 任務／決策 | `docs/tasks.csv`、`docs/decisions.csv` |
+| 任務／決策 | `docs/tasks-todo.csv`、`docs/decisions.csv` |
 | 名詞對照 | `docs/glossary.md`／`glossary.html` |
 | ECPay 知識庫 | `.claude/skills/ecpay`（官方）、`docs/ecpay-blueprint/`、`docs/ecpg-migration-plan.md`（站內付 2.0） |
 
@@ -450,7 +450,7 @@ flowchart LR
 | 🟡 **自動化測試套件（E2E）未落地**：CI 目前只有 typecheck/lint/unit test，無 `verify:all`＋Playwright E2E | 金流閉環回歸靠人工 | **T106** |
 | 🟡 **後台仍單一 email 權限**：`requireAdmin`＝`ADMIN_EMAIL` 比對，非角色系統 | MVP 可接受，多人營運前再議 | T09 註記（MVP 做法） |
 
-### 8.2 已關閉缺口（存根，詳見 tasks.csv）
+### 8.2 已關閉缺口（存根，詳見 tasks-todo.csv）
 
 初版 §8.1／§8.2 的多數條目已落地：訂單建立交易化（**T76**）、狀態機 read-then-update race（**T92**）＋狀態＋log 交易化（**T110**）、建單即清車改付款成功才清（**T75**）、pending_payment 逾期取消（**T66/T74**）、sendOnce 失敗信自動重試（**T88**）、成功頁存取控制＋order_no 高熵（**T73**）、cart.guest_token unique（**T70/T08**）、訪客車併會員（**T81**）、cart/support 限流＋過期清理（**T78**）、PII 稽核落表（**T80**）、後台 CRUD（**T10–T13**）、CSP 動態 nonce（**T97**）、最小 CI（**T101**，關閉初版 G-03）、MerchantTradeNo parse 單一出處（**T96**，G-01）、死檔清除（**T100**，G-02）、reconcile 容量假設明碼化（**T102**，G-04/G-05）。webhook 側卡單自癒（**T127**）與記錄式退款（**T47**）為初版後新增並已落地。
 
