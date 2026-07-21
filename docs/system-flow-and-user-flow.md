@@ -48,6 +48,7 @@
 |------|----------|----------|----------|
 | 配置器 | 三層白名單控制（類別 `applies_to` → 款式 `ProductOption` → 值 `ProductOptionValue`） | 選值在白名單內 | 前端不得繞過白名單；非法值後端拒絕 |
 | 加入購物袋 | 寫 `unit_price_snapshot` ＋ `config_snapshot` 快照 | `cart.guest_token` 與 httpOnly cookie 一致（擁有權檢查） | token 不符 → 拒絕改動（防亂猜 id 動別人的車） |
+| 購物袋頁·失效偵測（**T138 規劃中**） | `getCart` 對每筆 `cart_item` 比對現況（商品仍 `active` ＋每個已選 `option_type`/`option_value` 仍在白名單顯示中） | 全部有效 | 任一失效 → 標「該商品或選項已不存在，請重新下單」＋**停用「前往結帳」**直到移除；查詢失敗 fail-open（結帳端 `verify-prices` 為最終兜底）。與 T117（PDP 擋新加）互補——本項擋**已加入購物車**的失效品 |
 | 結帳驗價 | **`verify-prices.ts` 依 DB 白名單重算**，絕不信任前端 | 前端價＝後端價 | 不一致 → 更新快照＋回 `priceUpdated`、**不建單**（R/S/Q loop，重跑驗價） |
 | Email 辨識 | 以 Email 找/建會員 | 全新 email → 自動建會員 | **命中既有會員**（T71）→ 不靜默掛單，回「需先登入」導 `/login` OTP 驗證後導回 |
 | 建立訂單 | 存訂單（待付款）＋同意內容＋時間戳 | 驗價通過 | — |
