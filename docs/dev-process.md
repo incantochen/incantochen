@@ -64,7 +64,7 @@ flowchart TD
     subgraph DEPLOY["🚀 部署（Vercel GitHub App 自動）"]
         F1["merge → master push<br/>🤖 自動 production 部署"]
         F2["staging 分支 push<br/>🤖 自動 preview 部署（固定別名）"]
-        F3["結案回寫：tasks-todo.csv 狀態＋<br/>work-log.md＋GitHub issues"]
+        F3["結案回寫：todo 移除＋tasks-done.md 加索引<br/>＋work-log.md＋GitHub issues"]
         E6 --> F1 --> F3
     end
 
@@ -112,7 +112,7 @@ flowchart TD
 | 維運 | **ops-runbook.md**（人工救援） | **Sentry**（T37）；**Vercel Cron** `/api/cron/ecpay-reconcile`（每日 18:00 UTC）；Vercel logs | Cron 僅 production 生效 |
 | 問題修復 | coding-system.md §3.5 三問（root cause 協定）→ 回寫案例庫 | /code-review；grep 擴散檢查 | 修 bug 先答三問；同 pattern 同批修 |
 | 排程審查 | 輸出：review-findings.md（F-###＋覆蓋表） | **/dev-review skill**（週一/四排程） | 只有使用者能確認 findings→轉任務 |
-| 結案 | tasks-todo.csv 回寫＋work-log.md＋issues close | /dev-next 結案段 | merge 完成 |
+| 結案 | todo 移除＋tasks-done.md 加索引＋work-log.md＋issues close | /dev-next 結案段 | merge 完成 |
 
 ---
 

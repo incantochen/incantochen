@@ -1,7 +1,8 @@
 # 開發審查發現（review-findings.md）
 
-> 本檔是 dev-review skill 的工作底稿與唯一累積點：無人值守執行時自動寫入，不動 tasks.csv、不開 issues。
-> **只有使用者能把狀態改成「確認」或「不採納」**；經確認的項目才由後續 session 轉入 tasks.csv＋GitHub issues。
+> 本檔是 dev-review skill 的工作底稿與唯一累積點：無人值守執行時自動寫入，不動 tasks-todo.csv、不開 issues。
+> **只有使用者能把狀態改成「確認」或「不採納」**；經確認的項目才由後續 session 轉入 tasks-todo.csv＋GitHub issues。
+> （下方各筆審查記錄內的 `tasks.csv` 為當時歷史狀態、原樣保留；2026-07-22 起任務權威為 `tasks-todo.csv`＋`tasks-done.md`。）
 > F 編號永久遞增不重用。
 
 ## 審查記錄
