@@ -22,67 +22,79 @@
 ## 不變式清單
 
 ### 1. RLS deny-by-default
+
 - 斷言：全表 enable RLS；前台僅「select own」或「公開唯讀且限 `status='active'`」；帳務表禁硬刪。
-- 錨點：`supabase/migrations/`（0001–0014）。
+- 錨點：`supabase/migrations/`（0001–0021）。
 - 驗法：本期新增 migration 逐支讀——不得出現放寬既有 policy／新表漏 enable；`grep -c "enable row level security"` 對表數。
 - 例外：admin 走 service role（設計如此）。
 
 ### 2. 寫入一律 service role＋擁有權檢查
+
 - 斷言：cart／訂單鏈／member／support_request 的每個 mutation action 在寫入前驗擁有權（`guest_token` 一致或 `member_id === user.id`）。
 - 錨點：`src/lib/supabase/service-role.ts`（`import "server-only"` 防呆）。
 - 驗法：grep `createServiceRoleClient` 本期新增呼叫點，逐一確認寫入前有擁有權守衛。
 
 ### 3. guest_token 生命週期
-- 斷言：httpOnly cookie、30 天 rolling **僅** `addToCart` 成功時重設；cart_item 任何改動前先驗 `cart.guest_token` 與 cookie 一致；90 天過期車由 cron 清，且清理 DELETE **重跑候選守衛**（`.is("member_id", null).lt("updated_at", cutoff)`，guarded delete）——SELECT→DELETE 空窗內被 touch 復活或登入認領（member_id 被設）的車不得被誤刪（T131／F-022）。
-- 錨點：`src/lib/cart/`、`/api/cron/cart-cleanup`。
-- 驗法：grep `guest_token` 新增讀寫點；cookie 設定點僅 addToCart 一處；cart-cleanup 的 `.delete()` 鏈仍帶 `member_id`／`updated_at` 兩守衛（勿被「DRY 成只綁 id」退化）。
+
+- 斷言：httpOnly cookie；**30 天 rolling 續期（重設效期）僅** `addToCart` 成功時發生；cookie **首簽（mint）**允許兩處——`addToCart`（訪客首次加車）與 `src/proxy.ts` 頁面首載**預簽**（T133／F-019 修法：消除首訪雙擊 addToCart 各自 `randomUUID()` 產不同 token 的競爭窗口），惟 proxy 分支**只在無 cookie 時 mint、絕不 roll**（`existingGuestToken ? null : randomUUID()`，已有 cookie 完全不動，決策 #14）；cart_item 任何改動前先驗 `cart.guest_token` 與 cookie 一致；90 天過期車由 cron 清，且清理 DELETE **重跑候選守衛**（`.is("member_id", null).lt("updated_at", cutoff)`，guarded delete）——SELECT→DELETE 空窗內被 touch 復活或登入認領（member_id 被設）的車不得被誤刪（T131／F-022）；登入併車（`merge-guest-cart.ts`）的 claim／merge／刪殼全走條件式 UPDATE＋`member_id IS NULL`／`updated_at` optimistic 守衛，無 orphan window（T81／T133）。
+- 錨點：`src/lib/cart/`、`src/proxy.ts`（guest_token 預簽）、`/api/cron/cart-cleanup`。
+- 驗法：grep `guest_token` 新增讀寫點；cookie **roll（續期）**點僅 addToCart 一處；cookie **mint（首簽）**點僅 addToCart＋proxy.ts 兩處，且 proxy 分支必為 mint-only（有 cookie 不動）；cart-cleanup 的 `.delete()` 鏈仍帶 `member_id`／`updated_at` 兩守衛（勿被「DRY 成只綁 id」退化）。
 
 ### 4. 價格唯一出處
+
 - 斷言：建單鏈上唯一的金額計算是 `verifyCartPrices`（DB 白名單重算）；不存在信任前端／快照價格的新路徑；價格變動回 `priceUpdated` 不建單。
 - 錨點：`src/lib/quote/verify-prices.ts`、`create-order-from-cart.ts`。
 - 驗法：grep `unit_price` / `total_amount` 的新運算點，逐一確認源頭是 verifyCartPrices 輸出。
 
 ### 5. Cron 驗證單一出處
+
 - 斷言：`CRON_SECRET` 只出現在 `require-cron-auth.ts` 與 env 模組；每支新 cron route 必經 `requireCronAuth`。
 - 錨點：`src/lib/cron/require-cron-auth.ts`。
 - 驗法：`grep -r CRON_SECRET src/` 出現位置僅上述兩處＋測試 mock；`src/app/api/cron/*/route.ts` 每支 import requireCronAuth。
 - 歷史教訓：F-021（第二支 cron 各自手刻比對、漏 timing-safe）。
 
 ### 6. Timing-safe 比對單一出處
+
 - 斷言：`timingSafeEqual` 只允許經 `src/lib/timing-safe-equal.ts`（sha256 digest 定長比對、不洩長度）；禁再手刻「比長度→timingSafeEqual」複本。
 - 錨點：`src/lib/timing-safe-equal.ts`；消費者：check-mac-value／order-access-token／require-cron-auth。
 - 驗法：`grep -rn "timingSafeEqual" src/` 除 helper 本體與其 import 外不得出現。
 - 歷史教訓：曾同時存在三份手刻複本（PR #70 收斂）。
 
 ### 7. Webhook／對帳冪等
+
 - 斷言：payment 狀態推進一律條件式 UPDATE（`.eq("status",…)` CAS）；關鍵信走 `sendOnce`（notification `unique(order_id,type)`）；新寫入路徑不得 check-then-act。
 - 錨點：`/api/ecpay/notify`、`/api/cron/ecpay-reconcile`、`src/lib/notification/send-once.ts`、`state-machine.ts`（transition RPC）。
 - 驗法：本期新增的 payment／orders UPDATE 逐一確認帶前置狀態條件。
 
 ### 8. Email escape
+
 - 斷言：客人自由輸入插進 HTML（email 模板）前一律 `escape-html.ts`。
 - 錨點：`src/lib/email/`、`src/lib/escape-html.ts`。
 - 驗法：grep email 模板的 `${` 插值，客人輸入欄位（姓名／地址／說明）逐一確認過 escapeHtml。
 - 歷史教訓：F-001（T72 修兩支、第三支漏）。
 
 ### 9. CSP 不變式（T97）
+
 - 斷言：(a) document CSP 唯一出處＝`src/proxy.ts`（每請求 nonce＋strict-dynamic，production）；(b) `next.config.ts` 僅設圖檔／favicon 靜態最小 CSP，**且其副檔名 source 與 proxy matcher 排除清單對齊**；(c) 全站無 `force-static`／`use cache`／`generateStaticParams`（nonce 依賴動態渲染）；(d) build 型別檢查僅 preview 關（PR #74）。
 - 錨點：`src/proxy.ts`（buildCsp＋matcher）、`next.config.ts`（headers＋typescript 區塊）。
 - 驗法：兩份副檔名清單 diff 比對；`grep -r "force-static\|use cache\|generateStaticParams" src/app` 應空。
 - 歷史教訓：PR #70 批內 matcher 與 next.config 清單即失同步（avif|ico）。
 
 ### 10. IP 信任模型（T121）
+
 - 斷言：client IP 唯一出處＝`src/lib/get-client-ip.ts`（`x-vercel-forwarded-for` → `x-forwarded-for` 最左 → null）；禁新增直接讀 forwarded 類 header 的點；null 時呼叫端跳過 IP 限流（不共用 bucket）。
 - 錨點：`src/lib/get-client-ip.ts`。
 - 驗法：`grep -rn "x-forwarded-for\|x-real-ip\|cf-connecting-ip\|x-vercel-forwarded-for" src/` 僅 helper 本體＋其測試。
 - 備註：掛 Cloudflare 時須把 cf-connecting-ip 調回首位（見檔內註解）。
 
 ### 11. 限流覆蓋
+
 - 斷言：可灌爆的寫入路徑（OTP 請求／驗證、購物車寫入、結帳、售後申請、訂單頁枚舉、**發票統編／條碼 ECPay 驗證**〔T129／F-024〕）都掛 `src/lib/rate-limit.ts` 的 limiter（各自 prefix、fail-open 走 safeLimit）。發票驗證因會對 ECPay 發外部請求＋是統編→公司名 oracle，另須在「確認 cart 非空」之後才呼叫（`checkout/actions.ts`）。
 - 錨點：`src/lib/rate-limit.ts`。
 - 驗法：本期新增的 server action／route 逐一問「可被灌爆嗎」；新 limiter 必有專屬 prefix。
 
 ### 12. Supabase `{error}` 必檢（§6／F-008／F-017 根因）
+
 - 斷言：每個 Supabase 呼叫解構並處理 `error`；「查詢失敗 ≠ 查無資料」——頁面層 throw 交 error boundary／顯示系統忙碌，不得誤報空清單／notFound／redirect 走人。
 - 錨點：全 codebase；error boundary：`app/cart|checkout|account/error.tsx`。
 - 驗法：本期新增的 `.from(` 查詢逐一確認 error 分支（開放式，配合 dev-review 的 F1 類別掃描）。
