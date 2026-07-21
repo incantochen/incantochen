@@ -26,7 +26,6 @@
 | `system-flow-and-user-flow.html` | **四層流程儀表板**（自帶樣式單檔）。上述 md 的圖解版＋頂部分類導覽。 |
 | `order-state-machine.html` | **訂單狀態機視覺化**（自帶樣式單檔，瀏覽器直接開）。七狀態六邊的觸發者/守衛/後續動作/例外、取消守衛 TOCTOU 並發時序、對帳三臂、守衛分層總表、QA 與情境。`system-flow-and-user-flow.md` 附錄 A/B 的圖解版。 |
 | `IA.md` | 資訊架構。網站地圖、導覽結構、URL 規劃（SEO）。 |
-| `brand-guide.md` | 品牌指南。色票（Primary Emerald `#063B2F`、Secondary Gold `#C5A059`）、字體、設計語言。 |
 | `competitive-analysis.md` | 競品分析。高端訂製珠寶站的配置器／呈現／結帳比較。（位於 `../docs/`，見下方） |
 
 ### 資料層
@@ -92,6 +91,7 @@
 
 | 檔案 | 用途 |
 |------|------|
+| `brand-guide.md` | 品牌指南。色票（Primary Emerald `#063B2F`、Secondary Gold `#C5A059`）、字體、設計語言。做任何 UI／頁面前必讀。 |
 | `wireframe/` | P05 線框（低保真）：`index`／`collection`／`product`／`cart`／`checkout`／`account`／`custom`／`payment-result`。做任何 UI／頁面前先讀對應頁面。 |
 
 ---
