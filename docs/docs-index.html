@@ -1,0 +1,292 @@
+<title>文件目錄 — incantochen</title>
+<style>
+  :root{
+    --ground:#F1F3F0; --surface:#FBFCFA; --surface-2:#F4F6F2;
+    --ink:#171A18; --muted:#5B615C; --faint:#858B85;
+    --hairline:#E0E3DD; --hairline-strong:#CFD4CC;
+    --accent:#0B6E63; --accent-soft:#0B6E6314; --accent-ink:#095A51;
+    --warn:#9A5E08; --warn-bg:#F7ECD6; --warn-line:#E4C98F;
+    --good:#1B7343; --good-bg:#E1EFE6; --good-line:#A9D4BA;
+    --danger:#AA342D; --danger-bg:#F5E2E0; --danger-line:#E1AFAB;
+    --info:#1F5F8B; --info-bg:#E1EAF2; --info-line:#A9C4DC;
+    --radius:12px; --radius-sm:8px;
+    --shadow:0 1px 2px rgba(20,28,24,.05),0 6px 20px -12px rgba(20,28,24,.18);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --serif:ui-serif,"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ground:#0F1312; --surface:#161A19; --surface-2:#1B201E;
+    --ink:#E7EAE6; --muted:#9AA19B; --faint:#757C76;
+    --hairline:#262C29; --hairline-strong:#333A36;
+    --accent:#45C3B1; --accent-soft:#45C3B11f; --accent-ink:#6fd3c4;
+    --warn:#E0B267; --warn-bg:#2E2413; --warn-line:#5A4A24;
+    --good:#6FCB92; --good-bg:#12271A; --good-line:#2C4E37;
+    --danger:#E8938C; --danger-bg:#2C1715; --danger-line:#58312D;
+    --info:#8FB8DA; --info-bg:#152430; --info-line:#2C4356;
+  }}
+  :root[data-theme="light"]{
+    --ground:#F1F3F0; --surface:#FBFCFA; --surface-2:#F4F6F2;
+    --ink:#171A18; --muted:#5B615C; --faint:#858B85;
+    --hairline:#E0E3DD; --hairline-strong:#CFD4CC;
+    --accent:#0B6E63; --accent-soft:#0B6E6314; --accent-ink:#095A51;
+    --warn:#9A5E08; --warn-bg:#F7ECD6; --warn-line:#E4C98F;
+    --good:#1B7343; --good-bg:#E1EFE6; --good-line:#A9D4BA;
+    --danger:#AA342D; --danger-bg:#F5E2E0; --danger-line:#E1AFAB;
+    --info:#1F5F8B; --info-bg:#E1EAF2; --info-line:#A9C4DC;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0F1312; --surface:#161A19; --surface-2:#1B201E;
+    --ink:#E7EAE6; --muted:#9AA19B; --faint:#757C76;
+    --hairline:#262C29; --hairline-strong:#333A36;
+    --accent:#45C3B1; --accent-soft:#45C3B11f; --accent-ink:#6fd3c4;
+    --warn:#E0B267; --warn-bg:#2E2413; --warn-line:#5A4A24;
+    --good:#6FCB92; --good-bg:#12271A; --good-line:#2C4E37;
+    --danger:#E8938C; --danger-bg:#2C1715; --danger-line:#58312D;
+    --info:#8FB8DA; --info-bg:#152430; --info-line:#2C4356;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1040px;margin:0 auto;padding:clamp(28px,5vw,58px) clamp(18px,4vw,44px) 96px;}
+
+  header{border-bottom:1px solid var(--hairline);padding-bottom:24px;margin-bottom:20px;}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-ink);display:flex;align-items:center;gap:10px;margin-bottom:15px;}
+  .eyebrow::before{content:"";width:22px;height:1px;background:var(--accent);display:inline-block;}
+  h1{font-family:var(--serif);font-weight:600;letter-spacing:-.01em;font-size:clamp(28px,5vw,42px);line-height:1.1;margin:0 0 12px;text-wrap:balance;}
+  .lede{color:var(--muted);font-size:15px;max-width:62ch;margin:0;}
+
+  /* reading order strip */
+  .readorder{margin-top:18px;padding:13px 17px;background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);}
+  .readorder .t{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;}
+  .readorder ol{margin:0;padding-left:2px;list-style:none;display:flex;flex-wrap:wrap;gap:6px 8px;counter-reset:r;}
+  .readorder li{counter-increment:r;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;}
+  .readorder li::before{content:counter(r);font-family:var(--mono);font-size:10px;color:var(--accent);border:1px solid var(--accent);border-radius:4px;width:16px;height:16px;display:grid;place-items:center;flex:0 0 auto;}
+  .readorder code{font-family:var(--mono);font-size:11.5px;color:var(--accent-ink);}
+
+  /* controls */
+  .controls{position:sticky;top:0;z-index:10;background:var(--ground);padding:16px 0 12px;margin-bottom:6px;border-bottom:1px solid var(--hairline);}
+  .search{position:relative;margin-bottom:11px;}
+  .search input{width:100%;font-family:var(--sans);font-size:15px;color:var(--ink);background:var(--surface);border:1px solid var(--hairline-strong);border-radius:var(--radius);padding:11px 40px;outline:none;transition:border-color .15s,box-shadow .15s;}
+  .search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  .search .ico{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:15px;pointer-events:none;}
+  .search .clear{position:absolute;right:10px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:var(--faint);font-size:18px;cursor:pointer;padding:4px 8px;line-height:1;border-radius:6px;display:none;}
+  .search .clear:hover{color:var(--ink);background:var(--surface-2);}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .chip{font-family:var(--mono);font-size:11px;padding:5px 11px;border-radius:100px;border:1px solid var(--hairline-strong);background:var(--surface);color:var(--muted);cursor:pointer;transition:all .14s;white-space:nowrap;}
+  .chip:hover{border-color:var(--accent);color:var(--accent-ink);}
+  .chip.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  @media (prefers-color-scheme:dark){.chip.active{color:#0F1312;}}
+  :root[data-theme="dark"] .chip.active{color:#0F1312;}
+  :root[data-theme="light"] .chip.active{color:#fff;}
+  .count{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:10px;}
+
+  section{margin-top:34px;scroll-margin-top:150px;}
+  section.hidden{display:none;}
+  .sec-head{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;}
+  h2{font-family:var(--serif);font-weight:600;font-size:19px;margin:0;letter-spacing:-.01em;}
+  .sec-path{font-family:var(--mono);font-size:11px;color:var(--faint);}
+
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  @media (max-width:720px){.cards{grid-template-columns:1fr;}}
+  .doc{background:var(--surface);border:1px solid var(--hairline);border-radius:var(--radius);box-shadow:var(--shadow);padding:13px 16px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden;}
+  .doc.hidden{display:none;}
+  .doc::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--tc,transparent);}
+  .doc.t-html{--tc:var(--accent);}
+  .doc.t-auth{--tc:var(--good);}
+  .doc.t-archive{--tc:var(--faint);}
+  .doc-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .doc .nm{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--ink);word-break:break-word;}
+  .badge{font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:100px;border:1px solid var(--hairline-strong);color:var(--faint);letter-spacing:.03em;white-space:nowrap;}
+  .badge.md{color:var(--info);border-color:var(--info-line);background:var(--info-bg);}
+  .badge.csv{color:var(--warn);border-color:var(--warn-line);background:var(--warn-bg);}
+  .badge.html{color:var(--accent-ink);border-color:var(--accent);background:var(--accent-soft);}
+  .badge.other{color:var(--faint);}
+  .tag{font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:100px;white-space:nowrap;}
+  .tag.auth{color:var(--good);background:var(--good-bg);border:1px solid var(--good-line);}
+  .tag.must{color:var(--danger);background:var(--danger-bg);border:1px solid var(--danger-line);}
+  .tag.live{color:var(--accent-ink);background:var(--accent-soft);border:1px solid var(--accent);}
+  .tag.arch{color:var(--faint);background:var(--surface-2);border:1px solid var(--hairline);}
+  .doc .desc{font-size:12.5px;color:var(--muted);}
+  .doc .desc b{color:var(--ink);}
+  .doc .desc code{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--hairline);border-radius:4px;padding:0 4px;color:var(--accent-ink);}
+  mark{background:var(--accent-soft);color:var(--accent-ink);border-radius:3px;padding:0 1px;font-weight:600;}
+
+  .empty{display:none;text-align:center;padding:46px 20px;color:var(--muted);font-size:14px;}
+  .empty.show{display:block;}
+
+  footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--hairline);font-family:var(--mono);font-size:11.5px;color:var(--faint);display:flex;flex-wrap:wrap;gap:6px 20px;}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">incantochen · 文件目錄</div>
+    <h1>docs 導覽</h1>
+    <p class="lede">全專案文件的位置與用途，讓 Claude 與人快速對齊、避免讀錯檔案。輸入關鍵字即時搜尋，或點分類篩選。<code>🟢 唯一權威</code>、<code>🔵 互動 HTML</code>、<code>灰 封存</code> 以左側色條與標籤區分。</p>
+    <div class="readorder">
+      <div class="t">開發任務時建議讀取順序</div>
+      <ol>
+        <li><code>CLAUDE.md</code></li>
+        <li><code>tasks-todo.csv</code></li>
+        <li><code>work-log.md</code></li>
+        <li>對應規劃文件</li>
+        <li><code>memory.md</code>（為什麼這樣定）</li>
+      </ol>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="search">
+      <span class="ico">⌕</span>
+      <input id="q" type="search" placeholder="搜尋檔名或用途⋯（例：對帳、狀態機、金鑰、tasks）" autocomplete="off" aria-label="搜尋文件">
+      <button class="clear" id="clear" aria-label="清除">×</button>
+    </div>
+    <div class="chips" id="chips">
+      <button class="chip active" data-cat="all">全部</button>
+      <button class="chip" data-cat="root">根目錄</button>
+      <button class="chip" data-cat="plan">規劃</button>
+      <button class="chip" data-cat="data">資料層</button>
+      <button class="chip" data-cat="task">任務與決策</button>
+      <button class="chip" data-cat="log">開發日誌</button>
+      <button class="chip" data-cat="quality">工程品質</button>
+      <button class="chip" data-cat="ops">營運</button>
+      <button class="chip" data-cat="misc">其他</button>
+      <button class="chip" data-cat="wire">視覺參考</button>
+    </div>
+    <div class="count" id="count"></div>
+  </div>
+
+  <div id="list"></div>
+  <div class="empty" id="empty">找不到符合的文件，換個關鍵字試試。</div>
+
+  <footer>
+    <span>incantochen · 高端半客製彩色寶石電商</span>
+    <span>docs-index.md 儀表板視圖 · 新增文件須回登 docs-index</span>
+  </footer>
+</div>
+
+<script>
+const CATS = [
+  { cat:"root", title:"根目錄", path:"jewelry-shop/" },
+  { cat:"plan", title:"規劃文件", path:"docs/" },
+  { cat:"data", title:"資料層", path:"docs/" },
+  { cat:"task", title:"任務與決策", path:"docs/" },
+  { cat:"log", title:"開發日誌與驗收", path:"docs/" },
+  { cat:"quality", title:"工程品質系統", path:"docs/" },
+  { cat:"ops", title:"營運", path:"docs/" },
+  { cat:"misc", title:"其他", path:"docs/" },
+  { cat:"wire", title:"視覺參考", path:"docs/" },
+];
+const DOCS = [
+  // root
+  {c:"root",n:"CLAUDE.md",t:"md",g:["must"],d:"<b>Claude Code 主入口</b>。專案施工圖：技術棧、開發規則、目前狀態。每次對話自動載入。"},
+  {c:"root",n:"memory.md",t:"md",d:"<b>durable 專案脈絡與 identity</b>（2026-07-22 瘦身）。品牌/客群/定位/技術選型/MVP 範圍/M-1 規劃決策——「為什麼這樣定」的敘事。不記進度/決策/資料模型。"},
+  // plan
+  {c:"plan",n:"PRD.md",t:"md",d:"產品需求文件。目標客群、Persona、MVP 成功指標、功能範圍界定。"},
+  {c:"plan",n:"user-flow.md",t:"md",d:"使用者流程。首購下單／回訪查單／售後申請等主要動線。"},
+  {c:"plan",n:"system-flow-and-user-flow.md",t:"md",d:"<b>四層系統流程統整</b>。L1 User Flow→L2 系統流程→L3 錯誤自動處置→L4 人工救援；附錄含狀態機與對帳三臂。"},
+  {c:"plan",n:"system-flow-and-user-flow.html",t:"html",g:["live"],d:"<b>四層流程儀表板</b>（互動單檔）。上述 md 的圖解版＋頂部分類導覽。"},
+  {c:"plan",n:"order-state-machine.html",t:"html",g:["live"],d:"<b>訂單狀態機視覺化</b>（互動單檔）。七狀態六邊的觸發者/守衛/後續動作/例外、TOCTOU 時序、對帳三臂、QA 與情境。"},
+  {c:"plan",n:"IA.md",t:"md",d:"資訊架構。網站地圖、導覽結構、URL 規劃（SEO）。"},
+  {c:"wire",n:"brand-guide.md",t:"md",d:"品牌指南。色票（Emerald <code>#063B2F</code>／Gold <code>#C5A059</code>）、字體、設計語言。"},
+  {c:"plan",n:"competitive-analysis.md",t:"md",d:"競品分析。高端訂製珠寶站的配置器／呈現／結帳比較。"},
+  // data
+  {c:"data",n:"architecture.md",t:"md",d:"<b>系統架構盤點</b>（2026-07-20 刷新）。模組職責、Runtime Flow、第三方互動、部署、Gap（16 表/4 RPC/3 Cron/對帳三臂/退款/發票/CI）。"},
+  {c:"data",n:"architecture.html",t:"html",g:["live"],d:"<b>architecture 儀表板</b>（互動單檔）。分層堆疊、模組盤點三層、本站 API、4 RPC、金流兜底、16 表、第三方、Gap。"},
+  {c:"data",n:"data-model.md",t:"md",d:"資料模型說明。表定義、欄位、關聯邏輯、快照契約。"},
+  {c:"data",n:"jewelry_mvp_ER.mermaid",t:"other",d:"ER Diagram 原始碼（Mermaid），隨時可讀。"},
+  {c:"data",n:"jewelry_mvp_ER.pdf",t:"other",d:"ER Diagram 視覺版（171KB）。非必要載入，需要視覺參考時再開。"},
+  {c:"data",n:"migration-runbook.md",t:"md",d:"Migration 操作手冊。schema 異動流程、Supabase CLI 指令、注意事項。"},
+  {c:"data",n:"migration-guide.md",t:"md",d:"Migration 概念說明。新增 migration 的規則與原則。"},
+  // task
+  {c:"task",n:"tasks-todo.csv",t:"csv",g:["auth","must"],d:"<b>待辦任務＝唯一權威</b>（由舊 tasks.csv 拆出）。未開始/進行中任務含依賴、預估、優先級。挑任務、看依賴都讀這份。"},
+  {c:"task",n:"tasks-done.md",t:"md",g:["archive"],d:"<b>已完成/取消任務的結案索引</b>（依階段）。每筆一行：任務·狀態·PR#·摘要；完整細節看 PR/git。"},
+  {c:"task",n:"decisions.csv",t:"csv",g:["auth"],d:"<b>決策唯一權威（待定＋已定）</b>。「這件事為什麼這樣定、在哪查」看這份。"},
+  {c:"task",n:"launch-scope.md",t:"md",d:"<b>上線必要子集</b>。A 硬性／B 體驗必要／C 決策擋路／D 上線後可修四級＋外部依賴；「距離上線還差什麼」看這份。"},
+  {c:"task",n:"sprint_overview.csv",t:"csv",d:"Sprint 總覽——2026-06-24 原始估算基準（歷史參考）；現況以 tasks-todo/done 為準。"},
+  // log
+  {c:"log",n:"work-log.md",t:"md",g:["must"],d:"<b>接手用時間軸</b>（2026-07-22 瘦身）。每則幾行：動了哪些任務·產出·下一步，指向 PR#/任務。跨對話接手必讀。"},
+  {c:"log",n:"work-log-archive.md",t:"md",g:["archive"],d:"<b>舊式長篇工作日誌封存</b>（06-25～07-18）。含各任務大表格與長敘述；歷史查閱用。"},
+  {c:"log",n:"verify-seed.sql",t:"other",d:"種子資料驗收 SQL。確認 seed.sql 套用後各表欄位正確性的逐條查詢。"},
+  // quality
+  {c:"quality",n:"coding-system.md",t:"md",g:["must"],d:"<b>寫程式的思考系統</b>。逆向推理四問、系統性思考、PR 前檢核清單、真實 bug 案例庫。<b>寫任何程式碼前必讀</b>。"},
+  {c:"quality",n:"review-findings.md",t:"md",d:"審查發現底稿（2026-07-22 瘦身）。dev-review 產出：審查歷程摘要、發現一行索引、老化提醒、檔案覆蓋表。"},
+  {c:"quality",n:"review-findings-archive.md",t:"md",g:["archive"],d:"<b>審查發現封存</b>。各 F 完整敘事（失敗情境/修法）、審查記錄完整備註、逐日回歸狀態塊。"},
+  {c:"quality",n:"dev-process.md",t:"md",d:"<b>開發流程全貌</b>。需求→規劃→開發→審查→測試→PR→部署→維運全流程圖、流程×文件×工具對照、Gap Analysis。"},
+  {c:"quality",n:"test-plan.md",t:"md",d:"<b>E2E 測試計畫與紀錄規範</b>（實作＝T106）。S1–S7 案例矩陣、verify:all 一鍵流程、測試紀錄產出規範、資料安全紅線。"},
+  // ops
+  {c:"ops",n:"ops-runbook.md",t:"md",d:"<b>人工救援 Runbook</b>（T90）。已知異常情境的判斷、修復 SQL／步驟、修復順序與風險、何時聯絡綠界。"},
+  {c:"ops",n:"security-account-key-ops.md",t:"md",d:"<b>T91 帳號與金鑰營運安全清單</b>。可逐項打勾：2FA／金鑰清冊輪替／Dependabot／Vercel WAF＋BotID／監控／洩漏應變劇本。"},
+  {c:"ops",n:"security-foundation.md",t:"md",d:"資安地基不變式清單。/security-foundation skill 逐條驗證的單一出處（每週三漂移檢核）。"},
+  {c:"ops",n:"ecpay-blueprint/",t:"other",d:"ECPay 金流架構藍圖（可重用規劃，19 份）。服務全景／API 能力矩陣／架構／流程／測試；閱讀路徑見其 README。"},
+  {c:"ops",n:"ecpg-migration-plan.md",t:"md",d:"站內付 2.0 取代 AIO 信用卡規劃（📋 未定案）。五階段執行方案、影響範圍、Pass Criteria；MVP 上線後才動工。"},
+  // misc
+  {c:"misc",n:"glossary.md",t:"md",d:"<b>專有名詞縮寫對照</b>。六領域＋第三方服務對照；每條「縮寫—全稱—白話說明」一行。"},
+  {c:"misc",n:"glossary.html",t:"html",g:["live"],d:"<b>glossary 互動版</b>（單檔）。即時搜尋＋七領域分類篩選＋命中高亮。"},
+  {c:"misc",n:"docs-index.md",t:"md",d:"文件目錄（本頁的原始 md）。全檔案位置與用途；新增文件須回登這份。"},
+  {c:"misc",n:"docs-index.html",t:"html",g:["live"],d:"<b>docs-index 儀表板</b>（本頁）。搜尋＋分類篩選的文件導覽。"},
+  {c:"misc",n:"setup-checklist.md",t:"md",d:"環境建置 Checklist。初始安裝步驟確認清單。"},
+  // wire
+  {c:"wire",n:"wireframe/",t:"other",d:"P05 線框（低保真）：index／collection／product／cart／checkout／account／custom／payment-result。做 UI 前先讀對應頁。"},
+];
+
+const listEl=document.getElementById("list");
+const qEl=document.getElementById("q");
+const clearEl=document.getElementById("clear");
+const chipsEl=document.getElementById("chips");
+const countEl=document.getElementById("count");
+const emptyEl=document.getElementById("empty");
+
+const TAGMAP={auth:"🟢 唯一權威",must:"必讀",live:"互動",archive:"封存"};
+const TAGCLS={auth:"auth",must:"must",live:"live",archive:"arch"};
+let total=0;
+CATS.forEach(cat=>{
+  const docs=DOCS.filter(d=>d.c===cat.cat);
+  const s=document.createElement("section");
+  s.dataset.cat=cat.cat;
+  s.innerHTML=`<div class="sec-head"><h2>${cat.title}</h2><span class="sec-path">${cat.path}</span></div>`;
+  const grid=document.createElement("div");grid.className="cards";
+  docs.forEach(d=>{
+    total++;
+    const el=document.createElement("div");
+    el.className="doc"+(d.t==="html"?" t-html":"")+((d.g||[]).includes("auth")?" t-auth":"")+((d.g||[]).includes("archive")?" t-archive":"");
+    el.dataset.search=(d.n+" "+d.d).toLowerCase().replace(/<[^>]+>/g,"");
+    el.dataset.nm=d.n;
+    const badge=`<span class="badge ${d.t}">${d.t==="other"?(d.n.endsWith("/")?"資料夾":d.n.split(".").pop()):d.t.toUpperCase()}</span>`;
+    const tags=(d.g||[]).map(g=>`<span class="tag ${TAGCLS[g]}">${TAGMAP[g]}</span>`).join("");
+    el.innerHTML=`<div class="doc-top"><span class="nm">${d.n}</span>${badge}${tags}</div><div class="desc">${d.d}</div>`;
+    grid.appendChild(el);
+  });
+  s.appendChild(grid);
+  listEl.appendChild(s);
+});
+
+let activeCat="all";
+function esc(s){return s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+function apply(){
+  const q=qEl.value.trim().toLowerCase();
+  clearEl.style.display=q?"block":"none";
+  let shown=0;
+  document.querySelectorAll("section").forEach(sec=>{
+    const catOk=activeCat==="all"||sec.dataset.cat===activeCat;
+    let secShown=0;
+    sec.querySelectorAll(".doc").forEach(doc=>{
+      const match=catOk&&(!q||doc.dataset.search.includes(q));
+      doc.classList.toggle("hidden",!match);
+      if(match){secShown++;
+        const nmEl=doc.querySelector(".nm");
+        if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","ig");nmEl.innerHTML=esc(doc.dataset.nm).replace(re,"<mark>$1</mark>");}
+        else nmEl.textContent=doc.dataset.nm;
+      }
+    });
+    sec.classList.toggle("hidden",secShown===0);
+    shown+=secShown;
+  });
+  emptyEl.classList.toggle("show",shown===0);
+  countEl.textContent=(q||activeCat!=="all")?`顯示 ${shown} / ${total} 份文件`:`共 ${total} 份文件`;
+}
+qEl.addEventListener("input",apply);
+clearEl.addEventListener("click",()=>{qEl.value="";qEl.focus();apply();});
+chipsEl.addEventListener("click",e=>{const c=e.target.closest(".chip");if(!c)return;activeCat=c.dataset.cat;document.querySelectorAll(".chip").forEach(x=>x.classList.toggle("active",x===c));apply();});
+document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement!==qEl){e.preventDefault();qEl.focus();}if(e.key==="Escape"&&document.activeElement===qEl){qEl.value="";apply();qEl.blur();}});
+apply();
+</script>
