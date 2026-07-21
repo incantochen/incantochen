@@ -2,6 +2,11 @@ import type { MetadataRoute } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { getSiteUrl } from "@/lib/seo/site-url";
 
+// force-dynamic：sitemap 每次請求即時反映 DB 現況（用 createClient/cookies 本就
+// 傾向動態，這裡明示化）——同時杜絕 promote-preview 凍結 getSiteUrl() 網址的
+// 邊界（理由同 robots.ts）。
+export const dynamic = "force-dynamic";
+
 // T59：sitemap.xml。
 // - 商品用 anon client 撈（RLS 公開讀已限 status='active'，query 再明示一次），
 //   下架／封存商品自然不進 sitemap。

@@ -165,9 +165,13 @@ export default async function ProductDetailPage({
       "@type": "AggregateOffer",
       priceCurrency: "TWD",
       lowPrice: startPrice,
+      // MadeToOrder（非 InStock）：全站商品皆為下單後接單訂製（見 description
+      // 與 llms.txt），標 InStock 會讓 AI／搜尋引擎誤判為現貨可立即出貨、與
+      // 頁面「下單後專屬訂製、交期數十天」自相矛盾。MadeToOrder 為 schema.org
+      // ItemAvailability 合法值、Google 官方支援。暫停販售仍 OutOfStock。
       availability: unavailable
         ? "https://schema.org/OutOfStock"
-        : "https://schema.org/InStock",
+        : "https://schema.org/MadeToOrder",
       url: new URL(`/products/${product.slug}`, getSiteUrl()).toString(),
     },
   };
