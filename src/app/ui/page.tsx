@@ -1,6 +1,8 @@
 import { Button } from "@/components/ui/button"
 
-export const metadata = { title: "UI Kit — incantochen" }
+// title.absolute：跳過 root layout 的「%s｜incantochen」template（此頁自帶
+// 品牌名，套 template 會變成品牌名重複）。/ui 為開發用樣式對照頁。
+export const metadata = { title: { absolute: "UI Kit — incantochen" } }
 
 function Section({ title, dark = false, children }: { title: string; dark?: boolean; children: React.ReactNode }) {
   return (
