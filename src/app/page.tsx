@@ -98,15 +98,10 @@ export default async function Home() {
             作品即將上架，敬請期待。
           </div>
         ) : (
-          // flex + justify-center：商品少於一排時自動置中（手機 2 欄、桌機至多 4 欄）
-          <div className="flex flex-wrap justify-center gap-4 sm:gap-6">
+          // 與 collections/[category] 相同的格線（手機 2 欄、桌機 4 欄）
+          <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
             {featured.map((product) => (
-              <div
-                key={product.slug}
-                className="w-[calc(50%-0.5rem)] sm:w-[calc(50%-0.75rem)] lg:w-[calc(25%-1.125rem)]"
-              >
-                <ProductCard product={product} />
-              </div>
+              <ProductCard key={product.slug} product={product} />
             ))}
           </div>
         )}
