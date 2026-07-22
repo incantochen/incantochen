@@ -79,7 +79,7 @@ flowchart TD
     end
     F1 --> G1
 
-    subgraph AUDIT["🔁 排程審查迴路（週一/四）"]
+    subgraph AUDIT["🔁 排程審查迴路（routine 定期）"]
         H1["/dev-review skill<br/>兩遍式：對抗性＋類別清單"]
         H2["review-findings.md 累積 F-###<br/>＋檔案覆蓋表輪替"]
         H3["🧑 使用者裁決：確認/不採納"]
@@ -111,7 +111,7 @@ flowchart TD
 | 上線準備 | T38 checklist（tasks-todo.csv 內）；T82/T83/T34/T50 dashboard 項 | securityheaders.com 掃描（人工） | M5；全部 dashboard 項由使用者執行 |
 | 維運 | **ops-runbook.md**（人工救援） | **Sentry**（T37）；**Vercel Cron** `/api/cron/ecpay-reconcile`（每日 18:00 UTC）；Vercel logs | Cron 僅 production 生效 |
 | 問題修復 | coding-system.md §3.5 三問（root cause 協定）→ 回寫案例庫 | /code-review；grep 擴散檢查 | 修 bug 先答三問；同 pattern 同批修 |
-| 排程審查 | 輸出：review-findings.md（F-###＋覆蓋表） | **/dev-review skill**（週一/四排程） | 只有使用者能確認 findings→轉任務 |
+| 排程審查 | 輸出：review-findings.md（F-###＋覆蓋表） | **/dev-review skill**（routine 定期排程，班表見系統 routines） | 只有使用者能確認 findings→轉任務 |
 | 結案 | todo 移除＋tasks-done.md 加索引＋work-log.md＋issues close | /dev-next 結案段 | merge 完成 |
 
 ---

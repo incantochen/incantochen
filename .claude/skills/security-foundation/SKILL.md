@@ -1,6 +1,6 @@
 ---
 name: security-foundation
-description: 資安地基漂移檢核（地基審查, 不變式檢查, security foundation, 漂移, drift check）。依 docs/security-foundation.md 的不變式清單逐條機械驗證（grep＋定點讀），判定 ✅持平／⚠️漂移／❌破口；與開放式 dev-review 互補——dev-review 找未知新缺陷，本 skill 驗已知防線是否被新程式繞過或失同步。每週三排程＋動到地基的 PR merge 後可手動觸發。
+description: 資安地基漂移檢核（地基審查, 不變式檢查, security foundation, 漂移, drift check）。依 docs/security-foundation.md 的不變式清單逐條機械驗證（grep＋定點讀），判定 ✅持平／⚠️漂移／❌破口；與開放式 dev-review 互補——dev-review 找未知新缺陷，本 skill 驗已知防線是否被新程式繞過或失同步。有固定 routine 定期排程＋動到地基的 PR merge 後可手動觸發。
 ---
 
 # security-foundation：資安地基漂移檢核
@@ -10,7 +10,7 @@ description: 資安地基漂移檢核（地基審查, 不變式檢查, security 
 ## 使用方式
 
 - `/security-foundation`：檢查上次戳記以來的變動
-- 排程：每週三（頻率規則與退場條件見 `docs/security-foundation.md` 開頭，**每月檢視一次頻率**）
+- 排程：固定雲端 routine 定期執行（**實際班表以系統 routines 設定為準**，不在文件寫死星期）；頻率規則與退場條件見 `docs/security-foundation.md` 開頭，**每月檢視一次頻率**
 
 ## 流程
 
@@ -28,5 +28,5 @@ description: 資安地基漂移檢核（地基審查, 不變式檢查, security 
 
 - 唯讀審查：不改程式；發現問題走 findings 管線，不順手修。
 - 單 session、不派 subagent（驗法設計為 grep 級，成本 5–10 分鐘）。
-- 與 dev-review 錯開排程（週三 vs 週一四）；同一發現兩邊都撞到時依 F 編號去重。
+- 與 dev-review 錯開排程（**實際班表以系統 routines 設定為準**）；同一發現兩邊都撞到時依 F 編號去重。
 - 清單維護責任在 dev-next 結案流程（動到地基的 PR merge 時同步增修清單），本 skill 只驗證不擴寫——但第 6 步發現清單過時可修清單本身。
