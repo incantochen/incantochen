@@ -1,17 +1,15 @@
-"use client";
+import { buildGtagBootstrap } from "@/lib/analytics/gtag";
 
-import { useEffect } from "react";
-import { getStoredConsent } from "@/lib/analytics/consent";
-import { applyAnalyticsConsentGranted, initGtag } from "@/lib/analytics/gtag";
-
-// GA4 載入（T60，Consent Mode v2）。不用 inline <Script> 做 bootstrap——
-// 命令全在 effect 內經 initGtag 排入 dataLayer，之後才插入外部 gtag.js：
-// 保證佇列順序（consent default → 回訪者還原 → config → gtag.js 開始處理），
-// consent 還原共用 getStoredConsent／applyAnalyticsConsentGranted 單一實作，
-// 也不需在 script 字串裡插值 gaId。整個 effect 都是「同步外部系統」，
-// 無 setState（react-hooks/set-state-in-effect）。
-// CSP：production 下此 client chunk 經帶 nonce 的框架 script 載入，
-// createElement 插入的 gtag.js 由 strict-dynamic 傳遞信任；nonce 仍顯式帶上。
+// GA4 載入（T60，Consent Mode v2）——server component，渲染兩個帶 nonce 的
+// <script>，於 HTML parse 時執行（早於 hydration 與所有 tracker 的 effect）：
+//   1. inline bootstrap：同步建立 dataLayer＋gtag stub＋consent default，並在
+//      config 前依 cookie 還原 grant（見 buildGtagBootstrap 註解）。無 async，
+//      parse 到此即同步跑完 → window.gtag 立即可用，tracker effect 不再 no-op。
+//   2. loader：非同步抓 gtag.js，載入後依 dataLayer FIFO 補跑先前排入的命令。
+// CSP：兩個 <script> 都帶 nonce，過 script-src 'nonce-…' 'strict-dynamic'；
+// loader 動態插入的子腳本再由 strict-dynamic 傳遞信任。改用 server 端 <script>
+// 取代舊的 effect+createElement bootstrap，消除「bootstrap effect 晚於 tracker
+// effect 執行 → 首筆 purchase 漏送且被 localStorage 永久鎖死」的競態。
 export function GoogleAnalytics({
   gaId,
   nonce,
@@ -19,22 +17,17 @@ export function GoogleAnalytics({
   gaId: string;
   nonce?: string;
 }) {
-  useEffect(() => {
-    initGtag(gaId);
-    // 回訪者已同意過 → 還原 granted（新訪客維持 default denied，cookieless ping）
-    if (getStoredConsent() === "granted") {
-      applyAnalyticsConsentGranted();
-    }
-
-    // StrictMode／重掛防重複插入；initGtag 自身也有 window.gtag 既存防重跑
-    if (document.querySelector("script[data-ga-loader]") !== null) return;
-    const script = document.createElement("script");
-    script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(gaId)}`;
-    script.async = true;
-    script.setAttribute("data-ga-loader", "");
-    if (nonce) script.nonce = nonce;
-    document.head.appendChild(script);
-  }, [gaId, nonce]);
-
-  return null;
+  return (
+    <>
+      <script
+        nonce={nonce}
+        dangerouslySetInnerHTML={{ __html: buildGtagBootstrap(gaId) }}
+      />
+      <script
+        nonce={nonce}
+        async
+        src={`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(gaId)}`}
+      />
+    </>
+  );
 }

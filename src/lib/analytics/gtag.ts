@@ -2,6 +2,8 @@
 // NEXT_PUBLIC_GA_ID 未設（dev／preview）或 gtag 尚未 bootstrap 時全部 no-op，
 // 呼叫端不需要自己判斷 analytics 是否啟用。
 
+import { CONSENT_COOKIE } from "@/lib/analytics/consent";
+
 // 三個漏斗事件共用的 GA4 item 結構（單一出處，避免三份事件各自漂移）
 export type GaItem = {
   item_id: string;
@@ -18,27 +20,26 @@ function callGtag(...args: unknown[]) {
   window.gtag(...args);
 }
 
-// gtag bootstrap：掛 window.gtag ＋ Consent Mode v2 預設全 denied ＋ config。
-// 由 GoogleAnalytics 元件在載入 gtag.js「之前」呼叫——命令先排進 dataLayer，
-// gtag.js 載入後依序處理，保證 consent default 先於 config 生效。
-// ⚠️ gtag.js 只認 dataLayer 裡的 Arguments 物件，push 一般陣列命令不會生效，
-// 故這裡必須用 function ＋ arguments，不能用 arrow ＋ rest spread。
-export function initGtag(gaId: string) {
-  if (typeof window === "undefined" || typeof window.gtag === "function")
-    return;
-  window.dataLayer = window.dataLayer ?? [];
-  window.gtag = function gtag() {
-    // eslint-disable-next-line prefer-rest-params
-    window.dataLayer!.push(arguments);
-  };
-  window.gtag("consent", "default", {
-    ad_storage: "denied",
-    ad_user_data: "denied",
-    ad_personalization: "denied",
-    analytics_storage: "denied",
-  });
-  window.gtag("js", new Date());
-  window.gtag("config", gaId);
+// gtag bootstrap 腳本字串（由 GoogleAnalytics 以帶 nonce 的 inline <script>
+// 於 server 端渲染、parse 時「同步」執行——早於 React hydration 與所有 tracker
+// 的 effect，故 PurchaseTracker／BeginCheckoutTracker 觸發時 window.gtag 必已
+// 存在（不再 no-op 而漏送）。這正是 Google 官方 snippet 放 <head> 的理由。
+//
+// 命令順序（gtag.js 依 dataLayer FIFO 處理）：
+//   consent default(全 denied) → 回訪者 grant 還原 → js → config
+// grant 刻意在 config「之前」：config 會觸發自動 page_view，若 grant 落在其後，
+// 回訪已同意者的落地 page_view 會以 cookieless 送出、失去 _ga 連續性。
+// gaId 已由 AnalyticsRoot 以 /^G-[A-Z0-9]+$/i 驗過、CONSENT_COOKIE 為常數，
+// 插值無注入面；nonce 由 <script> 標籤帶上，過 CSP nonce+strict-dynamic。
+export function buildGtagBootstrap(gaId: string): string {
+  return [
+    "window.dataLayer=window.dataLayer||[];",
+    "function gtag(){dataLayer.push(arguments);}",
+    "gtag('consent','default',{ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied',analytics_storage:'denied'});",
+    `try{if(document.cookie.split('; ').indexOf('${CONSENT_COOKIE}=granted')!==-1)gtag('consent','update',{analytics_storage:'granted'});}catch(e){}`,
+    "gtag('js',new Date());",
+    `gtag('config','${gaId}');`,
+  ].join("");
 }
 
 // 同意後的 consent update 單一出處：banner「接受」與回訪者還原都走這裡。

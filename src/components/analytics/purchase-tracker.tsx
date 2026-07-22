@@ -25,11 +25,18 @@ export function PurchaseTracker({
     const key = `ga_purchase:${orderNo}`;
     try {
       if (window.localStorage.getItem(key) !== null) return;
+    } catch {
+      // localStorage 不可用（隱私模式）：靠 ref 擋同頁重跑，照送事件
+    }
+    // 先送再落旗標：若 gtag 尚未就緒（理論上 bootstrap 已同步掛好、此為兜底），
+    // 不會「未送出卻已鎖死、重整永不重試」。callGtag 會把命令排進 dataLayer，
+    // gtag.js 載入後補跑，故此處視同已送。
+    trackPurchase({ transactionId: orderNo, value, items });
+    try {
       window.localStorage.setItem(key, "1");
     } catch {
-      // localStorage 不可用：仍送事件（漏記比重複計嚴重），靠 ref 擋重跑
+      // localStorage 不可用：略過去重旗標，靠 ref 擋同頁重跑
     }
-    trackPurchase({ transactionId: orderNo, value, items });
   }, [orderNo, value, items]);
 
   return null;
