@@ -11,8 +11,8 @@ import { CATEGORY_NAV } from "@/components/site-nav-links"
 // 透明態（首頁 hero 上）沿用原本編輯感導覽；捲動轉實色後改列五品類。
 const OVERLAY_NAV = [
   { label: "COLLECTIONS", href: "/collections/ring" },
-  { label: "CUSTOM", href: "#" },
-  { label: "ABOUT", href: "#" },
+  { label: "CUSTOM", href: "/custom" },
+  { label: "ABOUT", href: "/#philo" },
 ]
 
 // 導覽列外殼（client）：首頁 hero 上透明浮層（paper 白字），捲離頂端後轉實色；
