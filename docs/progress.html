@@ -1,0 +1,1101 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>incantochen · 開發進度</title>
+<style>
+:root{
+  --bg:#f7f6f3; --panel:#ffffff; --ink:#1c211f; --muted:#6b726e; --line:#e5e3dd;
+  --accent:#0B6E63; --accent-soft:#0b6e6318; --rocket:#b8632a;
+  --p0:#b23b3b; --p1:#b8862b; --p2:#2f6f9e; --p3:#7a807c;
+  --ok:#2e7d54; --wip:#b8862b; --todo:#7a807c; --cancel:#a7aaa6;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#14171a; --panel:#1c2024; --ink:#e8eae7; --muted:#9aa19c; --line:#2b3035;
+    --accent:#4cb8a8; --accent-soft:#4cb8a822; --rocket:#e0894f;
+    --p0:#e07070; --p1:#ddb15a; --p2:#6fa6cf; --p3:#9aa19c;
+    --ok:#5fc38a; --wip:#ddb15a; --todo:#9aa19c; --cancel:#6c716d;
+  }
+}
+:root[data-theme="light"]{ --bg:#f7f6f3; --panel:#ffffff; --ink:#1c211f; --muted:#6b726e; --line:#e5e3dd; --accent:#0B6E63; --accent-soft:#0b6e6318; }
+:root[data-theme="dark"]{ --bg:#14171a; --panel:#1c2024; --ink:#e8eae7; --muted:#9aa19c; --line:#2b3035; --accent:#4cb8a8; --accent-soft:#4cb8a822; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+  line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:32px 20px 80px}
+header.top{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;border-bottom:2px solid var(--accent);padding-bottom:14px;margin-bottom:8px}
+header.top h1{margin:0;font-size:22px;letter-spacing:.02em}
+header.top .stamp{color:var(--muted);font-size:12.5px}
+h2{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:34px 0 14px;font-weight:700}
+.muted{color:var(--muted)}
+/* 卡片 */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card .num{font-size:30px;font-weight:750;font-variant-numeric:tabular-nums;line-height:1.1}
+.card .num .pct{font-size:17px;font-weight:600;margin-left:2px}
+.card .lbl{color:var(--muted);font-size:12.5px;margin-top:4px}
+.accent-card{background:var(--accent-soft);border-color:var(--accent)}
+/* 里程碑條 */
+.ms{margin:14px 0}
+.ms-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;font-size:14px}
+.ms-name{font-weight:600}
+.ms-frac{font-variant-numeric:tabular-nums;color:var(--muted)}
+.ms-frac b{color:var(--ink)}
+.ms-pct{display:inline-block;min-width:44px;text-align:right;margin-left:10px;font-weight:700;color:var(--accent)}
+.bar{height:9px;background:var(--line);border-radius:99px;overflow:hidden}
+.fill{height:100%;background:var(--accent);border-radius:99px;transition:width .4s ease}
+.ms.done .fill{background:var(--ok)}
+.ms.empty .ms-pct{color:var(--muted)}
+/* 清單 */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 18px}
+.launch-list{list-style:none;margin:0;padding:8px 0}
+.launch-list li{padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.launch-list li:last-child{border-bottom:0}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:6px;margin-right:5px;vertical-align:middle;font-variant-numeric:tabular-nums}
+.ms-tag{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent)}
+.pri{color:#fff}
+.pri.P0{background:var(--p0)} .pri.P1{background:var(--p1)} .pri.P2{background:var(--p2)} .pri.P3{background:var(--p3)}
+/* 篩選＋表格 */
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+#search{flex:1;min-width:200px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:9px 12px;color:var(--ink);font-size:14px}
+#search:focus{outline:2px solid var(--accent);outline-offset:1px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:99px;padding:4px 11px;font-size:12.5px;cursor:pointer;font-weight:600}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;z-index:1}
+tr:last-child td{border-bottom:0}
+.c-id{white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums}
+.c-mp{white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
+.c-pr{white-space:nowrap}
+.c-pr a{color:var(--accent);text-decoration:none}
+.c-pr a:hover{text-decoration:underline}
+.rocket{margin-right:3px}
+.st{font-size:11.5px;font-weight:700;white-space:nowrap}
+.st-完成{color:var(--ok)} .st-待辦{color:var(--todo)} .st-進行中{color:var(--wip)} .st-取消{color:var(--cancel);text-decoration:line-through}
+.count-note{color:var(--muted);font-size:12.5px;margin:10px 2px 0}
+footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+footer code{background:var(--accent-soft);padding:1px 6px;border-radius:5px;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>incantochen · 開發進度</h1>
+    <span class="stamp">產生於 2026/7/22 08:50:48（台北）</span>
+  </header>
+  <p class="muted" style="margin-top:8px">資料來源：<code style="all:unset">docs/tasks-todo.csv</code> ＋ <code style="all:unset">docs/tasks-done.md</code>（唯一權威）。本頁為衍生快照，重跑 build 即刷新。</p>
+
+  
+  <div class="cards">
+    <div class="card"><div class="num">74<span class="pct">%</span></div><div class="lbl">全專案完成度</div></div>
+    <div class="card"><div class="num">107</div><div class="lbl">已結案</div></div>
+    <div class="card"><div class="num">37</div><div class="lbl">待辦</div></div>
+    <div class="card"><div class="num">144</div><div class="lbl">任務總數</div></div>
+    <div class="card accent-card"><div class="num">9</div><div class="lbl">🚀 上線前必做 (P0)</div></div>
+  </div>
+
+  <h2>里程碑進度</h2>
+  
+    <div class="ms done">
+      <div class="ms-head">
+        <span class="ms-name">M-1 · 規劃</span>
+        <span class="ms-frac"><b>5 / 5</b><span class="ms-pct">100%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:100%"></div></div>
+    </div>
+    <div class="ms done">
+      <div class="ms-head">
+        <span class="ms-name">M0 · 基建</span>
+        <span class="ms-frac"><b>10 / 10</b><span class="ms-pct">100%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:100%"></div></div>
+    </div>
+    <div class="ms wip">
+      <div class="ms-head">
+        <span class="ms-name">M1 · 核心交易</span>
+        <span class="ms-frac"><b>21 / 23</b><span class="ms-pct">91%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:91%"></div></div>
+    </div>
+    <div class="ms wip">
+      <div class="ms-head">
+        <span class="ms-name">M2 · 品質／後台</span>
+        <span class="ms-frac"><b>46 / 56</b><span class="ms-pct">82%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:82%"></div></div>
+    </div>
+    <div class="ms wip">
+      <div class="ms-head">
+        <span class="ms-name">M3 · 商品後台</span>
+        <span class="ms-frac"><b>7 / 8</b><span class="ms-pct">88%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:88%"></div></div>
+    </div>
+    <div class="ms wip">
+      <div class="ms-head">
+        <span class="ms-name">M4 · 前台完善</span>
+        <span class="ms-frac"><b>4 / 13</b><span class="ms-pct">31%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:31%"></div></div>
+    </div>
+    <div class="ms wip">
+      <div class="ms-head">
+        <span class="ms-name">M5 · 上線準備</span>
+        <span class="ms-frac"><b>13 / 26</b><span class="ms-pct">50%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:50%"></div></div>
+    </div>
+    <div class="ms wip">
+      <div class="ms-head">
+        <span class="ms-name">後續 · 後續擴充</span>
+        <span class="ms-frac"><b>1 / 3</b><span class="ms-pct">33%</span></span>
+      </div>
+      <div class="bar"><div class="fill" style="width:33%"></div></div>
+    </div>
+
+  <h2>🚀 上線前必做（P0）</h2>
+  <div class="panel"><ul class="launch-list"><li><span class="tag ms-tag">M1</span><span class="tag pri P0">P0</span> <b>T17</b> — 選項即時換圖（組合鍵查圖）</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T50</b> — Email 送達性（SPF/DKIM/DMARC）</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T34</b> — 資料庫自動備份設定</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T35</b> — 正式環境＋ECPay 正式金鑰</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T36</b> — 隱私／服務條款頁</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T61</b> — 賣家資訊揭露＋聯絡頁</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T38</b> — 整體測試與上線檢查（戒指）</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T82</b> — Vercel 環境變數分離（Preview／Production）</li><li><span class="tag ms-tag">M5</span><span class="tag pri P0">P0</span> <b>T122</b> — 電子發票正式帳號＋字軌設定</li></ul></div>
+
+  <h2>進行中</h2>
+  <div class="panel"><ul class="launch-list"><li><span class="tag ms-tag">M4</span><span class="tag pri P1">P1</span> <b>T62</b> — 客製錯誤頁＋圖片效能優化</li></ul></div>
+
+  <h2>全部任務（144）</h2>
+  <div class="controls">
+    <input id="search" type="search" placeholder="搜尋 ID 或標題…（例：T106、購物車）" autocomplete="off">
+  </div>
+  <div class="controls">
+    <div class="chips" id="chips-ms"><button class="chip" data-group="ms" data-val="M-1">M-1</button><button class="chip" data-group="ms" data-val="M0">M0</button><button class="chip" data-group="ms" data-val="M1">M1</button><button class="chip" data-group="ms" data-val="M2">M2</button><button class="chip" data-group="ms" data-val="M3">M3</button><button class="chip" data-group="ms" data-val="M4">M4</button><button class="chip" data-group="ms" data-val="M5">M5</button><button class="chip" data-group="ms" data-val="後續">後續</button></div>
+  </div>
+  <div class="controls">
+    <div class="chips" id="chips-status">
+      <button class="chip" data-group="status" data-val="待辦">待辦</button>
+      <button class="chip" data-group="status" data-val="進行中">進行中</button>
+      <button class="chip" data-group="status" data-val="完成">完成</button>
+      <button class="chip" data-group="status" data-val="取消">取消</button>
+    </div>
+    <div class="chips" id="chips-pri">
+      <button class="chip" data-group="pri" data-val="P0">P0</button>
+      <button class="chip" data-group="pri" data-val="P1">P1</button>
+      <button class="chip" data-group="pri" data-val="P2">P2</button>
+      <button class="chip" data-group="pri" data-val="P3">P3</button>
+    </div>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>ID</th><th>(M, P)</th><th>任務</th><th>狀態</th><th>PR</th></tr></thead>
+      <tbody id="tbody"><tr data-search="p01 競品分析（高端訂製珠寶站）" data-status="完成" data-pri="" data-ms="M-1">
+      <td class="c-id">P01</td>
+      <td class="c-mp">M-1</td>
+      <td class="c-title">競品分析（高端訂製珠寶站）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="p02 prd 產品需求文件" data-status="完成" data-pri="" data-ms="M-1">
+      <td class="c-id">P02</td>
+      <td class="c-mp">M-1</td>
+      <td class="c-title">PRD 產品需求文件</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="p03 user flow 使用者流程" data-status="完成" data-pri="" data-ms="M-1">
+      <td class="c-id">P03</td>
+      <td class="c-mp">M-1</td>
+      <td class="c-title">User Flow 使用者流程</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="p04 ia 資訊架構" data-status="完成" data-pri="" data-ms="M-1">
+      <td class="c-id">P04</td>
+      <td class="c-mp">M-1</td>
+      <td class="c-title">IA 資訊架構</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="p05 wireframe 線框圖" data-status="完成" data-pri="" data-ms="M-1">
+      <td class="c-id">P05</td>
+      <td class="c-mp">M-1</td>
+      <td class="c-title">Wireframe 線框圖</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t01 建立 git repo＋next.js 骨架（含 ui kit）" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T01</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">建立 Git repo＋Next.js 骨架（含 UI kit）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t02 建立 supabase 專案" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T02</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">建立 Supabase 專案</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t03 依 er 圖建立 13 張表" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T03</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">依 ER 圖建立 13 張表</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t04 部署到 vercel 並打通 ci" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T04</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">部署到 Vercel 並打通 CI</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t05 supabase auth 設定（email otp 主＋magic link 輔）" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T05</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">Supabase Auth 設定（Email OTP 主＋Magic link 輔）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t39 導入 ui kit 基礎樣式" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T39</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">導入 UI kit 基礎樣式</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t43 手動塞戒指種子資料" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T43</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">手動塞戒指種子資料</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t46 supabase rls 資料列權限規則" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T46</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">Supabase RLS 資料列權限規則</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t52 staging 環境（vercel preview）" data-status="完成" data-pri="" data-ms="M0">
+      <td class="c-id">T52</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">Staging 環境（Vercel preview）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t56 3d 素材製作（自學 blender）" data-status="取消" data-pri="" data-ms="M0">
+      <td class="c-id">T56</td>
+      <td class="c-mp">M0</td>
+      <td class="c-title">3D 素材製作（自學 Blender）</td>
+      <td class="c-status"><span class="st st-取消">取消</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t06 登入入口（email otp／magic link）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T06</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">登入入口（Email OTP／Magic link）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t07 登入狀態與路由保護" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T07</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">登入狀態與路由保護</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t15 戒指商品詳情頁" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T15</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">戒指商品詳情頁</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t16 配置器 ui（戒指選項）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T16</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">配置器 UI（戒指選項）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t17 選項即時換圖（組合鍵查圖）" data-status="待辦" data-pri="P0" data-ms="M1">
+      <td class="c-id"><span class="rocket">🚀</span>T17</td>
+      <td class="c-mp">M1, P0</td>
+      <td class="c-title">選項即時換圖（組合鍵查圖）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t18 報價引擎（即時計價）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T18</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">報價引擎（即時計價）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t19 規格＋金額快照結構" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T19</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">規格＋金額快照結構</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t20 加入購物車（寫快照）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T20</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">加入購物車（寫快照）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t21 購物車頁" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T21</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">購物車頁</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t22 結帳頁（收件＋配送）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T22</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">結帳頁（收件＋配送）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t23 建立訂單（待付款）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T23</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">建立訂單（待付款）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t24 ecpay sandbox 設定" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T24</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">ECPay sandbox 設定</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t25 建立付款請求並導向 ecpay" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T25</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">建立付款請求並導向 ECPay</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t26 處理回拋並更新狀態" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T26</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">處理回拋並更新狀態</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t27 付款結果頁" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T27</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">付款結果頁</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t41 伺服器端驗價＋金鑰隔離" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T41</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">伺服器端驗價＋金鑰隔離</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t48 綠界黑貓宅配串接（保價＋本人簽收）" data-status="待辦" data-pri="P3" data-ms="M1">
+      <td class="c-id">T48</td>
+      <td class="c-mp">M1, P3</td>
+      <td class="c-title">綠界黑貓宅配串接（保價＋本人簽收）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t49 新訂單通知店家" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T49</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">新訂單通知店家</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t51 報價引擎單元測試" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T51</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">報價引擎單元測試</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t53 冪等性處理（防重複）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T53</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">冪等性處理（防重複）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t55 商品組合圖：精緻擬真疊圖機制" data-status="取消" data-pri="" data-ms="M1">
+      <td class="c-id">T55</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">商品組合圖：精緻擬真疊圖機制</td>
+      <td class="c-status"><span class="st st-取消">取消</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t57 客製例外告知與同意（結帳）" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T57</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">客製例外告知與同意（結帳）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t58 ◆ 應用層安全防護" data-status="完成" data-pri="" data-ms="M1">
+      <td class="c-id">T58</td>
+      <td class="c-mp">M1</td>
+      <td class="c-title">◆ 應用層安全防護</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t08 會員中心框架" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T08</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">會員中心框架</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t28 訂單狀態機" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T28</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">訂單狀態機</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t29 狀態紀錄（orderstatuslog）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T29</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">狀態紀錄（OrderStatusLog）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t31 後台訂單管理" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T31</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">後台訂單管理</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t32 顧客訂單追蹤" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T32</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">顧客訂單追蹤</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t33 售後申請（分類）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T33</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">售後申請（分類）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t37 基本錯誤監控" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T37</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">基本錯誤監控</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/31">#31</a></td>
+    </tr><tr data-search="t64 ◆ 後台 pii 遮罩＋存取稽核" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T64</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 後台 PII 遮罩＋存取稽核</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t65 orderitem 補 product_name_snapshot" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T65</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">OrderItem 補 product_name_snapshot</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t66 🚀◆ 待付款訂單逾期自動取消" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T66</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 待付款訂單逾期自動取消</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/51">#51</a></td>
+    </tr><tr data-search="t67 ◆ 修正 order-result 訂單號重組錯誤" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T67</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 修正 order-result 訂單號重組錯誤</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/30">#30</a></td>
+    </tr><tr data-search="t68 ◆ webhook 錯誤處理與金額核對強化" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T68</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ Webhook 錯誤處理與金額核對強化</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/30">#30</a></td>
+    </tr><tr data-search="t69 ◆ email 改 waituntil＋notification 去重落地" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T69</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ Email 改 waitUntil＋notification 去重落地</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/30">#30</a></td>
+    </tr><tr data-search="t70 🚀◆ cart.guest_token 加 unique 約束" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T70</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ cart.guest_token 加 unique 約束</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/45">#45</a></td>
+    </tr><tr data-search="t71 🚀◆ 訪客結帳 email 未驗證掛單防護" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T71</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 訪客結帳 Email 未驗證掛單防護</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/50">#50</a> <a href="https://github.com/incantochen/incantochen/pull/51">#51</a></td>
+    </tr><tr data-search="t72 🚀◆ email 模板 html escape＋表單長度上限" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T72</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ Email 模板 HTML escape＋表單長度上限</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/54">#54</a></td>
+    </tr><tr data-search="t73 🚀◆ 成功頁存取控制＋訂單號改 crypto 亂數" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T73</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 成功頁存取控制＋訂單號改 crypto 亂數</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/64">#64</a></td>
+    </tr><tr data-search="t74 🚀◆ pending payment 逾期換新 trade no" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T74</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ pending payment 逾期換新 trade no</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/51">#51</a></td>
+    </tr><tr data-search="t75 ◆ 付款完成後才清購物車" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T75</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 付款完成後才清購物車</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/51">#51</a></td>
+    </tr><tr data-search="t84 🚀◆ 售後通知信 html escape（f-001）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T84</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 售後通知信 HTML escape（F-001）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/54">#54</a></td>
+    </tr><tr data-search="t85 ◆ webhook／createorder 自動化測試（f-004）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T85</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ webhook／createOrder 自動化測試（F-004）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/29">#29</a></td>
+    </tr><tr data-search="t86 🚀◆ 登入頁開放轉址修正（f-005）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T86</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 登入頁開放轉址修正（F-005）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/49">#49</a></td>
+    </tr><tr data-search="t88 ◆ sendonce 失敗信件永久無法重試（pr #30 ultrareview 第三輪）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T88</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ sendOnce 失敗信件永久無法重試（PR #30 ultrareview 第三輪）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/30">#30</a> <a href="https://github.com/incantochen/incantochen/pull/30">#30</a> <a href="https://github.com/incantochen/incantochen/pull/66">#66</a></td>
+    </tr><tr data-search="t89 ◆ ecpay 主動對帳（金流終極兜底）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T89</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ ECPay 主動對帳（金流終極兜底）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/33">#33</a></td>
+    </tr><tr data-search="t90 ◆ 人工救援 runbook（docs/ops-runbook.md）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T90</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 人工救援 runbook（docs/ops-runbook.md）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/67">#67</a></td>
+    </tr><tr data-search="t92 ◆ 訂單狀態機 update 缺前置狀態守衛（f-007）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T92</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 訂單狀態機 UPDATE 缺前置狀態守衛（F-007）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/53">#53</a> <a href="https://github.com/incantochen/incantochen/pull/51">#51</a> <a href="https://github.com/incantochen/incantochen/pull/51">#51</a></td>
+    </tr><tr data-search="t95 ◆ 客人端讀取路徑補 supabase {error} 檢查（f-008）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T95</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 客人端讀取路徑補 Supabase {error} 檢查（F-008）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/70">#70</a> <a href="https://github.com/incantochen/incantochen/pull/73">#73</a></td>
+    </tr><tr data-search="t96 ◆ merchanttradeno→order_no 解析收斂單一出處（f-009）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T96</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ MerchantTradeNo→order_no 解析收斂單一出處（F-009）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/90">#90</a></td>
+    </tr><tr data-search="t99 ◆ 對帳 cron cron_secret 改 timing-safe 比對（f-012）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T99</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 對帳 cron CRON_SECRET 改 timing-safe 比對（F-012）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/70">#70</a></td>
+    </tr><tr data-search="t100 ◆ 刪除過時型別殘留 types/supabase.ts（f-013）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T100</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 刪除過時型別殘留 types/supabase.ts（F-013）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/88">#88</a></td>
+    </tr><tr data-search="t101 🚀◆ 最小 ci：github actions lint＋test（g-03）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T101</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 最小 CI：GitHub Actions lint＋test（G-03）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/44">#44</a></td>
+    </tr><tr data-search="t106 自動化測試階段（verify:all＋e2e 套件＋測試紀錄）" data-status="待辦" data-pri="P1" data-ms="M2">
+      <td class="c-id"><span class="rocket">🚀</span>T106</td>
+      <td class="c-mp">M2, P1</td>
+      <td class="c-title">自動化測試階段（verify:all＋E2E 套件＋測試紀錄）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t107 🚀◆ 對帳 cron 調整推進順序：payment 翻 paid 改為最後一步（f-014）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T107</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 對帳 cron 調整推進順序：payment 翻 paid 改為最後一步（F-014）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/67">#67</a> <a href="https://github.com/incantochen/incantochen/pull/66">#66</a></td>
+    </tr><tr data-search="t108 ◆ 面交 tracking_no 格式收斂單一出處（f-015）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T108</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 面交 tracking_no 格式收斂單一出處（F-015）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/89">#89</a></td>
+    </tr><tr data-search="t109 ◆ /auth/confirm 落地頁文案／ux 重新檢視" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T109</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ /auth/confirm 落地頁文案／UX 重新檢視</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/92">#92</a></td>
+    </tr><tr data-search="t110 ◆ 訂單狀態＋稽核 log 寫入交易化（t92 code-review 衍生）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T110</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 訂單狀態＋稽核 log 寫入交易化（T92 code-review 衍生）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/53">#53</a> <a href="https://github.com/incantochen/incantochen/pull/72">#72</a> <a href="https://github.com/incantochen/incantochen/pull/72">#72</a></td>
+    </tr><tr data-search="t118 ◆ 結帳完成後購物袋圖示數量未即時歸零" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T118</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 結帳完成後購物袋圖示數量未即時歸零</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/96">#96</a></td>
+    </tr><tr data-search="t119 ◆ 已取消訂單連結改顯示說明頁（取代靜默轉 homepage）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T119</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 已取消訂單連結改顯示說明頁（取代靜默轉 homepage）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/91">#91</a></td>
+    </tr><tr data-search="t120 配置器依 input_type 渲染（select 下拉／swatch 色票／stepper 加減器）" data-status="待辦" data-pri="P2" data-ms="M2">
+      <td class="c-id">T120</td>
+      <td class="c-mp">M2, P2</td>
+      <td class="c-title">配置器依 input_type 渲染（select 下拉／swatch 色票／stepper 加減器）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t121 ◆ getclientip 不應無條件優先信任 cf-connecting-ip" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T121</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ getClientIp 不應無條件優先信任 cf-connecting-ip</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/64">#64</a> <a href="https://github.com/incantochen/incantochen/pull/70">#70</a> <a href="https://github.com/incantochen/incantochen/pull/70">#70</a></td>
+    </tr><tr data-search="t123 通知重試的失敗分類與嘗試次數上限（t88 完整版技術債）" data-status="待辦" data-pri="P3" data-ms="M2">
+      <td class="c-id">T123</td>
+      <td class="c-mp">M2, P3</td>
+      <td class="c-title">通知重試的失敗分類與嘗試次數上限（T88 完整版技術債）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t124 ◆ 資安 finding 批次修復＋執行資安審查（t93/94/95/97/99/107/121）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T124</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 資安 finding 批次修復＋執行資安審查（T93/94/95/97/99/107/121）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/70">#70</a></td>
+    </tr><tr data-search="t126 對帳 cron 改小時級（webhook 失靈自癒從隔日縮到 ~1 小時內）" data-status="待辦" data-pri="P2" data-ms="M2">
+      <td class="c-id">T126</td>
+      <td class="c-mp">M2, P2</td>
+      <td class="c-title">對帳 cron 改小時級（webhook 失靈自癒從隔日縮到 ~1 小時內）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t127 🚀◆ webhook 側付款成立但訂單卡 pending_payment 的盲點" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T127</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ webhook 側付款成立但訂單卡 pending_payment 的盲點</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/67">#67</a> <a href="https://github.com/incantochen/incantochen/pull/71">#71</a></td>
+    </tr><tr data-search="t128 reconcile summary 的 ratelimited/httpaborted 併為單一 abortreason" data-status="待辦" data-pri="P3" data-ms="M2">
+      <td class="c-id">T128</td>
+      <td class="c-mp">M2, P3</td>
+      <td class="c-title">reconcile summary 的 rateLimited/httpAborted 併為單一 abortReason</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t129 🚀◆ 發票統編／條碼驗證加限流＋移到 cart 讀取之後（f-024）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T129</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">🚀◆ 發票統編／條碼驗證加限流＋移到 cart 讀取之後（F-024）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/80">#80</a></td>
+    </tr><tr data-search="t130 ◆ products/[slug]/actions.ts 讀取路徑對齊：補 {error} 檢查＋addtocart 改 read-first（f-017 殘留／f-020）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T130</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ products/[slug]/actions.ts 讀取路徑對齊：補 {error} 檢查＋addToCart 改 read-first（F-017 殘留／F-020）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/70">#70</a> <a href="https://github.com/incantochen/incantochen/pull/81">#81</a></td>
+    </tr><tr data-search="t131 ◆ cart-cleanup delete 補候選守衛（guarded delete，防 toctou）（f-022）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T131</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ cart-cleanup DELETE 補候選守衛（guarded delete，防 TOCTOU）（F-022）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/82">#82</a></td>
+    </tr><tr data-search="t132 ◆ 抽 pg_unique_violation 常數＋建立「已有資料表加 index 用 concurrently」慣例（f-018）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T132</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 抽 PG_UNIQUE_VIOLATION 常數＋建立「已有資料表加 index 用 CONCURRENTLY」慣例（F-018）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/45">#45</a> <a href="https://github.com/incantochen/incantochen/pull/83">#83</a></td>
+    </tr><tr data-search="t133 ◆ 首次訪客 guest_token 競態：加車前預簽 cookie（f-019）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T133</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ 首次訪客 guest_token 競態：加車前預簽 cookie（F-019）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/45">#45</a> <a href="https://github.com/incantochen/incantochen/pull/84">#84</a></td>
+    </tr><tr data-search="t134 ◆ cart-cleanup 批量上限與 .in() url 長度風險（t131 max review 衍生）" data-status="完成" data-pri="" data-ms="M2">
+      <td class="c-id">T134</td>
+      <td class="c-mp">M2</td>
+      <td class="c-title">◆ cart-cleanup 批量上限與 .in() URL 長度風險（T131 max review 衍生）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/85">#85</a> <a href="https://github.com/incantochen/incantochen/pull/84">#84</a></td>
+    </tr><tr data-search="t135 admin 代客建單改用獨立暫存車，脫離會員共用 cart（t81 max review 衍生）" data-status="待辦" data-pri="P3" data-ms="M2">
+      <td class="c-id">T135</td>
+      <td class="c-mp">M2, P3</td>
+      <td class="c-title">Admin 代客建單改用獨立暫存車，脫離會員共用 cart（T81 max review 衍生）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t136 email 信件外殼與 from_email 共用 layout 收斂（t47 pr #86 max review #7）" data-status="待辦" data-pri="P3" data-ms="M2">
+      <td class="c-id">T136</td>
+      <td class="c-mp">M2, P3</td>
+      <td class="c-title">email 信件外殼與 FROM_EMAIL 共用 layout 收斂（T47 PR #86 max review #7）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t137 結帳頁配送方式選擇（面交／物流）" data-status="待辦" data-pri="P2" data-ms="M2">
+      <td class="c-id">T137</td>
+      <td class="c-mp">M2, P2</td>
+      <td class="c-title">結帳頁配送方式選擇（面交／物流）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t138 購物車層失效品項偵測（引用商品/選項失效時提示重下單）" data-status="待辦" data-pri="P2" data-ms="M2">
+      <td class="c-id">T138</td>
+      <td class="c-mp">M2, P2</td>
+      <td class="c-title">購物車層失效品項偵測（引用商品/選項失效時提示重下單）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t140 並發不變式整合測試腳本（t106 子任務・本機 supabase・安全 gate）" data-status="待辦" data-pri="P2" data-ms="M2">
+      <td class="c-id">T140</td>
+      <td class="c-mp">M2, P2</td>
+      <td class="c-title">並發不變式整合測試腳本（T106 子任務・本機 Supabase・安全 gate）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t09 後台框架＋管理員權限" data-status="完成" data-pri="" data-ms="M3">
+      <td class="c-id">T09</td>
+      <td class="c-mp">M3</td>
+      <td class="c-title">後台框架＋管理員權限</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/56">#56</a> <a href="https://github.com/incantochen/incantochen/pull/57">#57</a></td>
+    </tr><tr data-search="t10 商品款式 crud" data-status="完成" data-pri="" data-ms="M3">
+      <td class="c-id">T10</td>
+      <td class="c-mp">M3</td>
+      <td class="c-title">商品款式 CRUD</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/59">#59</a> <a href="https://github.com/incantochen/incantochen/pull/60">#60</a></td>
+    </tr><tr data-search="t11 圖片上傳到 storage" data-status="完成" data-pri="" data-ms="M3">
+      <td class="c-id">T11</td>
+      <td class="c-mp">M3</td>
+      <td class="c-title">圖片上傳到 Storage</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/60">#60</a></td>
+    </tr><tr data-search="t12 選項類型／選項值 crud" data-status="完成" data-pri="" data-ms="M3">
+      <td class="c-id">T12</td>
+      <td class="c-mp">M3</td>
+      <td class="c-title">選項類型／選項值 CRUD</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/62">#62</a></td>
+    </tr><tr data-search="t13 款式選項對應＋可選值白名單" data-status="完成" data-pri="" data-ms="M3">
+      <td class="c-id">T13</td>
+      <td class="c-mp">M3</td>
+      <td class="c-title">款式選項對應＋可選值白名單</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/65">#65</a></td>
+    </tr><tr data-search="t111 ◆ 後台代客建立訂單（付款連結）" data-status="完成" data-pri="" data-ms="M3">
+      <td class="c-id">T111</td>
+      <td class="c-mp">M3</td>
+      <td class="c-title">◆ 後台代客建立訂單（付款連結）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/57">#57</a></td>
+    </tr><tr data-search="t112 統一客人／admin checkout 表單與購物袋讀取邏輯" data-status="待辦" data-pri="P2" data-ms="M3">
+      <td class="c-id">T112</td>
+      <td class="c-mp">M3, P2</td>
+      <td class="c-title">統一客人／admin checkout 表單與購物袋讀取邏輯</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t113 ◆ createorderfromcart 的 orderitempayloadschema.parse 補 try/catch" data-status="完成" data-pri="" data-ms="M3">
+      <td class="c-id">T113</td>
+      <td class="c-mp">M3</td>
+      <td class="c-title">◆ createOrderFromCart 的 orderItemPayloadSchema.parse 補 try/catch</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/95">#95</a></td>
+    </tr><tr data-search="t14 商品目錄頁（多品類框架）" data-status="完成" data-pri="" data-ms="M4">
+      <td class="c-id">T14</td>
+      <td class="c-mp">M4</td>
+      <td class="c-title">商品目錄頁（多品類框架）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/61">#61</a></td>
+    </tr><tr data-search="t40 🚀rwd 與互動打磨" data-status="完成" data-pri="" data-ms="M4">
+      <td class="c-id">T40</td>
+      <td class="c-mp">M4</td>
+      <td class="c-title">🚀RWD 與互動打磨</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/58">#58</a></td>
+    </tr><tr data-search="t44 品牌視覺打磨" data-status="待辦" data-pri="P1" data-ms="M4">
+      <td class="c-id"><span class="rocket">🚀</span>T44</td>
+      <td class="c-mp">M4, P1</td>
+      <td class="c-title">品牌視覺打磨</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t54 戒圍尺寸對照／量法說明頁" data-status="待辦" data-pri="P1" data-ms="M4">
+      <td class="c-id"><span class="rocket">🚀</span>T54</td>
+      <td class="c-mp">M4, P1</td>
+      <td class="c-title">戒圍尺寸對照／量法說明頁</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t59 ◆ seo 基礎" data-status="完成" data-pri="" data-ms="M4">
+      <td class="c-id">T59</td>
+      <td class="c-mp">M4</td>
+      <td class="c-title">◆ SEO 基礎</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/115">#115</a></td>
+    </tr><tr data-search="t60 網站分析＋cookie 同意" data-status="待辦" data-pri="P1" data-ms="M4">
+      <td class="c-id"><span class="rocket">🚀</span>T60</td>
+      <td class="c-mp">M4, P1</td>
+      <td class="c-title">網站分析＋Cookie 同意</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t62 客製錯誤頁＋圖片效能優化" data-status="進行中" data-pri="P1" data-ms="M4">
+      <td class="c-id"><span class="rocket">🚀</span>T62</td>
+      <td class="c-mp">M4, P1</td>
+      <td class="c-title">客製錯誤頁＋圖片效能優化</td>
+      <td class="c-status"><span class="st st-進行中">進行中</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t104 全客製預約表單（/custom）" data-status="待辦" data-pri="P1" data-ms="M4">
+      <td class="c-id"><span class="rocket">🚀</span>T104</td>
+      <td class="c-mp">M4, P1</td>
+      <td class="c-title">全客製預約表單（/custom）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t105 首頁正式版" data-status="待辦" data-pri="P1" data-ms="M4">
+      <td class="c-id"><span class="rocket">🚀</span>T105</td>
+      <td class="c-mp">M4, P1</td>
+      <td class="c-title">首頁正式版</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t114 商品圖批次匯入腳本" data-status="待辦" data-pri="P2" data-ms="M4">
+      <td class="c-id">T114</td>
+      <td class="c-mp">M4, P2</td>
+      <td class="c-title">商品圖批次匯入腳本</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t115 商品目錄卡片查詢收斂（延後至 t12/t13 之後）" data-status="待辦" data-pri="P2" data-ms="M4">
+      <td class="c-id">T115</td>
+      <td class="c-mp">M4, P2</td>
+      <td class="c-title">商品目錄卡片查詢收斂（延後至 T12/T13 之後）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t116 ai 產品圖生成批次工具（金屬色×寶石全矩陣）" data-status="待辦" data-pri="P1" data-ms="M4">
+      <td class="c-id"><span class="rocket">🚀</span>T116</td>
+      <td class="c-mp">M4, P1</td>
+      <td class="c-title">AI 產品圖生成批次工具（金屬色×寶石全矩陣）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t117 ◆ pdp 對「必選選項全隱藏」商品的販售狀態呈現" data-status="完成" data-pri="" data-ms="M4">
+      <td class="c-id">T117</td>
+      <td class="c-mp">M4</td>
+      <td class="c-title">◆ PDP 對「必選選項全隱藏」商品的販售狀態呈現</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/62">#62</a> <a href="https://github.com/incantochen/incantochen/pull/97">#97</a></td>
+    </tr><tr data-search="t34 資料庫自動備份設定" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T34</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">資料庫自動備份設定</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t35 正式環境＋ecpay 正式金鑰" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T35</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">正式環境＋ECPay 正式金鑰</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t36 隱私／服務條款頁" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T36</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">隱私／服務條款頁</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t38 整體測試與上線檢查（戒指）" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T38</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">整體測試與上線檢查（戒指）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t42 🚀電子發票串接（ecpay）" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T42</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">🚀電子發票串接（ECPay）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/68">#68</a></td>
+    </tr><tr data-search="t47 退換貨流程＋綠界金流退刷" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T47</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">退換貨流程＋綠界金流退刷</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/86">#86</a></td>
+    </tr><tr data-search="t50 email 送達性（spf/dkim/dmarc）" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T50</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">Email 送達性（SPF/DKIM/DMARC）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t61 賣家資訊揭露＋聯絡頁" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T61</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">賣家資訊揭露＋聯絡頁</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t63 當事人個資權利處理流程" data-status="待辦" data-pri="P1" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T63</td>
+      <td class="c-mp">M5, P1</td>
+      <td class="c-title">當事人個資權利處理流程</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t76 訂單建立交易化（rpc）" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T76</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">訂單建立交易化（RPC）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/51">#51</a></td>
+    </tr><tr data-search="t77 shiporder 先驗狀態再寫 tracking_no" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T77</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">shipOrder 先驗狀態再寫 tracking_no</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/93">#93</a></td>
+    </tr><tr data-search="t78 購物車寫入限流＋過期清理" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T78</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">購物車寫入限流＋過期清理</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/46">#46</a></td>
+    </tr><tr data-search="t79 findorcreatemember 錯誤處理" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T79</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">findOrCreateMember 錯誤處理</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/57">#57</a> <a href="https://github.com/incantochen/incantochen/pull/57">#57</a></td>
+    </tr><tr data-search="t80 pii 稽核 log 留存強化" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T80</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">PII 稽核 log 留存強化</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/48">#48</a></td>
+    </tr><tr data-search="t82 vercel 環境變數分離（preview／production）" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T82</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">Vercel 環境變數分離（Preview／Production）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t83 🚀◆ supabase auth production 設定完成＋驗證" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T83</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">🚀◆ Supabase Auth production 設定完成＋驗證</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t87 取消／退款／出貨（override）通知信" data-status="待辦" data-pri="P2" data-ms="M5">
+      <td class="c-id">T87</td>
+      <td class="c-mp">M5, P2</td>
+      <td class="c-title">取消／退款／出貨（override）通知信</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t91 帳號與金鑰營運安全" data-status="待辦" data-pri="P1" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T91</td>
+      <td class="c-mp">M5, P1</td>
+      <td class="c-title">帳號與金鑰營運安全</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t93 ◆ 售後申請限流＋同單去重（f-002）" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T93</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">◆ 售後申請限流＋同單去重（F-002）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/70">#70</a> <a href="https://github.com/incantochen/incantochen/pull/70">#70</a></td>
+    </tr><tr data-search="t94 ◆ postcss cve-2026-41305 修補（f-003）" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T94</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">◆ postcss CVE-2026-41305 修補（F-003）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/69">#69</a></td>
+    </tr><tr data-search="t97 ◆ production csp 改 nonce-based（f-010）" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T97</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">◆ Production CSP 改 nonce-based（F-010）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/70">#70</a></td>
+    </tr><tr data-search="t98 ◆ createorder 防重複提交（f-011）" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T98</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">◆ createOrder 防重複提交（F-011）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/51">#51</a></td>
+    </tr><tr data-search="t102 ◆ 清理批次：對帳 cron 容量邊界＋owner_email 收斂（g-04/g-05）" data-status="完成" data-pri="" data-ms="M5">
+      <td class="c-id">T102</td>
+      <td class="c-mp">M5</td>
+      <td class="c-title">◆ 清理批次：對帳 cron 容量邊界＋OWNER_EMAIL 收斂（G-04/G-05）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/94">#94</a></td>
+    </tr><tr data-search="t103 站內付 2.0 取代 aio 導轉式信用卡（ecpg）" data-status="待辦" data-pri="P2" data-ms="M5">
+      <td class="c-id">T103</td>
+      <td class="c-mp">M5, P2</td>
+      <td class="c-title">站內付 2.0 取代 AIO 導轉式信用卡（ECPG）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t122 電子發票正式帳號＋字軌設定" data-status="待辦" data-pri="P0" data-ms="M5">
+      <td class="c-id"><span class="rocket">🚀</span>T122</td>
+      <td class="c-mp">M5, P0</td>
+      <td class="c-title">電子發票正式帳號＋字軌設定</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t125 自家訂單信件／頁面補發票開立資訊" data-status="待辦" data-pri="P3" data-ms="M5">
+      <td class="c-id">T125</td>
+      <td class="c-mp">M5, P3</td>
+      <td class="c-title">自家訂單信件／頁面補發票開立資訊</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t45 擴充其他品類（耳環／項鍊／手鍊）" data-status="待辦" data-pri="P2" data-ms="後續">
+      <td class="c-id">T45</td>
+      <td class="c-mp">後續, P2</td>
+      <td class="c-title">擴充其他品類（耳環／項鍊／手鍊）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr><tr data-search="t81 會員購物車合併（登入併 guest cart）" data-status="完成" data-pri="" data-ms="後續">
+      <td class="c-id">T81</td>
+      <td class="c-mp">後續</td>
+      <td class="c-title">會員購物車合併（登入併 guest cart）</td>
+      <td class="c-status"><span class="st st-完成">完成</span></td>
+      <td class="c-pr"><a href="https://github.com/incantochen/incantochen/pull/84">#84</a></td>
+    </tr><tr data-search="t139 google 帳號登入（oauth，與 otp 同身份連結）" data-status="待辦" data-pri="P2" data-ms="後續">
+      <td class="c-id">T139</td>
+      <td class="c-mp">後續, P2</td>
+      <td class="c-title">Google 帳號登入（OAuth，與 OTP 同身份連結）</td>
+      <td class="c-status"><span class="st st-待辦">待辦</span></td>
+      <td class="c-pr"></td>
+    </tr></tbody>
+    </table>
+  </div>
+  <p class="count-note" id="count-note"></p>
+
+  <footer>
+    刷新方式：<code>node scripts/build-progress.mjs</code>（或 <code>pnpm build:progress</code>）→ 重開本頁。
+    (M, P)＝里程碑, 優先級；完成任務不標優先級。
+  </footer>
+</div>
+<script>
+(function(){
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#tbody tr'));
+  var search = document.getElementById('search');
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var note = document.getElementById('count-note');
+  var active = { ms:new Set(), status:new Set(), pri:new Set() };
+
+  function apply(){
+    var q = search.value.trim().toLowerCase();
+    var shown = 0;
+    rows.forEach(function(r){
+      var okText = !q || r.getAttribute('data-search').indexOf(q) !== -1;
+      var okMs = active.ms.size === 0 || active.ms.has(r.getAttribute('data-ms'));
+      var okSt = active.status.size === 0 || active.status.has(r.getAttribute('data-status'));
+      var okPr = active.pri.size === 0 || active.pri.has(r.getAttribute('data-pri'));
+      var vis = okText && okMs && okSt && okPr;
+      r.style.display = vis ? '' : 'none';
+      if(vis) shown++;
+    });
+    note.textContent = '顯示 ' + shown + ' / ' + rows.length + ' 筆';
+  }
+  search.addEventListener('input', apply);
+  chips.forEach(function(c){
+    c.addEventListener('click', function(){
+      var g = c.getAttribute('data-group'), v = c.getAttribute('data-val');
+      if(active[g].has(v)){ active[g].delete(v); c.classList.remove('on'); }
+      else { active[g].add(v); c.classList.add('on'); }
+      apply();
+    });
+  });
+  apply();
+})();
+</script>
+</body>
+</html>
