@@ -76,6 +76,7 @@
 ### 9. CSP 不變式（T97）
 
 - 斷言：(a) document CSP 唯一出處＝`src/proxy.ts`（每請求 nonce＋strict-dynamic，production）；(b) `next.config.ts` 僅設圖檔／favicon 靜態最小 CSP，**且其副檔名 source 與 proxy matcher 排除清單對齊**；(c) 全站無 `force-static`／`use cache`／`generateStaticParams`（nonce 依賴動態渲染）；(d) build 型別檢查僅 preview 關（PR #74）。
+- GA4（T60，PR #121）：`img-src`／`connect-src` 放行 `www.googletagmanager.com`＋`*.google-analytics.com`（＋`*.analytics.google.com`）；**production 的 `script-src` 不加 GA host**——帶 nonce 的 gtag.js loader 由 strict-dynamic 信任，host 白名單本就被忽略。**例外**：dev 分支（`nonce===null`）額外放行 `www.googletagmanager.com`（dev 無 nonce／strict-dynamic，跨網域 script 需顯式白名單才載得到，供本機端到端測）——僅 dev，production 不受影響。
 - 錨點：`src/proxy.ts`（buildCsp＋matcher）、`next.config.ts`（headers＋typescript 區塊）。
 - 驗法：兩份副檔名清單 diff 比對；`grep -r "force-static\|use cache\|generateStaticParams" src/app` 應空。
 - 歷史教訓：PR #70 批內 matcher 與 next.config 清單即失同步（avif|ico）。
