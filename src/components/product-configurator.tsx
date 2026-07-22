@@ -102,6 +102,10 @@ function OptionValues({
   }
 
   if (option.inputType === "stepper") {
+    // ⚠️ 已知限制（T120 review 低 2）：stepper 切換時只顯示值名稱，不顯示該值
+    // 的 price_delta（swatch/select 會顯示）。計價完全正常——加價仍會算進總價與
+    // 加價明細，只是缺「即時價差提示」。MVP 無 stepper 選項故不影響；日後若把
+    // 「會加價」的選項設成 stepper，需在下方 current?.label 旁補顯示加價。
     const index = option.values.findIndex((value) => value.id === selectedId)
     const current = index >= 0 ? option.values[index] : undefined
     const prev = index > 0 ? option.values[index - 1] : undefined
