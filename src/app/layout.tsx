@@ -95,7 +95,7 @@ export default function RootLayout({
   return (
     <html
       lang="zh-TW"
-      className={`${headLatin.variable} ${headTC.variable} ${bodyLatin.variable} ${bodyTC.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${headLatin.variable} ${headTC.variable} ${bodyLatin.variable} ${bodyTC.variable} ${geistMono.variable} h-full scroll-smooth antialiased`}
     >
       <body className="min-h-full flex flex-col">
         {buildSiteJsonLd().map((data, i) => (
