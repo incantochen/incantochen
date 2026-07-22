@@ -1,4 +1,4 @@
-import { FooterColumn } from "@/components/footer-column"
+import { FooterColumns } from "@/components/footer-columns"
 
 // 版式與配色對齊 demo indexV2 footer：emerald-900 深底、大 wordmark＋三欄、
 // 金色欄標、底部版權列。連結接真實路由；未建頁走占位（見 coming-soon）。
@@ -50,12 +50,7 @@ export function SiteFooter() {
             </p>
           </div>
 
-          {/* 手機：三欄成為緊鄰的手風琴直排；桌機 md:contents 讓三欄回到父 grid */}
-          <div className="flex flex-col md:contents">
-            {columns.map((col) => (
-              <FooterColumn key={col.heading} heading={col.heading} links={col.links} />
-            ))}
-          </div>
+          <FooterColumns columns={columns} />
         </div>
 
         <div className="mt-10 border-t border-paper/15 pt-5 text-xs text-paper/50">

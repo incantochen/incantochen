@@ -7,36 +7,23 @@ import { cn } from "@/lib/utils"
 
 type FooterLink = { label: string; href: string }
 
-// 桌機（md+）偵測：讓 heading 在桌機不是「摺疊態」的 disclosure——桌機連結
-// 恆顯示（md:flex），故 aria-expanded 應為 true、且不進 Tab 焦點順序。
-// SSR 初始 false → 與伺服器渲染一致，掛載後才依實際寬度校正（不造成 hydration
-// 不符，連結可見性由 CSS 控制、無閃爍）。
-function useIsDesktop() {
-  const [isDesktop, setIsDesktop] = useState(false)
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 768px)")
-    const update = () => setIsDesktop(mq.matches)
-    update()
-    mq.addEventListener("change", update)
-    return () => mq.removeEventListener("change", update)
-  }, [])
-  return isDesktop
-}
-
 // footer 欄位：手機為可展開手風琴（點 +/− 開合），桌機（md+）恆展開、無 toggle。
+// isDesktop 由父層 FooterColumns 一次算出後傳入（不再各欄自建 matchMedia 監聽）。
 export function FooterColumn({
   heading,
   links,
+  isDesktop,
 }: {
   heading: string
   links: FooterLink[]
+  isDesktop: boolean
 }) {
   // 預設展開：SSR／停用 JS／hydration 前連結恆可見（漸進增強，不讓頁尾連結在
   // 手機無法點）；掛載後手機才收合為手風琴，桌機由 md:flex 恆顯示。
   const [open, setOpen] = useState(true)
-  const isDesktop = useIsDesktop()
   useEffect(() => {
-    // 延到 rAF，不在 effect body 同步 setState（cascading render）。
+    // 延到 rAF，不在 effect body 同步 setState（cascading render）。一次性判斷、
+    // 非訂閱（跨斷點的響應交給父層 isDesktop）。
     const raf = requestAnimationFrame(() => {
       if (!window.matchMedia("(min-width: 768px)").matches) setOpen(false)
     })

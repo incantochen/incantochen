@@ -4,8 +4,10 @@ import { createClient } from "@/lib/supabase/server"
 import { CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/product/category-labels"
 import type { CategoryCode } from "@/lib/product/category-labels"
 import { ALL_SORT_KEYS, type SortKey } from "@/lib/product/collection-sort"
-import { GEM_COLOR_OPTION_CODE, METAL_COLOR_OPTION_CODE } from "@/lib/product/option-type-codes"
-import { computeStartPrice } from "@/lib/product/start-price"
+import {
+  PRODUCT_CARD_SELECT,
+  mapProductRowToCardData,
+} from "@/lib/product/product-card-query"
 import { buildBreadcrumbJsonLd } from "@/lib/seo/breadcrumb-json-ld"
 import { getSiteUrl } from "@/lib/seo/site-url"
 import { pageOpenGraph } from "@/lib/seo/site-meta"
@@ -63,24 +65,10 @@ export default async function CollectionPage({
 
   const supabase = await createClient()
 
-  // option_type / option_value 的 !inner 必要（同 PDP 查詢，T12/0014）：RLS 會
-  // 濾掉 is_active=false 的列，非 inner 的多對一 embed 會變 null——下面
-  // `o.option_type.code` 直接取值會炸；!inner 讓隱藏項目整列從陣列消失，
-  // find 撈不到就自然略過，「起」價的預設加價總和也只算客人實際選得到的選項
+  // select 與卡片對應共用 product-card-query（!inner／「起」價語意見該檔註解）。
   let productQuery = supabase
     .from("product")
-    .select(
-      `
-      slug, name, base_price,
-      product_option (
-        option_type!inner ( code ),
-        product_option_value (
-          is_default, price_delta,
-          option_value!inner ( label, swatch_hex )
-        )
-      )
-    `,
-    )
+    .select(PRODUCT_CARD_SELECT)
     .eq("status", "active")
     .eq("category", categoryCode)
     .limit(MAX_PRODUCTS_PER_CATEGORY)
@@ -102,29 +90,7 @@ export default async function CollectionPage({
     throw new Error(`載入商品列表失敗：${error.message}`)
   }
 
-  const cards: ProductCardData[] = products.map((product) => {
-    const gemOption = product.product_option.find((o) => o.option_type.code === GEM_COLOR_OPTION_CODE)
-    const metalOption = product.product_option.find(
-      (o) => o.option_type.code === METAL_COLOR_OPTION_CODE,
-    )
-    const gemDefault = (
-      gemOption?.product_option_value.find((v) => v.is_default) ?? gemOption?.product_option_value[0]
-    )?.option_value
-    const metalDefault = (
-      metalOption?.product_option_value.find((v) => v.is_default) ??
-      metalOption?.product_option_value[0]
-    )?.option_value
-    const metaParts = [metalDefault?.label, gemDefault?.label].filter((v): v is string => Boolean(v))
-
-    return {
-      slug: product.slug,
-      name: product.name,
-      // 「起」價算法抽至 computeStartPrice（T59 起與 PDP metadata／JSON-LD 共用）
-      basePrice: computeStartPrice(product.base_price, product.product_option),
-      meta: metaParts.length > 0 ? metaParts.join(" · ") : null,
-      gemColor: gemDefault?.swatch_hex ?? null,
-    }
-  })
+  const cards: ProductCardData[] = products.map(mapProductRowToCardData)
 
   const breadcrumbItems = [
     { label: "首頁", href: "/" },

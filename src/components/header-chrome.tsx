@@ -15,8 +15,14 @@ const OVERLAY_NAV = [
   { label: "ABOUT", href: "/#story" },
 ]
 
-// header 下緣稍下方的探測點 y：用來判斷當下捲到深色區還是淺色區（決定浮層字色）。
-const PROBE_Y = 72
+// 讀 --header-height（globals.css :root）作為 header 下緣高度，供深/淺區偵測的
+// rootMargin 使用——由 header 高度推導、不寫死，header 高度變更自動跟隨。
+function getHeaderHeight() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(
+    "--header-height",
+  )
+  return parseFloat(v) || 65
+}
 
 // 導覽列外殼（client）。行為僅套在首頁：
 //   往上滾 → 浮層（COLLECTIONS/CUSTOM/ABOUT）；文字隨背景深淺換色
@@ -33,6 +39,7 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
   const [onDarkState, setOnDarkState] = useState(true)
   const lastY = useRef(0)
 
+  // 首頁：依捲動方向切浮層/實色（頁首一律浮層）。純 scrollY 計算、無 hit-test。
   useEffect(() => {
     if (!isHome) return
     lastY.current = window.scrollY
@@ -50,9 +57,6 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
       else if (firstRun) setFloatState(false)
       else if (Math.abs(dy) > 4) setFloatState(dy < 0)
       firstRun = false
-      // 浮層字色：探測 header 下方元素是否落在深色區段內。
-      const el = document.elementFromPoint(window.innerWidth / 2, PROBE_Y)
-      setOnDarkState(Boolean(el?.closest("[data-nav-dark]")))
     }
     const onScroll = () => {
       if (!raf) raf = requestAnimationFrame(update)
@@ -62,6 +66,53 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
     return () => {
       window.removeEventListener("scroll", onScroll)
       if (raf) cancelAnimationFrame(raf)
+    }
+  }, [isHome])
+
+  // 首頁：浮層字色（深/淺區）用 IntersectionObserver 監看 data-nav-dark 區段
+  // 是否覆蓋 header 下緣那條線——只在區段進出時觸發，取代每幀 elementFromPoint
+  // 的同步 hit-test（省 layout flush，低階裝置捲動較順）。
+  useEffect(() => {
+    if (!isHome) return
+    const sections = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-nav-dark]"),
+    )
+    if (!sections.length) return
+    const intersecting = new Set<Element>()
+    let observer: IntersectionObserver | null = null
+    const build = () => {
+      observer?.disconnect()
+      intersecting.clear()
+      const headerH = getHeaderHeight()
+      // 觀察區縮成 header 下緣的 1px 橫線：top 減 header 高、bottom 只留 1px。
+      const bottom = -(window.innerHeight - headerH - 1)
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (e.isIntersecting) intersecting.add(e.target)
+            else intersecting.delete(e.target)
+          }
+          setOnDarkState(intersecting.size > 0)
+        },
+        { rootMargin: `${-headerH}px 0px ${bottom}px 0px`, threshold: 0 },
+      )
+      sections.forEach((s) => observer!.observe(s))
+    }
+    build()
+    // 視窗高度變動會改變那條線位置，rAF 節流後重建 observer。
+    let resizeRaf = 0
+    const onResize = () => {
+      if (!resizeRaf)
+        resizeRaf = requestAnimationFrame(() => {
+          resizeRaf = 0
+          build()
+        })
+    }
+    window.addEventListener("resize", onResize)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener("resize", onResize)
+      if (resizeRaf) cancelAnimationFrame(resizeRaf)
     }
   }, [isHome])
 
