@@ -32,6 +32,9 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: process.env.VERCEL_ENV === "preview",
   },
   images: {
+    // AVIF 優先、WebP fallback（T17 定：手機實際下載 828–1080px AVIF）；
+    // 兩者皆不支援時 next/image 自動回退原始格式。
+    formats: ["image/avif", "image/webp"],
     remotePatterns: [
       {
         protocol: "https",
