@@ -27,8 +27,14 @@ export function SiteFooter() {
     <footer className="mt-16 bg-primary text-primary-foreground/80">
       <div className="mx-auto grid max-w-[1240px] grid-cols-1 gap-8 px-6 py-12 sm:grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr]">
         <div>
-          <div className="font-heading text-base tracking-[0.26em] text-primary-foreground uppercase">
-            INCANTOCHEN
+          <div className="flex items-baseline gap-2 font-heading text-primary-foreground">
+            <span className="text-base tracking-[0.26em] uppercase">
+              INCANTOCHEN
+            </span>
+            <span aria-hidden className="text-secondary-400">
+              ·
+            </span>
+            <span className="text-[15px] tracking-[0.12em]">辰醉金閣</span>
           </div>
           <p className="mt-3 max-w-[30ch] text-sm">
             天然彩色寶石與細膩工藝，融入日常、令人回味的珠寶。

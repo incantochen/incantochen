@@ -30,9 +30,14 @@ export function SiteHeader() {
       <div className="mx-auto grid h-full max-w-[1240px] grid-cols-[1fr_auto_1fr] items-center gap-4 px-6">
         <Link
           href="/"
-          className="font-heading text-lg tracking-[0.28em] text-ink uppercase"
+          aria-label="incantochen 辰醉金閣 首頁"
+          className="flex items-baseline gap-2 font-heading text-ink"
         >
-          INCANTOCHEN
+          <span className="text-lg tracking-[0.28em] uppercase">INCANTOCHEN</span>
+          <span aria-hidden className="text-secondary-400">
+            ·
+          </span>
+          <span className="text-base tracking-[0.12em]">辰醉金閣</span>
         </Link>
 
         <nav className="hidden justify-center gap-9 md:flex">
