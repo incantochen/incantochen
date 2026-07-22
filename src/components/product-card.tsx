@@ -15,10 +15,11 @@ export function ProductCard({ product }: { product: ProductCardData }) {
   return (
     <Link
       href={`/products/${product.slug}`}
-      className="group overflow-hidden rounded-lg border border-border bg-white transition hover:-translate-y-1 hover:shadow-[0_22px_44px_-28px_rgba(6,59,47,0.5)]"
+      // 邊框沿用 demo 卡片的較淺色 #ece8e0（比 --border #d9d5cc 更含蓄）
+      className="group overflow-hidden rounded-lg border border-[#ece8e0] bg-white transition hover:-translate-y-1 hover:shadow-[0_22px_44px_-28px_rgba(6,59,47,0.5)]"
     >
       <PlaceholderImage
-        className="aspect-square border-b border-border"
+        className="aspect-square border-b border-[#ece8e0]"
         iconSize="size-10"
         caption="配戴情境圖"
       />
