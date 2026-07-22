@@ -3,7 +3,7 @@ import Image from "next/image";
 import type { Metadata } from "next";
 import { ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ProductCard } from "@/components/product-card";
+import { ProductCard, type ProductCardData } from "@/components/product-card";
 import { getFeaturedProducts } from "@/lib/product/featured-products";
 
 export const metadata: Metadata = {
@@ -14,7 +14,14 @@ export const metadata: Metadata = {
 const FEATURED_LIMIT = 4;
 
 export default async function Home() {
-  const featured = await getFeaturedProducts(FEATURED_LIMIT);
+  // 精選區為非關鍵展示：DB 暫時性故障時降級隱藏、其餘首頁內容照常呈現，
+  // 不讓不依賴 DB 的 hero／理念／CTA 隨查詢失敗一起 500。
+  let featured: ProductCardData[] = [];
+  try {
+    featured = await getFeaturedProducts(FEATURED_LIMIT);
+  } catch (err) {
+    console.error("[home] 載入精選商品失敗，降級隱藏精選區：", err);
+  }
 
   return (
     <>
@@ -61,9 +68,15 @@ export default async function Home() {
           </span>
         </div>
 
-        {/* hero-tag：左下 eyebrow（極簡編輯感，brand-guide §8 hero 只留 eyebrow） */}
+        {/* hero-tag：左下 eyebrow（極簡編輯感，brand-guide §8 hero 只留 eyebrow）。
+            視覺維持極簡；h1 以 sr-only 提供文件主標（SEO／螢幕報讀器大綱）。 */}
         <div className="mx-auto flex w-full max-w-[1240px] items-end px-6 pb-16 md:pl-[110px]">
-          <span className="eyebrow">incanto · 著迷</span>
+          <h1 className="sr-only">
+            incantochen 辰醉金閣 — 高端半客製彩色寶石珠寶
+          </h1>
+          <span className="eyebrow" aria-hidden>
+            incanto · 著迷
+          </span>
         </div>
       </section>
 
@@ -134,7 +147,7 @@ export default async function Home() {
       {/* ── CHOOSE COLOR / CUSTOM（深色影像疊圖 CTA）──────────────── */}
       <section
         data-nav-dark
-        className="relative isolate overflow-hidden bg-emerald-900 text-paper"
+        className="relative isolate overflow-hidden bg-primary-900 text-paper"
       >
         <Image
           src="/brand/choose.jpg"

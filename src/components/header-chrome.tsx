@@ -37,14 +37,19 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
     if (!isHome) return
     lastY.current = window.scrollY
     let raf = 0
+    let firstRun = true
     const update = () => {
       raf = 0
       const y = window.scrollY
       const dy = y - lastY.current
       lastY.current = y
       // 頁首一律浮層；否則依方向：往上滾浮層、往下滾實色（<4px 抖動不切換）。
+      // 初次量測 dy≈0 無方向可判——深連結落在已捲動的頁面時直接判實色，
+      // 不讓 header 卡在初始的浮層態直到使用者首次捲動。
       if (y <= 8) setFloatState(true)
+      else if (firstRun) setFloatState(false)
       else if (Math.abs(dy) > 4) setFloatState(dy < 0)
+      firstRun = false
       // 浮層字色：探測 header 下方元素是否落在深色區段內。
       const el = document.elementFromPoint(window.innerWidth / 2, PROBE_Y)
       setOnDarkState(Boolean(el?.closest("[data-nav-dark]")))
@@ -120,18 +125,25 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
                   {link.label}
                 </Link>
               ))
-            : CATEGORY_NAV.map((link) => (
-                <Link
-                  key={link.en}
-                  href={link.href}
-                  className="flex flex-col items-center leading-tight text-ink/85 transition-colors hover:text-secondary-400"
-                >
-                  <span className="text-[13px] tracking-[0.10em]">{link.zh}</span>
-                  <span className="mt-0.5 text-[9px] tracking-[0.22em] uppercase opacity-60">
-                    {link.en}
-                  </span>
-                </Link>
-              ))}
+            : CATEGORY_NAV.map((link) => {
+                const active = pathname === link.href
+                return (
+                  <Link
+                    key={link.en}
+                    href={link.href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "flex flex-col items-center leading-tight transition-colors hover:text-secondary-400",
+                      active ? "text-primary" : "text-ink/85",
+                    )}
+                  >
+                    <span className="text-[13px] tracking-[0.10em]">{link.zh}</span>
+                    <span className="mt-0.5 text-[9px] tracking-[0.22em] uppercase opacity-60">
+                      {link.en}
+                    </span>
+                  </Link>
+                )
+              })}
         </nav>
 
         <div
