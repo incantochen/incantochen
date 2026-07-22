@@ -169,7 +169,7 @@ export default async function CollectionPage({
           此品類即將推出，敬請期待。
         </div>
       ) : (
-        <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-8 grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
           {cards.map((product) => (
             <ProductCard key={product.slug} product={product} />
           ))}

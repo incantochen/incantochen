@@ -98,7 +98,7 @@ export default async function Home() {
             作品即將上架，敬請期待。
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
             {featured.map((product) => (
               <ProductCard key={product.slug} product={product} />
             ))}
