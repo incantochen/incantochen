@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:progress": "node scripts/build-progress.mjs"
   },
   "dependencies": {
     "@sentry/nextjs": "10.63.0",

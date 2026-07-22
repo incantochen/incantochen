@@ -27,7 +27,7 @@
 - **T39** 導入 UI kit 基礎樣式 · ✅完成 — shadcn/ui 已初始化；品牌色票（Emerald/Gold 完整色階）與雙軌字體已寫入 globals.css @theme；button.tsx 改寫為品牌規格（11.5px、tracking .2em、uppercase、ro…
 - **T56** 3D 素材製作（自學 Blender） · 🚫取消 — ◆ Blender 免費自學；單款建模＋批次算金屬色×寶石素材（時間另計）｜❌ 取消（2026-07-14）：C-1 商品圖策略拍板——改採「實拍底圖＋AI 圖像編輯批次生成全矩陣」（T116），不自學 Blender、不自建 3D 能…
 
-## M1（22）
+## M1（21）
 
 - **T06** 登入入口（Email OTP／Magic link） · ✅完成 — /login＋/auth/confirm；修正雲端 OTP 實際 8 位數(非 6 位)的 bug；Playwright 驗證通過
 - **T07** 登入狀態與路由保護 · ✅完成 — proxy.ts(session refresh)＋requireUser()＋/account 最小驗證頁；member 表無 INSERT policy，建會員走 service role
@@ -52,7 +52,7 @@
 - **T30a** Email 下單確認（基本） · ✅完成 — 付款成功寄客人確認信｜✅ 完成（2026-06-27）：resend 安裝；env.server.ts 加 RESEND_API_KEY；src/lib/email/order-confirmation.ts（查 order+items…
 - **T49** 新訂單通知店家 · ✅完成 — 有新單即 email／LINE 通知你本人｜✅ 完成（2026-06-27）：src/lib/email/new-order-notification.ts（sendNewOrderNotification：查 orders+items…
 
-## M2（47）
+## M2（46）
 
 - **T28** 訂單狀態機 · ✅完成 — 狀態定義與合法轉換
 - **T29** 狀態紀錄（OrderStatusLog） · ✅完成 — 狀態變更寫 log
