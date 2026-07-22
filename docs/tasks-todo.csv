@@ -4,7 +4,6 @@ T48,M1,金流,綠界黑貓宅配串接（保價＋本人簽收）,黑貓宅配 A
 T54,M4,前台,🚀戒圍尺寸對照／量法說明頁,降低選錯尺寸的重做成本,T16,0.5,76,P1,未開始
 T44,M4,設計,🚀品牌視覺打磨,在 UI kit 基礎上提升質感,"T39,T16",2,78,P1,未開始
 T60,M4,分析,🚀◆ 網站分析＋Cookie 同意,GA4／轉換追蹤＋Cookie 同意 banner,T14,0.5,82,P1,未開始
-T62,M4,前台,🚀◆ 客製錯誤頁＋圖片效能優化,404／500 頁、Next.js Image 最佳化、lazy load｜⏳ 部分完成（2026-07-20，PR #87）：客製 404（not-found.tsx）＋500（error.tsx，回報 Sentry＋reset）已上線，品牌 token 沿用 SystemBusyCard，dev 走查 404 UI 正常。走查發現 notFound() 動態渲染下 soft-404（狀態碼 200）＝既有 SEO 課題，非本次造成，已登記併入 T59。**剩餘**：Next.js Image 最佳化／lazy-load（範圍會掃全站元件）留前台批次（與 T44／T60／T120 同批，2026-07-28 後）。,T40,0.5,82.5,P1,進行中
 T50,M5,通知,🚀Email 送達性（SPF/DKIM/DMARC）,寄件網域驗證，避免進垃圾信,T30a,0.5,87,P0,未開始
 T34,M5,上線,🚀資料庫自動備份設定,排程備份／升 Pro（收單前必做）。**DoD 擴充（2026-07-04 營運面檢討）：必須實際演練一次還原**（還原到獨立測試專案、驗證資料完整）——沒驗證過還原的備份等於沒有備份。Dashboard 操作由使用者本人執行。,T03,0.5,87.5,P0,未開始
 T35,M5,上線,🚀正式環境＋ECPay 正式金鑰,切正式、環境變數｜待辦（2026-07-10，T83 遺留事項）：Resend 網域驗證完成後，需回頭把 Supabase Dashboard 的 Custom SMTP 寄件人從 `onboarding@resend.dev` 改成 `orders@incantochen.com`，否則正式客人收不到 Auth 登入信（magic link／OTP）。｜⚠️ 驗收必做（2026-07-15，T107 風險評估）：換正式網域＋正式金鑰後**立刻打一筆真實小額交易驗證 webhook 有到達**（查 payment 翻 paid＋notification sent＋order_status_log 有 ECPay webhook 記錄）——ReturnURL 沒同步、sandbox／正式金鑰混用屬「設定層」失敗：全滅型（每筆都收不到）、綠界重送救不了、不自癒，人為出錯機率遠高於網路／平台／應用三層加總，一筆測試交易即可 100% 驗出；分層機率評估見 ops-runbook §1.2。,T26,1,88.5,P0,未開始
