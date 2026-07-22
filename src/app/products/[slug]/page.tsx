@@ -132,7 +132,10 @@ export default async function ProductDetailPage({
         id: value.id,
         label: value.option_value.label,
         isDefault: value.is_default,
-        priceDelta: value.price_delta,
+        // §6：PostgREST 對 numeric 欄位可能回字串——在資料進 client 元件的
+        // 邊界統一 Number()（對齊 start-price.ts），否則配置器的 basePrice+Σ
+        // 會變字串串接、可見價格與 add_to_cart value 全錯。
+        priceDelta: Number(value.price_delta),
       })),
   }));
 
@@ -216,7 +219,8 @@ export default async function ProductDetailPage({
           <div className="mt-4">
             <ProductConfigurator
               productId={product.id}
-              basePrice={product.base_price}
+              productName={product.name}
+              basePrice={Number(product.base_price)}
               options={configuratorOptions}
               unavailable={unavailable}
             />

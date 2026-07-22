@@ -62,6 +62,10 @@ export async function getCart(): Promise<{
     const snapshot = item.config_snapshot as {
       selections?: { label: string }[];
     };
+    // §6：PostgREST 對 numeric（unit_price_snapshot）可能回字串——先 Number()，
+    // 否則 begin_checkout 事件會把 item price 送成字串（顯示層靠 * 隱式轉數字而
+    // 遮住此 bug）。
+    const unitPrice = Number(item.unit_price_snapshot);
     return {
       id: item.id,
       productName: item.product.name,
@@ -70,8 +74,8 @@ export async function getCart(): Promise<{
         .map((s) => s.label)
         .join(" · "),
       quantity: item.quantity,
-      unitPriceSnapshot: item.unit_price_snapshot,
-      lineTotal: item.unit_price_snapshot * item.quantity,
+      unitPriceSnapshot: unitPrice,
+      lineTotal: unitPrice * item.quantity,
     };
   });
 
