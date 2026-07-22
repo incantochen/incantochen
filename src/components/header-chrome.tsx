@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Search, User } from "lucide-react"
+import { User } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MobileNav } from "@/components/mobile-nav"
 import { CATEGORY_NAV } from "@/components/site-nav-links"
@@ -83,10 +83,10 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
           )}
         >
           <span className="text-lg tracking-[0.28em] uppercase">INCANTOCHEN</span>
-          <span aria-hidden className="text-secondary-400">
+          <span aria-hidden className="hidden text-secondary-400 sm:inline">
             ·
           </span>
-          <span className="text-base tracking-[0.12em]">辰醉金閣</span>
+          <span className="hidden text-base tracking-[0.12em] sm:inline">辰醉金閣</span>
         </Link>
 
         <nav
@@ -128,13 +128,6 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
             lightText ? "text-paper" : "text-ink",
           )}
         >
-          <Link
-            href="/collections/ring"
-            aria-label="搜尋"
-            className="opacity-80 hover:text-secondary-400 hover:opacity-100"
-          >
-            <Search className="size-[18px]" strokeWidth={1.4} />
-          </Link>
           <Link
             href="/account"
             aria-label="會員"
