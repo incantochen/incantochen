@@ -21,13 +21,13 @@ export default async function Home() {
       {/* ── HERO：滿版攝影＋左緣金線 signature（demo indexV2 / brand-guide §8）── */}
       <section className="relative isolate flex min-h-[86vh] overflow-hidden bg-primary text-paper">
         <Image
-          src="/brand/hero.jpg"
-          alt="配戴 incantochen 祖母綠項鍊與耳環的女子"
+          src="/brand/hero.png"
+          alt="藏藍絨盒上的金質皇冠戒，中央鑲藍寶石"
           fill
           priority
           sizes="100vw"
           className="-z-20 object-cover"
-          style={{ objectPosition: "72% 28%" }}
+          style={{ objectPosition: "50% 42%" }}
         />
         {/* 上下壓暗漸層：讓導覽與底部文案聚焦（demo .hero::after） */}
         <div
