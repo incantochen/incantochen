@@ -126,6 +126,7 @@ export default async function ProductDetailPage({
   const configuratorOptions: ConfiguratorOption[] = options.map((option) => ({
     id: option.id,
     name: option.option_type.name,
+    code: option.option_type.code,
     inputType: option.option_type.input_type,
     values: [...option.product_option_value]
       .sort((a, b) => a.option_value.sort_order - b.option_value.sort_order)
