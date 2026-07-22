@@ -28,7 +28,11 @@ function buildCsp(nonce: string | null): string {
   return [
     "default-src 'self'",
     nonce === null
-      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      ? // dev（無 nonce／strict-dynamic）：外部 gtag.js 非 'self'、'unsafe-inline'
+        // 不涵蓋跨網域 src，需顯式放行 googletagmanager 否則 GA 在本機被擋、
+        // 無法端到端測 GA4。production 走 nonce 分支——帶 nonce 的 loader 由
+        // strict-dynamic 信任，不需（也不應）列 host 白名單，故僅 dev 分支加。
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com"
       : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
     "style-src 'self' 'unsafe-inline'",
     // T60 GA4：img-src／connect-src 放行 GA 量測端點（beacon／像素／gtag.js
