@@ -216,6 +216,7 @@ export default async function ProductDetailPage({
           <div className="mt-4">
             <ProductConfigurator
               productId={product.id}
+              productName={product.name}
               basePrice={product.base_price}
               options={configuratorOptions}
               unavailable={unavailable}

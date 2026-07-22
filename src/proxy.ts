@@ -31,8 +31,13 @@ function buildCsp(nonce: string | null): string {
       ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
       : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://*.supabase.co",
-    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io",
+    // T60 GA4：img-src／connect-src 放行 GA 量測端點（beacon／像素／gtag.js
+    // 的 fetch 傳輸）。script-src 不加 GA host——strict-dynamic 下 host 白名單
+    // 本就被忽略，gtag.js 由 google-analytics.tsx（經帶 nonce 的框架 chunk
+    // 執行的 createElement）動態插入而獲得信任。
+    // *.analytics.google.com 涵蓋 region1.analytics.google.com 等區域 collect 端點。
+    "img-src 'self' data: blob: https://*.supabase.co https://www.googletagmanager.com https://*.google-analytics.com",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com",
     "form-action 'self' https://payment-stage.ecpay.com.tw https://payment.ecpay.com.tw",
     "frame-ancestors 'none'",
   ].join("; ");
