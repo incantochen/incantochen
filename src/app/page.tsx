@@ -18,8 +18,9 @@ export default async function Home() {
 
   return (
     <>
-      {/* ── HERO：滿版攝影＋左緣金線 signature（demo indexV2 / brand-guide §8）── */}
-      <section className="relative isolate flex min-h-[86vh] overflow-hidden bg-primary text-paper">
+      {/* ── HERO：滿版攝影＋左緣金線 signature（demo indexV2 / brand-guide §8）──
+          -mt 讓 hero 鑽到透明導覽列下方（首頁 header 透明浮層，見 HeaderChrome）*/}
+      <section className="relative isolate -mt-[var(--header-height)] flex min-h-[86vh] overflow-hidden bg-primary text-paper">
         <Image
           src="/brand/hero.png"
           alt="藏藍絨盒上的金質皇冠戒，中央鑲藍寶石"

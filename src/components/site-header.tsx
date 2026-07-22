@@ -1,14 +1,8 @@
 import Link from "next/link"
 import { Suspense } from "react"
-import { Search, ShoppingBag, User } from "lucide-react"
+import { ShoppingBag } from "lucide-react"
 import { getCartCount } from "@/lib/cart/get-cart-count"
-import { MobileNav } from "@/components/mobile-nav"
-
-const navLinks = [
-  { label: "COLLECTIONS", href: "/collections/ring" },
-  { label: "CUSTOM", href: "#" },
-  { label: "ABOUT", href: "#" },
-]
+import { HeaderChrome } from "@/components/header-chrome"
 
 async function CartIconWithBadge() {
   const count = await getCartCount()
@@ -24,53 +18,22 @@ async function CartIconWithBadge() {
   )
 }
 
+// 購物車 icon 讀 DB（getCartCount），屬 server 端邏輯——在此預渲染後以
+// cartSlot 傳入 client 的 HeaderChrome（透明/實色切換需要 usePathname＋捲動）。
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-40 h-[var(--header-height)] border-b border-border bg-paper">
-      <div className="mx-auto grid h-full max-w-[1240px] grid-cols-[1fr_auto_1fr] items-center gap-4 px-6">
-        <Link
-          href="/"
-          aria-label="incantochen 辰醉金閣 首頁"
-          className="flex items-baseline gap-2 font-heading text-ink"
-        >
-          <span className="text-lg tracking-[0.28em] uppercase">INCANTOCHEN</span>
-          <span aria-hidden className="text-secondary-400">
-            ·
-          </span>
-          <span className="text-base tracking-[0.12em]">辰醉金閣</span>
-        </Link>
-
-        <nav className="hidden justify-center gap-9 md:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.label}
-              href={link.href}
-              className="text-xs tracking-[0.22em] text-ink/80 uppercase hover:text-secondary-400"
-            >
-              {link.label}
+    <HeaderChrome
+      cartSlot={
+        <Suspense
+          fallback={
+            <Link href="/cart" aria-label="購物袋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
+              <ShoppingBag className="size-[18px]" strokeWidth={1.4} />
             </Link>
-          ))}
-        </nav>
-
-        <div className="flex items-center justify-end gap-5 text-ink">
-          <Link href="/collections/ring" aria-label="搜尋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
-            <Search className="size-[18px]" strokeWidth={1.4} />
-          </Link>
-          <Link href="/account" aria-label="會員" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
-            <User className="size-[18px]" strokeWidth={1.4} />
-          </Link>
-          <Suspense
-            fallback={
-              <Link href="/cart" aria-label="購物袋" className="opacity-80 hover:text-secondary-400 hover:opacity-100">
-                <ShoppingBag className="size-[18px]" strokeWidth={1.4} />
-              </Link>
-            }
-          >
-            <CartIconWithBadge />
-          </Suspense>
-          <MobileNav />
-        </div>
-      </div>
-    </header>
+          }
+        >
+          <CartIconWithBadge />
+        </Suspense>
+      }
+    />
   )
 }
