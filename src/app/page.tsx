@@ -20,7 +20,10 @@ export default async function Home() {
     <>
       {/* ── HERO：滿版攝影＋左緣金線 signature（demo indexV2 / brand-guide §8）──
           -mt 讓 hero 鑽到透明導覽列下方（首頁 header 透明浮層，見 HeaderChrome）*/}
-      <section className="relative isolate -mt-[var(--header-height)] flex min-h-[86vh] overflow-hidden bg-primary text-paper">
+      <section
+        data-nav-dark
+        className="relative isolate -mt-[var(--header-height)] flex min-h-[86vh] overflow-hidden bg-primary text-paper"
+      >
         <Image
           src="/brand/hero.png"
           alt="藏藍絨盒上的金質皇冠戒，中央鑲藍寶石"
@@ -128,7 +131,10 @@ export default async function Home() {
       </section>
 
       {/* ── CHOOSE COLOR / CUSTOM（深色影像疊圖 CTA）──────────────── */}
-      <section className="relative isolate overflow-hidden bg-emerald-900 text-paper">
+      <section
+        data-nav-dark
+        className="relative isolate overflow-hidden bg-emerald-900 text-paper"
+      >
         <Image
           src="/brand/choose.jpg"
           alt="綠絨托盤上的彩色寶石戒指"
@@ -159,7 +165,11 @@ export default async function Home() {
       </section>
 
       {/* ── STORY（品牌名 incanto）───────────────────────────────── */}
-      <section id="story" className="bg-primary py-20 text-center text-paper sm:py-24">
+      <section
+        id="story"
+        data-nav-dark
+        className="scroll-mt-[var(--header-height)] bg-primary py-20 text-center text-paper sm:py-24"
+      >
         <div className="mx-auto max-w-[680px] px-6">
           <div className="eyebrow">the name</div>
           <p className="mt-3 font-heading text-[clamp(1.875rem,4.6vw,3.25rem)] text-secondary-400 italic">
