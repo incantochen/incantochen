@@ -52,8 +52,9 @@
 - **T30a** Email 下單確認（基本） · ✅完成 — 付款成功寄客人確認信｜✅ 完成（2026-06-27）：resend 安裝；env.server.ts 加 RESEND_API_KEY；src/lib/email/order-confirmation.ts（查 order+items…
 - **T49** 新訂單通知店家 · ✅完成 — 有新單即 email／LINE 通知你本人｜✅ 完成（2026-06-27）：src/lib/email/new-order-notification.ts（sendNewOrderNotification：查 orders+items…
 
-## M2（46）
+## M2（47）
 
+- **T120** ◆ 配置器依 input_type 渲染 · ✅完成 · PR #124 — product-configurator.tsx 抽 OptionValues，依 option_type.input_type 分支：swatch→彩色圓點（swatch_hex＋CSS 高光/內陰影 basic 漸層；任一值缺色碼整組退回 chip；選中態 Emerald 框＋金 ring §7.5）、select→原生下拉（focus Emerald／radius 11px §7.6）、stepper→加減器（排序後值清單前後移動）、default/未知→chip 不破版。PDP page.tsx 查詢補撈 option_value.swatch_hex、mapping 帶 inputType/swatchHex；送出仍 option_value id，計價鏈/後台/addToCart/verify-prices 未動。seed 金屬補色並擴為 4 色（黃金/白金/玫瑰金/銀），寶石色暫留 NULL 待 tune。進階金屬/寶石质感（深色台反光級高光/culet 折射）留 T44。⚠️ 已知限制：stepper 切換不顯示 price_delta（swatch/select 會顯示）——計價正常、僅缺即時價差提示，日後若把會加價選項設為 stepper 需補（見 product-configurator.tsx stepper 分支註解）。驗收：本機 db reset 通過＋雲端實測三分支渲染正確、lint/typecheck 綠。
 - **T28** 訂單狀態機 · ✅完成 — 狀態定義與合法轉換
 - **T29** 狀態紀錄（OrderStatusLog） · ✅完成 — 狀態變更寫 log
 - **T08** 會員中心框架 · ✅完成 — 版面、個人資料頁｜✅ 完成（2026-07-01）：`/account` layout（側邊 nav：訂單／個人資料／登出）＋`account-nav.tsx`（active 判斷）；`/account/profile`（唯讀 Emai…
