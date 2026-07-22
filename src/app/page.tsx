@@ -84,9 +84,9 @@ export default async function Home() {
       {/* ── SELECTED PIECES（真實上架商品）───────────────────────── */}
       <section
         id="products"
-        className="mx-auto max-w-[1240px] scroll-mt-[var(--header-height)] px-6 py-16 sm:py-20"
+        className="mx-auto max-w-[1240px] scroll-mt-[var(--header-height)] px-6 pt-8 pb-16 sm:pt-10 sm:pb-20"
       >
-        <div className="mb-12 flex min-h-16 items-center justify-between gap-5">
+        <div className="mb-8 flex min-h-16 items-center justify-between gap-5">
           <div className="eyebrow leading-none">selected pieces</div>
           <Button asChild variant="outline" size="sm">
             <Link href="/collections/ring">所有產品</Link>
@@ -98,9 +98,15 @@ export default async function Home() {
             作品即將上架，敬請期待。
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
+          // flex + justify-center：商品少於一排時自動置中（手機 2 欄、桌機至多 4 欄）
+          <div className="flex flex-wrap justify-center gap-4 sm:gap-6">
             {featured.map((product) => (
-              <ProductCard key={product.slug} product={product} />
+              <div
+                key={product.slug}
+                className="w-[calc(50%-0.5rem)] sm:w-[calc(50%-0.75rem)] lg:w-[calc(25%-1.125rem)]"
+              >
+                <ProductCard product={product} />
+              </div>
             ))}
           </div>
         )}
