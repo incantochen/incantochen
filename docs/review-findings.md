@@ -10,30 +10,48 @@
 
 > 每輪的完整備註（delta 複核、逐條回歸確認）見 `review-findings-archive.md`。
 
-| 日期 | 範圍 | 模型 | 新發現 |
-|------|------|------|--------|
-| 2026-07-02 | code+schema+flow | opus-4-8 | F-001～F-004（首份） |
-| 2026-07-03 | code+schema+flow | opus-4-8 | F-005～F-006 |
-| 2026-07-04 | code+schema+flow | opus-4-8 | F-007 |
-| 2026-07-07 | code（全面風險） | fable-5 | F-008～F-013 |
-| 2026-07-07 | code+schema+flow（平行） | opus-4-8 | F-014～F-016 |
-| 2026-07-08 | code+schema+flow | opus-4-8 | F-017 |
-| 2026-07-09 | code+schema+flow | opus-4-8 | F-020 |
-| 2026-07-10 | code+schema+flow | opus-4-8 | F-021～F-022 |
-| 2026-07-13 | code+schema+flow | opus-4-8 | F-023 |
-| 2026-07-15 | code+schema+flow | opus-4-8 | F-024 |
-| 2026-07-16 | code+schema+flow | opus-4-8 | 無（覆蓋輪替結案） |
-| 2026-07-21 | security-foundation 漂移檢核 | opus-4-8 | 無（1 條清單失同步已就地修） |
+| 日期       | 範圍                         | 模型     | 新發現                                            |
+| ---------- | ---------------------------- | -------- | ------------------------------------------------- |
+| 2026-07-02 | code+schema+flow             | opus-4-8 | F-001～F-004（首份）                              |
+| 2026-07-03 | code+schema+flow             | opus-4-8 | F-005～F-006                                      |
+| 2026-07-04 | code+schema+flow             | opus-4-8 | F-007                                             |
+| 2026-07-07 | code（全面風險）             | fable-5  | F-008～F-013                                      |
+| 2026-07-07 | code+schema+flow（平行）     | opus-4-8 | F-014～F-016                                      |
+| 2026-07-08 | code+schema+flow             | opus-4-8 | F-017                                             |
+| 2026-07-09 | code+schema+flow             | opus-4-8 | F-020                                             |
+| 2026-07-10 | code+schema+flow             | opus-4-8 | F-021～F-022                                      |
+| 2026-07-13 | code+schema+flow             | opus-4-8 | F-023                                             |
+| 2026-07-15 | code+schema+flow             | opus-4-8 | F-024                                             |
+| 2026-07-16 | code+schema+flow             | opus-4-8 | 無（覆蓋輪替結案）                                |
+| 2026-07-21 | security-foundation 漂移檢核 | opus-4-8 | 無（1 條清單失同步已就地修）                      |
+| 2026-07-22 | code+schema+flow             | opus-4-8 | F-025～F-026（皆 P2；PR #86～#115 大 delta 複核） |
 
 ---
 
 ## 活躍發現
 
-目前**無活躍（待確認/未修）發現**——所有 F-001～F-024 皆已解決/已轉任務（下方索引）。
+> 全文＋失敗情境＋修法。**只有使用者能把狀態改「確認」或「不採納」**；經確認才轉 tasks-todo.csv＋issues。
+
+### F-025 [P2] addToCart 的 lineUnitPrice 以未 `Number()` 轉型的 base_price／price_delta 直接相加，違反 §6 numeric 轉型規則（latent，目前不觸發）
+
+- 狀態：待確認
+- 位置：`src/app/products/[slug]/actions.ts:191`（`const lineUnitPrice = product.base_price + selections.reduce((sum, s) => sum + s.price_delta, 0)`）；快照組裝 `configSnapshot.line_unit_price`／寫入 `cart_item.unit_price_snapshot`（同檔約 :199、:290）
+- 失敗情境（條件式）：`product.base_price` 與 `option_value.price_delta` 皆為 `numeric(12,0)`（migration 0001:85、:132）。§6 明載「PostgREST 對 numeric 欄位**可能**回傳字串（生成型別仍標 number）」。**若**該查詢回字串，`reduce` 的 `0 + "500"` 與 `"12000" + "0500"` 會退化成字串串接——`lineUnitPrice` 變 `"120000500"` 之類垃圾值，寫進 cart_item 快照＝購物車顯示錯價、`unit_price_snapshot` 汙染。
+- **目前不觸發（反證）**：①PDP client 配置器（`product-configurator.tsx:69-70`）以同組 base_price／price_delta 做 `basePrice + …` 算術並正確顯示金額，證明這條查詢在本部署回傳的是 number；②結帳權威 `verify-prices.ts:81-87、:140-145` 對 base_price／price_delta 做 `typeof !== "number"` 硬守衛並 throw「定價資料異常」——若 runtime 真回字串，**每一筆結帳都會被擋、無單可成**，與 production 有真實訂單／退款的事實矛盾。故此路徑當前 benign，且即便未來 serialization 改變，結帳端 fail-safe（擋單、不造成財務損失）。
+- 修法：§6 一致性補強——`const basePrice = Number(product.base_price)`、`price_delta: Number(selectedValue.price_delta)`（`start-price.ts`／`verify-prices.ts` 已這樣做，本檔是唯一漏網的算術點）。純防禦一致性，非活躍 bug；可併入既有前台批次或 §6 巡檢，不需獨立緊急修。
+- 記錄：2026-07-22 首次發現（PR #86～#115 大 delta 複核，第一遍對抗性問題集 §6「numeric 轉換點」）。
+
+### F-026 [P2] `shadcn` 列於 `dependencies`（非 `devDependencies`）：把 `@modelcontextprotocol/sdk`→`hono`（4 筆 XSS／path-traversal advisories）拉進 production 依賴樹
+
+- 狀態：待確認
+- 位置：`package.json` `dependencies.shadcn`（CLI 工具，`grep` 確認**從未** import 進 `src/`；僅供 `pnpm dlx shadcn add` 用）
+- 失敗情境：`pnpm audit`（端點已恢復，見下）回報 10 筆 advisory，其中 4 筆 moderate 全數來自 `.>shadcn>@modelcontextprotocol/sdk>hono`（Server-Side XSS via cx()、path traversal、per-request context 未隔離等）。因 `shadcn` 誤列 production dependency，`pnpm install --prod`／部署產物會把整個 hono server 框架＋MCP SDK 裝進 production `node_modules`。該樹在 app runtime **從不執行**（無 import、無啟動），故無直接 RCE 路徑；具體危害＝①無謂膨脹 production 供應鏈攻擊面；②`pnpm audit --prod` 永久噪音（9 筆），日後真正 production runtime 的 advisory 會被埋沒漏看；③部署體積。
+- 修法：`pnpm remove shadcn && pnpm add -D shadcn`（移到 devDependencies）。CLI 用法不受影響（dev 環境仍可 `pnpm dlx shadcn add`）。移除後 `pnpm audit --prod` 應只剩 `next>sharp`（見下）。
+- 記錄：2026-07-22 首次發現（flow 範圍依賴安全 `pnpm audit`）。順帶更正舊記錄：review-findings 2026-07-15 註記稱「`pnpm audit` 端點已退役（410）無法執行」——本輪實測**端點已恢復**、可正常執行（10 筆 advisory，餘 6 筆 high 皆 dev/build-only：`eslint`→brace-expansion/js-yaml、`@sentry/nextjs`→`@sentry/webpack-plugin`→fast-uri〔build-time〕；1 筆 `next>sharp` libvips 屬 runtime 但僅處理後台上傳的可信商品圖，非客人輸入，低可利用性）。此三類皆與既有 T91〔Dependabot／定期 audit 機制〕同根，建議 T91 落地時一併以 toolchain 升版消化，不另開任務。
 
 ---
 
-## 發現索引（F-001～F-024）
+## 發現索引（F-001～F-026）
 
 > 一行一筆：編號·嚴重度·標題·狀態·PR#/T#。**全文敘事＋失敗情境＋修法見 `review-findings-archive.md`**。回歸驗證＝依 PR#/T# 去看程式與 PR。
 
@@ -61,13 +79,15 @@
 - **F-022 [P2-low]** cart-cleanup 的 DELETE 只綁 `id`、丟失 `member_id IS NULL`／`update… · ✅已修復 · PR #82 PR #85 T81 T134
 - **F-023 [P2]** T111 代客建單付款連結把 order_no 定性為刻意散佈的持有型憑證：與 T73 計畫中「pay 頁綁擁有權」的修… · ✅已修復 · PR #64 T73 T111
 - **F-024 [P2]** T42 統編／手機條碼驗證 API 在限流與購物車讀取之前呼叫：未認證即可無限打 ECPay 發票驗證端點＋把本站當成統… · ✅已修復 · PR #80 T129
+- **F-025 [P2]** addToCart lineUnitPrice 以未 `Number()` 的 numeric base_price／price_delta 直接相加，違反 §6（latent，反證顯示目前回 number 故不觸發） · 待確認 · —
+- **F-026 [P2]** `shadcn` 誤列 dependencies：把 `@modelcontextprotocol/sdk`→`hono`（4 筆 XSS/path-traversal advisory）拉進 production 依賴樹（CLI 從不在 runtime 執行） · 待確認 · —
 
 ---
 
 ## 老化提醒
 
-- **待確認超過 14 天的發現**：無。
-- **從未審查過的檔案（覆蓋次數＝0）**：覆蓋母集 backlog 已於 2026-07-16 清空，僅 `src/types/database.types.ts`（生成檔）免審。
+- **待確認超過 14 天的發現**：無（F-025／F-026 為 2026-07-22 新增，待使用者裁決；皆 P2、非上線阻擋）。
+- **從未審查過的檔案（覆蓋次數＝0）**：覆蓋母集 backlog 已於 2026-07-16 清空，僅 `src/types/database.types.ts`（生成檔）免審。本輪（2026-07-22）PR #86～#115 帶入的新業務檔已補審主力（見下方 2026-07-22 註）；少數新 SEO／error-boundary 展示層與純 helper（`seo/{site-meta,breadcrumb-json-ld}`／`json-ld.tsx`／`system-busy-*.tsx`／`order-cancelled-notice.tsx`／`redis.ts`／`timing-safe-equal.ts`／`postgres-error-codes.ts`／各 `error.tsx`／`manifest.ts`／`opengraph-image.ts`／`icon.tsx`／`refund-section.tsx`）尚未逐行入表，留下輪輪替（低風險：展示層與小型 helper，核心金流／退款／狀態機／併發路徑本輪已逐行覆蓋）。
 
 ---
 
@@ -77,15 +97,15 @@
 
 | 路徑                                                                 | 最後審查日期                     | 審查次數 |
 | -------------------------------------------------------------------- | -------------------------------- | -------- |
-| src/app/api/ecpay/notify/route.ts                                    | 2026-07-15                       | 5        |
-| src/app/api/cron/ecpay-reconcile/route.ts                            | 2026-07-15                       | 2        |
+| src/app/api/ecpay/notify/route.ts                                    | 2026-07-22                       | 6        |
+| src/app/api/cron/ecpay-reconcile/route.ts                            | 2026-07-22                       | 3        |
 | src/lib/ecpay/query-trade-info.ts                                    | 2026-07-07                       | 1        |
-| src/lib/order/ensure-paid.ts                                         | 2026-07-15                       | 3        |
-| src/lib/notification/send-once.ts                                    | 2026-07-15                       | 3        |
+| src/lib/order/ensure-paid.ts                                         | 2026-07-22                       | 4        |
+| src/lib/notification/send-once.ts                                    | 2026-07-22                       | 4        |
 | src/app/api/ecpay/order-result/route.ts                              | 2026-07-07                       | 3        |
-| src/app/checkout/actions.ts                                          | 2026-07-15                       | 5        |
+| src/app/checkout/actions.ts                                          | 2026-07-22                       | 6        |
 | src/app/checkout/pay/page.tsx                                        | 2026-07-15                       | 6        |
-| src/lib/quote/verify-prices.ts                                       | 2026-07-15                       | 3        |
+| src/lib/quote/verify-prices.ts                                       | 2026-07-22                       | 4        |
 | src/lib/email/order-confirmation.ts                                  | 2026-07-04                       | 2        |
 | src/lib/email/new-order-notification.ts                              | 2026-07-04                       | 2        |
 | src/lib/email/support-request-notification.ts                        | 2026-07-04                       | 2        |
@@ -94,7 +114,7 @@
 | src/app/account/orders/[id]/support/actions.ts                       | 2026-07-10                       | 2        |
 | src/lib/support/support-request.ts                                   | 2026-07-10                       | 2        |
 | src/lib/support/schema.ts                                            | 2026-07-02                       | 1        |
-| src/app/admin/orders/[id]/actions.ts                                 | 2026-07-13                       | 6        |
+| src/app/admin/orders/[id]/actions.ts                                 | 2026-07-22                       | 7        |
 | src/lib/auth/require-admin.ts                                        | 2026-07-13                       | 4        |
 | supabase/migrations/0004_add_actor_to_order_status_log.sql           | 2026-07-02                       | 1        |
 | supabase/migrations/0005_add_product_name_snapshot_to_order_item.sql | 2026-07-02                       | 1        |
@@ -111,7 +131,7 @@
 | src/app/checkout/page.tsx                                            | 2026-07-07（平行 session）       | 1        |
 | src/app/cart/actions.ts                                              | 2026-07-10                       | 3        |
 | src/app/cart/page.tsx                                                | 2026-07-08                       | 1        |
-| src/app/products/[slug]/actions.ts                                   | 2026-07-15                       | 5        |
+| src/app/products/[slug]/actions.ts                                   | 2026-07-22                       | 6        |
 | src/app/products/[slug]/page.tsx                                     | 2026-07-08                       | 1        |
 | src/app/login/actions.ts                                             | 2026-07-10                       | 2        |
 | src/app/login/page.tsx                                               | 2026-07-09                       | 2        |
@@ -137,14 +157,14 @@
 | src/app/global-error.tsx                                             | 2026-07-07（平行 session）       | 1        |
 | src/instrumentation.ts                                               | 2026-07-07（平行 session）       | 1        |
 | src/instrumentation-client.ts                                        | 2026-07-07（平行 session）       | 1        |
-| src/proxy.ts                                                         | 2026-07-03                       | 1        |
+| src/proxy.ts                                                         | 2026-07-22                       | 2        |
 | src/lib/auth/require-user.ts                                         | 2026-07-03                       | 1        |
 | src/lib/auth/find-or-create-member.ts                                | 2026-07-13                       | 3        |
-| src/lib/cart/read-cart.ts                                            | 2026-07-07                       | 1        |
-| src/lib/cart/get-cart-count.ts                                       | 2026-07-07                       | 1        |
+| src/lib/cart/read-cart.ts                                            | 2026-07-22                       | 2        |
+| src/lib/cart/get-cart-count.ts                                       | 2026-07-22                       | 2        |
 | src/lib/checkout/schema.ts                                           | 2026-07-15                       | 3        |
 | src/lib/account/schema.ts                                            | 2026-07-07                       | 1        |
-| src/lib/order/state-machine.ts                                       | 2026-07-13                       | 3        |
+| src/lib/order/state-machine.ts                                       | 2026-07-22                       | 4        |
 | src/lib/order/order-status.ts                                        | 2026-07-04                       | 1        |
 | src/lib/pii/audit.ts                                                 | 2026-07-09（T80 落表複核）       | 2        |
 | src/lib/pii/mask.ts                                                  | 2026-07-07                       | 1        |
@@ -204,7 +224,7 @@
 | src/lib/order/issue-invoice.ts                                       | 2026-07-15（首次，T42）          | 1        |
 | src/lib/order/invoice-meta.ts                                        | 2026-07-15（首次，T42）          | 1        |
 | src/lib/order/order-access-token.ts                                  | 2026-07-15（首次，T73）          | 1        |
-| src/lib/notification/senders.ts                                      | 2026-07-15（首次，T88）          | 1        |
+| src/lib/notification/senders.ts                                      | 2026-07-22                       | 2        |
 | src/lib/option/schema.ts                                             | 2026-07-15（首次，T12）          | 1        |
 | src/lib/product/product-option-schema.ts                             | 2026-07-15（首次，T13）          | 1        |
 | src/app/admin/options/actions.ts                                     | 2026-07-15（首次，T12）          | 1        |
@@ -252,6 +272,28 @@
 | src/lib/product/option-type-codes.ts                                 | 2026-07-16（首次，T14）          | 1        |
 | src/lib/zod/flatten-field-errors.ts                                  | 2026-07-16（首次，T10）          | 1        |
 | vitest.config.ts                                                     | 2026-07-16（首次）               | 1        |
+| supabase/migrations/0017_transition_order_status_rpc.sql             | 2026-07-22（首次，T110）         | 1        |
+| supabase/migrations/0018_cart_member_unique.sql                      | 2026-07-22（首次，T81）          | 1        |
+| supabase/migrations/0019_support_request_status_check.sql            | 2026-07-22（首次，T47）          | 1        |
+| supabase/migrations/0020_refund_order_rpc.sql                        | 2026-07-22（首次，T47）          | 1        |
+| supabase/migrations/0021_repair_refunded_payment_rpc.sql             | 2026-07-22（首次，T47）          | 1        |
+| src/lib/order/refund-order.ts                                        | 2026-07-22（首次，T47）          | 1        |
+| src/lib/order/find-paid-payment.ts                                   | 2026-07-22（首次，T47/T127）     | 1        |
+| src/lib/order/mark-pending-payments-failed.ts                        | 2026-07-22（首次，T127）         | 1        |
+| src/lib/order/shipping-tracking.ts                                   | 2026-07-22（首次，T108）         | 1        |
+| src/lib/ecpay/validate-settle-amount.ts                              | 2026-07-22（首次，T127）         | 1        |
+| src/lib/cart/resolve-cart-identity.ts                                | 2026-07-22（首次，T81）          | 1        |
+| src/lib/cart/get-or-create-member-cart.ts                            | 2026-07-22（首次，T81）          | 1        |
+| src/lib/cart/guest-token.ts                                          | 2026-07-22（首次，T133）         | 1        |
+| src/lib/cart/merge-guest-cart.ts                                     | 2026-07-22（首次，T81）          | 1        |
+| src/lib/product/check-product-availability.ts                        | 2026-07-22（首次，T117）         | 1        |
+| src/lib/product/start-price.ts                                       | 2026-07-22（首次，T59）          | 1        |
+| src/lib/email/order-refunded-notification.ts                         | 2026-07-22（首次，T47/T87）      | 1        |
+| src/lib/seo/site-url.ts                                              | 2026-07-22（首次，T59）          | 1        |
+| src/app/sitemap.ts                                                   | 2026-07-22（首次，T59）          | 1        |
+| src/app/robots.ts                                                    | 2026-07-22（首次，T59）          | 1        |
+
+> 註（2026-07-22）：本輪逐行審 2026-07-16（b913ae9）以來 PR #86～#115 的大 delta——**T47 記錄式退款鏈**（`refund-order.ts`＋migration 0020 `refund_order` 原子 RPC〔翻 paid payment＋CAS 轉 refunded＋稽核 log 單一交易，CAS miss `raise U0002` 整筆 rollback〕＋0021 `repair_refunded_payment`〔Override 半套狀態原子補登記〕＋`find-paid-payment.ts`〔findPaidPayment／findRefundablePayment 單一出處〕＋`mark-pending-payments-failed.ts`＋`order-refunded-notification.ts`〔escapeHtml 齊全〕＋admin `refundOrderAction`）、**T110 狀態機交易化**（migration 0017 `transition_order_status` RPC＋`state-machine.ts` 三守衛：取消守衛/退款守衛〔`!findPaidPayment`〕/override to===from 擋、post-cancel TOCTOU 複查）、**T81 購物車身分重構**（`resolve-cart-identity.ts` identity invariant〔登入態絕不 fallback guest token〕＋`get-or-create-member-cart.ts`＋`merge-guest-cart.ts` 的 CAS 佔位/搬列/optimistic 刪殼 orphan-free＋migration 0018 `uq_cart_member`）、**T127 對帳鏈擴充**（`ecpay-reconcile/route.ts` 漂移臂/paid-on-cancelled/paid-on-refunded durable 稽核臂＋`validate-settle-amount.ts` 單一出處）、**notify route**（refunded 終態良性回 1|OK、T74 rescue、after() 發票）、**proxy.ts**（T133 guest_token 預簽＋CSP nonce）、**T117**（`check-product-availability.ts` service-role fail-open UX 判斷，verify-prices 必選完整性兜底已驗）、**T59 SEO**（sitemap/robots/site-url，force-dynamic 杜絕 promote-preview 凍結、§6 查詢失敗 throw）。**核心金流／退款／狀態機／併發／通知路徑品質極高**——RPC 一律 revoke execute＋釘 search_path、Supabase `{error}` 全解構、CAS SET 改動 WHERE 欄位（§6）、sendOnce 絕不 throw＋eligibleStatuses〔order_refunded=["refunded"]〕對齊 sweep、identity invariant 一致。兩遍式：第一遍對抗性問題集 §6「numeric 轉換點」揪出 F-025（addToCart 算術未 `Number()`，反證顯示目前回 number 故 latent 不觸發、結帳端 fail-safe，P2）；flow 範圍 `pnpm audit`（端點已恢復）揪出 F-026（`shadcn` 誤列 dependencies 把 hono 拉進 prod 依賴樹，P2）。第二遍 code/schema checklist 回歸：A（驗價/退款金額）B（CAS 冪等）C（tracking/trade-no 單一出處）D（requireAdmin 齊全/refund server-side 防旁路）F（{error} 處理）G（RPC 機制皆有使用點）S1〔uq_cart_member〕S4〔support_request text+check〕S7〔RPC 使用點〕S9〔新增不改舊、search_path〕全數乾淨，無 P0/P1、無 schema 新發現。測試檔（本輪新增 `refund-order.test.ts`／`merge-guest-cart.test.ts`／`resolve-cart-identity.test.ts`／`get-or-create-member-cart.test.ts`／`proxy.test.ts`／`validate-settle-amount.test.ts`／`check-product-availability.test.ts`／`find-paid-payment.test.ts` 等）不計入覆蓋表。跳過 env 範圍（本環境無 supabase／vercel 憑證）。
 
 > 註（2026-07-16）：`src/`／`supabase/` 自上輪（commit b913ae9）**零變動**，本輪無 delta 可複核，價值全在**覆蓋輪替結案**——逐行補審 39 支從未逐行審過的展示層／純 helper 檔（admin 商品／選項 CRUD 全部 server pages＋client forms＋`useAdminAction` 共用 hook＋前台展示元件＋6 支 loading 骨架＋`vitest.config`），**全數乾淨、無 P0/P1/P2 發現**。關鍵回歸：admin server pages 對 Supabase `{error}` 皆解構＋throw（F-017 根因未擴散至 admin 層）、uuid 先驗避免 cast→500、`requireAdmin()` 齊全（D3）；client 端 swatchHex／gemColor 注入 inline style 前皆格式守衛或用 React object-form（無 CSS 注入）、mutation 全走已審 server action 二次驗證。至此覆蓋母集僅剩 `src/types/database.types.ts`（生成檔，免審）審查次數為 0。測試檔不計入覆蓋表。
 
@@ -266,4 +308,3 @@
 > 註（2026-07-13）：本輪逐行審 PR #57（T111 代客建單）／#56（T09）／#59（T10）／#60（T11）＋ migration 0010–0013 delta——首次入表 20 支業務邏輯／schema 檔（admin actions 三支、`create-order-from-cart.ts`、`require-cron-auth.ts`、`product/{schema,product-status,category-labels}.ts`、`storage/{product-images,constants}.ts`、`normalize-email.ts`、`admin/{layout,orders/checkout/page}.tsx`、`admin/action-result.ts`、`concurrency-message.ts`、`pending-payment-expire/route.ts`、migration 0010–0013）＋複核既有金流鏈與 admin 修復（notify／ensure-paid／checkout actions／pay 頁／state-machine／admin/orders/[id]/actions／find-or-create-member／require-admin／next.config／vercel.json／order-shipped/order-actions）。新程式全數 `requireAdmin()` 把關（D3 齊全）、magic-byte 圖片內容檢查、RPC 原子化取號／交換／建單、`create_order_with_items` revoke execute＋釘 search_path 皆到位，無 P0/P1；新發現 F-023（T111 付款連結 order_no 憑證化，與 T73 pay 頁擁有權綁定計畫衝突，P2）。**尚未逐行審**：T09/T10/T11/T111 展示層與純 helper（`admin-*.tsx`／`admin-product-form`／`image-manager`／`mobile-nav`／`flatten-field-errors`／admin/products 頁面群／loading 骨架等，見老化提醒），留下輪輪替。測試檔（本輪新增 `create-admin-order.test.ts`／`admin/products/__tests__/actions.test.ts`／`storage/__tests__/product-images.test.ts`／`create-order-from-cart.test.ts`／`pending-payment-expire/__tests__/route.test.ts` 等）不計入覆蓋表；image actions（uploadImage/deleteImage/moveImage）目前無專屬測試（RPC 邏輯在 DB 端）。
 
 > 註（2026-07-10）：本輪逐行審 PR #46（T78）delta——變更檔 `cart/actions.ts`／`products/[slug]/actions.ts`／`checkout/actions.ts`／`login/actions.ts`／`rate-limit.ts` 與 3 支新檔（`api/cron/cart-cleanup/route.ts`／`lib/cart/touch-cart-updated-at.ts`／`lib/get-client-ip.ts`，皆首次入表）＋覆蓋輪替補審最久未審的 `check-mac-value.ts`／`support/actions.ts`／`support-request.ts`。T78 複核大致正確、隨手修好 OTP ratelimit prefix 共用 key 的既有潛伏 bug；新發現 F-021／F-022（皆 P2-low，cart-cleanup），F-017 追加 `support/actions.ts` location。覆蓋表僅剩 `database.types.ts`（生成檔）＝0。測試檔（本輪新增 `cart/__tests__/actions.test.ts`）不計入覆蓋表。cart-cleanup route 目前無測試（見 F-022 附註）。
-
