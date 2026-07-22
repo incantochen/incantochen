@@ -6,8 +6,10 @@ import { usePathname } from "next/navigation"
 import { Search, User } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MobileNav } from "@/components/mobile-nav"
+import { CATEGORY_NAV } from "@/components/site-nav-links"
 
-const navLinks = [
+// 透明態（首頁 hero 上）沿用原本編輯感導覽；捲動轉實色後改列五品類。
+const OVERLAY_NAV = [
   { label: "COLLECTIONS", href: "/collections/ring" },
   { label: "CUSTOM", href: "#" },
   { label: "ABOUT", href: "#" },
@@ -53,19 +55,34 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
           <span className="text-base tracking-[0.12em]">辰醉金閣</span>
         </Link>
 
-        <nav className="hidden justify-center gap-9 md:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.label}
-              href={link.href}
-              className={cn(
-                "text-xs tracking-[0.22em] uppercase transition-colors hover:text-secondary-400",
-                transparent ? "text-paper/85" : "text-ink/80",
-              )}
-            >
-              {link.label}
-            </Link>
-          ))}
+        <nav
+          className={cn(
+            "hidden items-center justify-center md:flex",
+            transparent ? "gap-9" : "gap-8",
+          )}
+        >
+          {transparent
+            ? OVERLAY_NAV.map((link) => (
+                <Link
+                  key={link.label}
+                  href={link.href}
+                  className="text-xs tracking-[0.22em] text-paper/85 uppercase transition-colors hover:text-secondary-400"
+                >
+                  {link.label}
+                </Link>
+              ))
+            : CATEGORY_NAV.map((link) => (
+                <Link
+                  key={link.en}
+                  href={link.href}
+                  className="flex flex-col items-center leading-tight text-ink/85 transition-colors hover:text-secondary-400"
+                >
+                  <span className="text-[13px] tracking-[0.10em]">{link.zh}</span>
+                  <span className="mt-0.5 text-[9px] tracking-[0.22em] uppercase opacity-60">
+                    {link.en}
+                  </span>
+                </Link>
+              ))}
         </nav>
 
         <div
