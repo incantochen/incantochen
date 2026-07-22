@@ -18,88 +18,83 @@ export default async function Home() {
 
   return (
     <>
-      {/* ── Hero：滿版深色攝影＋左側金線 signature（brand-guide §8）──── */}
-      <section className="relative isolate flex min-h-[600px] overflow-hidden bg-primary text-paper sm:min-h-[680px] md:min-h-[760px]">
-        {/* 主視覺：模特在右、左半深色留白 → object-right 保住主體、文字壓左 */}
+      {/* ── HERO：滿版攝影＋左緣金線 signature（demo indexV2 / brand-guide §8）── */}
+      <section className="relative isolate flex min-h-[86vh] overflow-hidden bg-primary text-paper">
         <Image
           src="/brand/hero.jpg"
           alt="配戴 incantochen 祖母綠項鍊與耳環的女子"
           fill
           priority
           sizes="100vw"
-          className="-z-20 object-cover object-right"
+          className="-z-20 object-cover"
+          style={{ objectPosition: "72% 28%" }}
         />
-        {/* 壓暗漸層：左→右保左側文字可讀、上下輕壓讓導覽與底部聚焦（§8） */}
+        {/* 上下壓暗漸層：讓導覽與底部文案聚焦（demo .hero::after） */}
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 -z-10"
           style={{
             background:
-              "linear-gradient(90deg, rgba(2,23,18,0.86) 0%, rgba(2,23,18,0.5) 38%, rgba(2,23,18,0.08) 62%, rgba(2,23,18,0) 100%), linear-gradient(180deg, rgba(2,23,18,0.5) 0%, rgba(2,23,18,0) 26%, rgba(2,23,18,0) 74%, rgba(2,23,18,0.45) 100%)",
+              "linear-gradient(180deg, rgba(5,7,12,0.74) 0%, rgba(5,7,12,0.10) 26%, rgba(5,7,12,0.16) 60%, rgba(5,7,12,0.78) 100%)",
           }}
         />
 
         {/* 左緣 signature：金漸層直線＋圓形下滑鈕＋直書 EXPLORE COLLECTION */}
-        <div className="pointer-events-none absolute bottom-10 left-6 z-10 hidden flex-col items-center gap-4 md:flex">
-          <div
+        <div className="absolute top-1/2 left-6 z-10 hidden -translate-y-1/2 flex-col items-center gap-[22px] md:flex lg:left-[46px]">
+          <span
             aria-hidden
-            className="h-24 w-px bg-gradient-to-b from-transparent via-secondary to-secondary"
+            className="h-14 w-px bg-gradient-to-b from-secondary to-transparent"
           />
           <Link
-            href="#selected"
-            aria-label="向下探索作品"
-            className="pointer-events-auto flex size-12 items-center justify-center rounded-full border border-secondary/55 text-secondary-400 transition hover:border-secondary hover:bg-secondary/10"
+            href="#products"
+            aria-label="向下探索系列"
+            className="flex size-12 items-center justify-center rounded-full border border-secondary/55 text-secondary-400 transition hover:border-secondary hover:bg-secondary/10"
           >
             <ArrowDown className="size-4" strokeWidth={1.4} />
           </Link>
-          <span className="text-[10px] tracking-[0.44em] text-secondary-400 uppercase [writing-mode:vertical-rl]">
-            Explore Collection
+          <span className="text-[11px] tracking-[0.44em] text-secondary-400 uppercase [writing-mode:vertical-rl]">
+            explore collection
           </span>
         </div>
 
-        {/* 文案（壓左側深色區）*/}
-        <div className="mx-auto flex w-full max-w-[1240px] items-center px-6 md:pl-20">
-          <div className="flex max-w-[30rem] flex-col items-start gap-7 py-24">
-            <span className="eyebrow">incanto · 著迷</span>
-            <h1 className="font-heading text-[clamp(2.25rem,5vw,3.5rem)] leading-[1.12] text-paper">
-              讓人著迷、有故事的彩色寶石
-            </h1>
-            <p className="max-w-[42ch] text-base leading-relaxed text-paper/80">
-              以天然彩色寶石與細膩工藝，打造能融入日常、卻令人回味的珠寶。選妳的寶石、金屬與尺寸，於下單後專屬訂製。
+        {/* hero-tag：左下 eyebrow（極簡編輯感，brand-guide §8 hero 只留 eyebrow） */}
+        <div className="mx-auto flex w-full max-w-[1240px] items-end px-6 pb-16 md:pl-[110px]">
+          <span className="eyebrow">incanto · 著迷</span>
+        </div>
+      </section>
+
+      {/* ── PHILOSOPHY（quiet luxury）─────────────────────────────── */}
+      <section className="bg-cloud py-20 sm:py-24">
+        <div className="mx-auto grid max-w-[1240px] grid-cols-1 items-center gap-8 px-6 md:grid-cols-2 md:gap-12">
+          <div className="eyebrow">quiet luxury</div>
+          <div>
+            <p className="text-[15.5px] leading-relaxed text-espresso/85">
+              珠寶不只是點綴，更是內在風格的延伸。Incantochen
+              以天然彩色寶石與細膩工藝，打造能輕疊於日常、卻在細處綻放光芒的精緻珠寶。每件作品皆可依您的喜好自由挑選寶石、金屬與尺寸，於下單後專屬訂製；並隨作品附上國際寶石證書，替您守護每一份源自大自然的珍貴饋贈。
             </p>
-            <div className="mt-2 flex flex-wrap gap-4">
-              <Button asChild variant="gold">
-                <Link href="/collections/ring">探索作品</Link>
-              </Button>
-              <Button asChild variant="ghost">
-                <Link href="/custom">預約訂製</Link>
-              </Button>
-            </div>
+            <hr className="mt-6 h-px w-[120px] border-0 bg-secondary opacity-50" />
           </div>
         </div>
       </section>
 
-      {/* ── 精選作品（SELECTED PIECES）───────────────────────────── */}
+      {/* ── SELECTED PIECES（真實上架商品）───────────────────────── */}
       <section
-        id="selected"
+        id="products"
         className="mx-auto max-w-[1240px] scroll-mt-[var(--header-height)] px-6 py-16 sm:py-20"
       >
-        <div className="flex items-end justify-between border-b border-border pb-5">
-          <div>
-            <div className="eyebrow">Selected Pieces</div>
-            <h2 className="mt-2 font-heading text-[28px] text-ink">精選作品</h2>
-          </div>
+        <div className="mb-12 flex min-h-16 items-center justify-between gap-5">
+          <div className="eyebrow leading-none">selected pieces</div>
           <Button asChild variant="outline" size="sm">
             <Link href="/collections/ring">所有產品</Link>
           </Button>
         </div>
 
         {featured.length === 0 ? (
-          <div className="mt-10 rounded-lg border border-border bg-cloud px-6 py-12 text-center text-ash">
+          <div className="rounded-lg border border-border bg-cloud px-6 py-12 text-center text-ash">
             作品即將上架，敬請期待。
           </div>
         ) : (
-          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {featured.map((product) => (
               <ProductCard key={product.slug} product={product} />
             ))}
@@ -107,33 +102,71 @@ export default async function Home() {
         )}
       </section>
 
-      {/* ── 品牌理念（QUIET LUXURY）· ABOUT 錨點 ────────────────────── */}
-      <section id="philo" className="scroll-mt-[var(--header-height)] bg-cloud">
-        <div className="mx-auto max-w-[720px] px-6 py-20 text-center sm:py-24">
-          <div className="eyebrow">Quiet Luxury</div>
-          <p className="mt-6 font-heading text-[clamp(1.375rem,2.6vw,1.875rem)] leading-[1.5] text-ink">
-            沒有浮誇的設計語言，只有經得起時間考驗的比例、材質與細節。一件對的作品會讓人著迷——不是因為多貴多閃，而是妳看著它會說：這就是我。
-          </p>
-          <div
-            aria-hidden
-            className="mx-auto mt-10 h-px w-16 bg-secondary opacity-60"
+      {/* ── EVERYDAY（日常情境分割版）──────────────────────────── */}
+      <section id="everyday" className="grid grid-cols-1 items-stretch md:grid-cols-[1.05fr_0.95fr]">
+        <div className="relative min-h-[300px] md:min-h-[420px]">
+          <Image
+            src="/brand/everyday.jpg"
+            alt="配戴祖母綠手鍊與戒指、於暖陽下的日常情境"
+            fill
+            sizes="(max-width: 820px) 100vw, 55vw"
+            className="object-cover"
           />
+        </div>
+        <div className="flex flex-col justify-center px-6 py-14 sm:px-12 sm:py-20 lg:px-20">
+          <div className="eyebrow">everyday</div>
+          <h2 className="mt-3 mb-4 font-heading text-[clamp(1.625rem,3.3vw,2.375rem)] leading-[1.2] text-ink">
+            日常戴得住，
+            <br />
+            細看有故事。
+          </h2>
+          <p className="max-w-[46ch] text-[15.5px] leading-relaxed text-espresso/85">
+            不是收進保險箱的逸品，而是配進白襯衫、配進一杯咖啡的日常。寶石的顏色安靜卻有存在感——懂的人，一眼就看得出。
+          </p>
         </div>
       </section>
 
-      {/* ── 全客製（CUSTOM）───────────────────────────────────────── */}
-      <section className="bg-primary text-paper">
-        <div className="mx-auto flex max-w-[720px] flex-col items-center gap-6 px-6 py-20 text-center sm:py-24">
-          <div className="eyebrow text-secondary-400">Custom</div>
-          <h2 className="max-w-[20ch] font-heading text-[clamp(1.75rem,3.4vw,2.5rem)] leading-[1.2] text-paper">
-            從一顆寶石、一個念頭開始
+      {/* ── CHOOSE COLOR / CUSTOM（深色影像疊圖 CTA）──────────────── */}
+      <section className="relative isolate overflow-hidden bg-emerald-900 text-paper">
+        <Image
+          src="/brand/choose.jpg"
+          alt="綠絨托盤上的彩色寶石戒指"
+          fill
+          sizes="100vw"
+          className="-z-20 object-cover opacity-40"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 -z-10"
+          style={{
+            background:
+              "linear-gradient(180deg, rgba(2,23,18,0.6), rgba(2,23,18,0.85))",
+          }}
+        />
+        <div className="mx-auto flex max-w-[720px] flex-col items-center px-6 py-24 text-center">
+          <div className="eyebrow">custom</div>
+          <h2 className="my-4 max-w-[20ch] font-heading text-[clamp(1.75rem,3.8vw,2.625rem)] leading-[1.2] text-paper">
+            獨一無二
           </h2>
-          <p className="max-w-[42ch] text-base leading-relaxed text-paper/75">
-            預約一對一訂製，我們陪妳從選石、草圖到成品——慢慢來，只為妳一個人。
+          <p className="mb-7 max-w-[48ch] text-base leading-relaxed text-paper/80">
+            從一顆寶石、一個念頭開始，與我們一起打造完全屬於妳的設計。預約一對一訂製，我們陪妳從選石、草圖到成品——慢慢來，只為妳一個人。
           </p>
-          <Button asChild variant="gold" className="mt-2">
+          <Button asChild variant="gold">
             <Link href="/custom">預約訂製</Link>
           </Button>
+        </div>
+      </section>
+
+      {/* ── STORY（品牌名 incanto）───────────────────────────────── */}
+      <section id="story" className="bg-primary py-20 text-center text-paper sm:py-24">
+        <div className="mx-auto max-w-[680px] px-6">
+          <div className="eyebrow">the name</div>
+          <p className="mt-3 font-heading text-[clamp(1.875rem,4.6vw,3.25rem)] text-secondary-400 italic">
+            incanto
+          </p>
+          <p className="mt-4 text-base leading-relaxed text-paper/85">
+            義大利文裡，是「著迷、魔法」的意思。我們相信一枚對的作品，是會讓人著迷的——不是因為它多貴、多閃，而是因為妳看著它會說：這就是我。
+          </p>
         </div>
       </section>
     </>
