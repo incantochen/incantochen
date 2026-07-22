@@ -1,8 +1,9 @@
-"use client"
+"use client";
 
-import { useState, useTransition } from "react"
-import { useRouter } from "next/navigation"
-import { addToCart } from "@/app/products/[slug]/actions"
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { addToCart } from "@/app/products/[slug]/actions";
+import { trackAddToCart } from "@/lib/analytics/gtag";
 
 export type ConfiguratorValue = {
   id: string
@@ -162,70 +163,95 @@ function OptionValues({
 }
 
 function defaultSelection(options: ConfiguratorOption[]) {
-  const initial: Record<string, string> = {}
+  const initial: Record<string, string> = {};
   for (const option of options) {
-    const defaultValue = option.values.find((value) => value.isDefault) ?? option.values[0]
+    const defaultValue =
+      option.values.find((value) => value.isDefault) ?? option.values[0];
     if (defaultValue) {
-      initial[option.id] = defaultValue.id
+      initial[option.id] = defaultValue.id;
     }
   }
-  return initial
+  return initial;
 }
 
 export function ProductConfigurator({
   productId,
+  productName,
   basePrice,
   options,
   unavailable = false,
 }: {
-  productId: string
-  basePrice: number
-  options: ConfiguratorOption[]
+  productId: string;
+  productName: string;
+  basePrice: number;
+  options: ConfiguratorOption[];
   // T117：此商品有必選選項因後台隱藏（類別或最後一個顯示值）而無法完成配置
   // ——停用加入購物袋、改顯示「暫停販售」，別讓客人白配置一輪到結帳才被擋。
-  unavailable?: boolean
+  unavailable?: boolean;
 }) {
-  const [selected, setSelected] = useState(() => defaultSelection(options))
-  const [quantity, setQuantity] = useState(1)
-  const [showBreakdown, setShowBreakdown] = useState(false)
-  const [isPending, startTransition] = useTransition()
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(
-    null,
-  )
-  const router = useRouter()
+  const [selected, setSelected] = useState(() => defaultSelection(options));
+  const [quantity, setQuantity] = useState(1);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [isPending, startTransition] = useTransition();
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const router = useRouter();
 
   function handleAddToCart() {
-    setFeedback(null)
+    setFeedback(null);
     startTransition(async () => {
       const result = await addToCart({
         productId,
         productOptionValueIds: Object.values(selected),
         quantity,
-      })
+      });
       setFeedback(
         result.ok
           ? { type: "success", message: "已加入購物袋" }
           : { type: "error", message: result.error },
-      )
+      );
       if (result.ok) {
-        router.refresh() // re-render server components to update header cart badge
+        // T60：GA4 add_to_cart。server action 不回 payload，事件由 client
+        // 狀態組成——僅供漏斗分析，金額真相仍在伺服器端驗價（§6 紅線不變）。
+        trackAddToCart({
+          value: unitPrice * quantity,
+          items: [
+            {
+              item_id: productId,
+              item_name: productName,
+              price: unitPrice,
+              quantity,
+            },
+          ],
+        });
+        router.refresh(); // re-render server components to update header cart badge
       }
-    })
+    });
   }
 
   const selectedValues = options.map((option) => {
-    const value = option.values.find((v) => v.id === selected[option.id])
-    return { option, value }
-  })
+    const value = option.values.find((v) => v.id === selected[option.id]);
+    return { option, value };
+  });
   const unitPrice =
-    basePrice + selectedValues.reduce((sum, { value }) => sum + (value?.priceDelta ?? 0), 0)
-  const lineTotal = unitPrice * quantity
+    basePrice +
+    selectedValues.reduce(
+      (sum, { value }) => sum + (value?.priceDelta ?? 0),
+      0,
+    );
+  const lineTotal = unitPrice * quantity;
 
   return (
     <div>
       <div className="flex items-baseline gap-3">
-        <div className="text-3xl font-medium text-primary">NT$ {unitPrice.toLocaleString()}</div>
-        <span className="text-sm text-ash">底價 NT$ {basePrice.toLocaleString()} 起</span>
+        <div className="text-3xl font-medium text-primary">
+          NT$ {unitPrice.toLocaleString()}
+        </div>
+        <span className="text-sm text-ash">
+          底價 NT$ {basePrice.toLocaleString()} 起
+        </span>
       </div>
       <button
         type="button"
@@ -245,7 +271,11 @@ export function ProductConfigurator({
               <span>
                 {option.name}：{value?.label}
               </span>
-              <span>{value?.priceDelta ? `+ NT$ ${value.priceDelta.toLocaleString()}` : "—"}</span>
+              <span>
+                {value?.priceDelta
+                  ? `+ NT$ ${value.priceDelta.toLocaleString()}`
+                  : "—"}
+              </span>
             </div>
           ))}
           <div className="flex justify-between py-0.5">
@@ -278,7 +308,9 @@ export function ProductConfigurator({
       ))}
 
       <div className="py-4">
-        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">數量</label>
+        <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+          數量
+        </label>
         <div className="mt-2 inline-flex items-center overflow-hidden rounded-lg border border-border">
           <button
             type="button"
@@ -315,7 +347,8 @@ export function ProductConfigurator({
       ) : (
         <>
           <div className="mt-4 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
-            ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong> 天，將於結帳再次告知。
+            ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong>{" "}
+            天，將於結帳再次告知。
           </div>
 
           <button
@@ -340,5 +373,5 @@ export function ProductConfigurator({
         </>
       )}
     </div>
-  )
+  );
 }
