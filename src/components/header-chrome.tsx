@@ -82,11 +82,23 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
             lightText ? "text-paper" : "text-ink",
           )}
         >
-          <span className="text-lg tracking-[0.28em] uppercase">INCANTOCHEN</span>
+          {/* 桌機（sm+）一律 INCANTOCHEN · 辰醉金閣；手機浮層態顯示 INCANTOCHEN、
+              手機實色態改中文 wordmark 辰醉金閣（見下方 sm:hidden 那顆）。 */}
+          <span
+            className={cn(
+              "text-lg tracking-[0.28em] uppercase",
+              float ? "inline" : "hidden sm:inline",
+            )}
+          >
+            INCANTOCHEN
+          </span>
           <span aria-hidden className="hidden text-secondary-400 sm:inline">
             ·
           </span>
           <span className="hidden text-base tracking-[0.12em] sm:inline">辰醉金閣</span>
+          {!float && (
+            <span className="text-xl tracking-[0.2em] sm:hidden">辰醉金閣</span>
+          )}
         </Link>
 
         <nav
@@ -124,7 +136,9 @@ export function HeaderChrome({ cartSlot }: { cartSlot: ReactNode }) {
 
         <div
           className={cn(
-            "flex items-center justify-end gap-5 transition-colors",
+            // col-start-3 必要：手機時中間導覽 display:none 被 grid 跳過，
+            // icons 會掉進中欄、右邊 1fr 空欄把它往左推；釘死第三欄才靠右。
+            "col-start-3 flex items-center justify-end gap-5 transition-colors",
             lightText ? "text-paper" : "text-ink",
           )}
         >
