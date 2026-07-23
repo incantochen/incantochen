@@ -52,8 +52,9 @@
 - **T30a** Email 下單確認（基本） · ✅完成 — 付款成功寄客人確認信｜✅ 完成（2026-06-27）：resend 安裝；env.server.ts 加 RESEND_API_KEY；src/lib/email/order-confirmation.ts（查 order+items…
 - **T49** 新訂單通知店家 · ✅完成 — 有新單即 email／LINE 通知你本人｜✅ 完成（2026-06-27）：src/lib/email/new-order-notification.ts（sendNewOrderNotification：查 orders+items…
 
-## M2（47）
+## M2（48）
 
+- **T136** ◆ email 信件外殼與 FROM_EMAIL 共用 layout 收斂 · ✅完成 · PR #129 — email-shell.ts 新增共用件：FROM_EMAIL 常數（原 6 支各自宣告，T35 換 orders@incantochen.com 只需改一處）、泛型 unwrapOne<T>（統一 PostgREST to-one join 物件/陣列解包，收斂原散落 4 處手刻 Array.isArray）、renderCustomerEmailShell（客人信殼：置中 logo＋CTA＋© footer）；BRAND_FONT（'EB Garamond',Georgia,serif，對齊首頁 --font-head，incantochen 字樣改 serif）。3 支客人信（order-confirmation/order-shipped/order-refunded）內嵌殼→renderCustomerEmailShell，new-order→既有 renderEmailShell；6 支全改 import 共用 FROM_EMAIL。純重構、輸出等價、escape 慣例不變。本機 /code-review max（ultra 替代）無正確性缺陷，3 cleanup findings：泛型 unwrapOne（修）、移除未用 ctaLabel（修）、兩殼骨架去重（略，視覺刻意分流）。驗收：lint/typecheck 綠、email 測試 17 全過。衍生：訂單完成通知信（completed 狀態無對應信）延後併 T87。
 - **T120** ◆ 配置器依 input_type 渲染 · ✅完成 · PR #124 — product-configurator.tsx 抽 OptionValues，依 option_type.input_type 分支：swatch→彩色圓點（swatch_hex＋CSS 高光/內陰影 basic 漸層；任一值缺色碼整組退回 chip；選中態 Emerald 框＋金 ring §7.5）、select→原生下拉（focus Emerald／radius 11px §7.6）、stepper→加減器（排序後值清單前後移動）、default/未知→chip 不破版。PDP page.tsx 查詢補撈 option_value.swatch_hex、mapping 帶 inputType/swatchHex；送出仍 option_value id，計價鏈/後台/addToCart/verify-prices 未動。seed 金屬補色並擴為 4 色（黃金/白金/玫瑰金/銀），寶石色暫留 NULL 待 tune。進階金屬/寶石质感（深色台反光級高光/culet 折射）留 T44。⚠️ 已知限制：stepper 切換不顯示 price_delta（swatch/select 會顯示）——計價正常、僅缺即時價差提示，日後若把會加價選項設為 stepper 需補（見 product-configurator.tsx stepper 分支註解）。驗收：本機 db reset 通過＋雲端實測三分支渲染正確、lint/typecheck 綠。
 - **T28** 訂單狀態機 · ✅完成 — 狀態定義與合法轉換
 - **T29** 狀態紀錄（OrderStatusLog） · ✅完成 — 狀態變更寫 log
