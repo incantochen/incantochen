@@ -72,7 +72,7 @@ export function CustomInquiryForm() {
       <div className="rounded-lg border border-success/30 bg-success/10 px-5 py-8 text-center text-success">
         <p className="text-base">已收到，將盡快與妳聯繫。</p>
         <p className="mt-2 text-sm text-success/80">
-          我們已寄出確認信；如需補充，直接回覆該信件即可。
+          我們會盡快以 Email 與妳聯繫；屆時如需補充，直接回覆信件即可。
         </p>
       </div>
     );
