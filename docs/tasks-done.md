@@ -126,8 +126,9 @@
 - **T62** 🚀◆ 客製錯誤頁＋圖片效能優化 · ✅完成 · PR #87 PR #120 — 客製 404（not-found.tsx）＋500（error.tsx，回報 Sentry＋reset），品牌 token 沿用 SystemBusyCard；next.config images 加 formats=[avif,webp]（對齊 T17 手機下載 AVIF）。後台圖片已 fill+sizes+預設 lazy；前台商品圖仍為 PlaceholderImage，元件層 next/image 替換卡真圖（T116）歸屬 T17。soft-404（notFound 動態渲染狀態碼 200）為既有 SEO 課題併入 T59。
 - **T117** ◆ PDP 對「必選選項全隱藏」商品的販售狀態呈現 · ✅完成 · PR #62 PR #97 — 新增 src/lib/product/check-product-availability.ts（isProductUnavailable，server role 查 required 選項，類別隱藏／值全隱藏／無值即 true），PD…
 
-## M5（15）
+## M5（16）
 
+- **T36** 🚀隱私／服務條款頁 · ✅完成 · PR #132 — /privacy、/terms 由 ComingSoon 佔位改真頁框，共用 LegalPage 外殼（避免複製條殼）；privacy 個資法應告知事項 8 節骨架（當事人權利連 /contact）、terms 交易條款 10 節骨架（七天鑑賞客製例外、退換貨連 /after-sales）。條文本體須律師審定（§8 不自擬），各節 <LegalPending /> 佔位＋TODO(T36-legal)，暫留 robots noindex。code-review high 抓到 intro 自撰法律效力語（「下單即同意」「依個資法享有權利」）已改中性描述；pagehead DRY cleanup 屬跨檔重構範圍外暫略
 - **T61** 🚀◆ 賣家資訊揭露＋聯絡頁 · ✅完成 · PR #130 — /contact 由 ComingSoon 佔位改真頁框：賣家資訊揭露（通訊交易應載明事項）＋退換貨/售後政策連結（連 /after-sales、/terms、/privacy 不重抄條文）；賣家名稱＝辰醉金閣、負責人樂小辰、統編 85634292、地址台北市承德路一段400號、客服信箱 incantochen@gmail.com 已填；客服電話/時間仍 TODO(T61-facts)，暫留 robots noindex 待補齊後開放索引
 - **T42** 🚀電子發票串接（ECPay） · ✅完成 · PR #68 — B2C AES-JSON 協議、結帳三選一（個人綠界載具／公司統編／手機條碼），webhook after() 背景自動開立＋reconcile cron 未開票 sweep＋後台手動補開；統編/條碼結帳前打 ECPay 驗證（僅明確無…
 - **T47** 退換貨流程＋綠界金流退刷 · ✅完成 · PR #86 — 實際刷退仍走綠界廠商後台人工，系統負責退刷後一致性——refund_order 原子 RPC（migration 0020：翻 paid payment＋CAS 轉 orders refunded＋寫 log 單一交易，CAS 未命中 …
