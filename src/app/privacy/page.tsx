@@ -51,7 +51,7 @@ export default function PrivacyPage() {
     <LegalPage
       eyebrow="Privacy"
       title="隱私權政策"
-      intro="本政策說明 incantochen（辰醉金閣）如何蒐集、使用、保護與刪除您的個人資料，以及您依《個人資料保護法》享有的權利。"
+      intro="本頁為 incantochen（辰醉金閣）個人資料之蒐集、使用、保護與刪除相關政策。完整條文正由專業人員審定中，定稿後將正式生效。"
       sections={sections}
       footnote="本頁條文正由專業人員審定中，定稿後將正式生效並標註更新日期。"
     />

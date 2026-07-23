@@ -70,7 +70,7 @@ export default function TermsPage() {
     <LegalPage
       eyebrow="Terms"
       title="服務條款"
-      intro="本條款規範您使用 incantochen（辰醉金閣）網站與購買半客製珠寶商品之權利義務。下單即表示您已閱讀並同意本條款。"
+      intro="本頁為 incantochen（辰醉金閣）購買半客製珠寶商品之服務條款。完整條文正由專業人員審定中，定稿後將正式生效。"
       sections={sections}
       footnote="本頁條文正由專業人員審定中，定稿後將正式生效並標註更新日期。"
     />
