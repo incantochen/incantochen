@@ -12,26 +12,19 @@ export const metadata: Metadata = {
 
 export default function CustomPage() {
   return (
-    <>
-      {/* HERO：綠底品牌敘事（對齊 wireframe custom.html） */}
-      <section className="bg-primary-900 text-paper">
-        <div className="mx-auto max-w-[680px] px-7 py-20 text-center sm:py-24">
-          <div className="eyebrow">Custom · 預約訂製</div>
-          <h1 className="mt-4 font-heading text-[clamp(1.75rem,3.8vw,2.5rem)] leading-[1.18] text-paper">
-            獨一無二 — 從一顆寶石、一個念頭開始
-          </h1>
-          <p className="mt-4 text-sm leading-relaxed text-paper/80 sm:text-base">
-            與我們一起打造完全屬於妳的設計。預約一對一訂製，我們陪妳從選石、草圖到成品——慢慢來，只為妳一個人。
-          </p>
-        </div>
-      </section>
+    <div className="mx-auto max-w-[680px] px-6 py-10 sm:py-14">
+      {/* 淺色 pagehead，與 /collections 一致（paper 底、金 eyebrow、serif 標題、灰副標） */}
+      <div>
+        <div className="eyebrow">Custom</div>
+        <h1 className="mt-2 font-heading text-[34px] text-ink">預約訂製</h1>
+        <p className="mt-3 max-w-[52ch] text-sm leading-relaxed text-ash">
+          與我們一起打造完全屬於妳的設計。預約一對一全客製訂製，從選石、草圖到成品——慢慢來，只為妳一個人。
+        </p>
+      </div>
 
-      {/* 表單 */}
-      <section className="mx-auto max-w-[680px] px-7 py-14 sm:py-20">
-        <div className="rounded-xl border border-border bg-white p-6 sm:p-8">
-          <CustomInquiryForm />
-        </div>
-      </section>
-    </>
+      <div className="mt-8 border-t border-border pt-8">
+        <CustomInquiryForm />
+      </div>
+    </div>
   );
 }
