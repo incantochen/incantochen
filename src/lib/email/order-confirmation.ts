@@ -3,9 +3,11 @@ import { Resend } from "resend"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { escapeHtml } from "@/lib/email/escape-html"
-
-// TODO(T35): switch to verified custom domain (e.g. orders@incantochen.com) before go-live
-const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
+import {
+  FROM_EMAIL,
+  renderCustomerEmailShell,
+  unwrapMemberEmail,
+} from "@/lib/email/email-shell"
 
 const selectionSchema = {
   parse(raw: unknown): { label: string; price_delta: number }[] {
@@ -72,32 +74,7 @@ function buildEmailHtml(params: {
     zipCode ? `${zipCode} ${shippingAddress}` : shippingAddress,
   )
 
-  return `<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>訂單確認</title>
-</head>
-<body style="margin:0;padding:0;background:#f9f7f4;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f9f7f4;padding:40px 16px;">
-    <tr>
-      <td align="center">
-        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:4px;overflow:hidden;">
-
-          <!-- Header -->
-          <tr>
-            <td style="background:#0f3325;padding:28px 40px;text-align:center;">
-              <div style="font-size:22px;letter-spacing:0.12em;color:#c9a84c;font-weight:400;">incantochen</div>
-            </td>
-          </tr>
-
-          <!-- Body -->
-          <tr>
-            <td style="padding:40px 40px 32px;">
-
-              <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#c9a84c;">付款成功</p>
-              <h1 style="margin:0 0 20px;font-size:22px;font-weight:400;color:#111;line-height:1.3;">感謝您的訂購，${safeRecipientName}</h1>
+  const bodyHtml = `
               <p style="margin:0 0 32px;font-size:15px;color:#6b7280;line-height:1.6;">
                 我們已收到您的付款，將盡快為您精心製作。完成後我們會主動與您聯繫。
               </p>
@@ -135,35 +112,15 @@ function buildEmailHtml(params: {
               <div style="margin-bottom:32px;">
                 <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:6px;">收件地址</div>
                 <div style="font-size:15px;color:#374151;">${addressLine}</div>
-              </div>
+              </div>`
 
-              <!-- CTA -->
-              <div style="text-align:center;margin-bottom:8px;">
-                <a href="${loginUrl}"
-                   style="display:inline-block;padding:12px 32px;background:#0f3325;color:#fff;font-size:12px;letter-spacing:0.2em;text-transform:uppercase;text-decoration:none;border-radius:2px;">
-                  登入查看訂單
-                </a>
-              </div>
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding:24px 40px;border-top:1px solid #e5e7eb;text-align:center;">
-              <p style="margin:0;font-size:12px;color:#9ca3af;line-height:1.6;">
-                如有任何問題，請回覆此信件或聯絡我們。<br />
-                © incantochen
-              </p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`
+  return renderCustomerEmailShell({
+    title: "訂單確認",
+    eyebrow: "付款成功",
+    heading: `感謝您的訂購，${safeRecipientName}`,
+    bodyHtml,
+    loginUrl,
+  })
 }
 
 export async function sendOrderConfirmation(orderId: string): Promise<void> {
@@ -182,10 +139,7 @@ export async function sendOrderConfirmation(orderId: string): Promise<void> {
 
   if (!order) return
 
-  const memberData = order.member
-  const email = Array.isArray(memberData)
-    ? memberData[0]?.email
-    : memberData?.email
+  const email = unwrapMemberEmail(order.member)
   if (!email) return
 
   const items = (Array.isArray(order.order_item) ? order.order_item : []).map(

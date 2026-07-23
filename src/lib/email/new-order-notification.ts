@@ -3,9 +3,12 @@ import { Resend } from "resend"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { escapeHtml } from "@/lib/email/escape-html"
+import {
+  FROM_EMAIL,
+  renderEmailShell,
+  unwrapMemberEmail,
+} from "@/lib/email/email-shell"
 
-// TODO(T35): switch to verified custom domain before go-live
-const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
 // 營運通知收件人讀 env（消滅寫死複本，換信箱只需改 Vercel Dashboard 一處）。
 // 現況與 requireAdmin() 共用 ADMIN_EMAIL；「後台權限身分 vs 營運通知收件人」
 // 長期拆兩個 env var 屬 T09 範圍，此處不做。
@@ -41,10 +44,7 @@ export async function sendNewOrderNotification(orderId: string): Promise<void> {
 
   if (!order) return
 
-  const memberData = order.member
-  const customerEmail = Array.isArray(memberData)
-    ? memberData[0]?.email
-    : memberData?.email
+  const customerEmail = unwrapMemberEmail(order.member)
 
   const items = (Array.isArray(order.order_item) ? order.order_item : []).map(
     (item) => {
@@ -90,18 +90,7 @@ export async function sendNewOrderNotification(orderId: string): Promise<void> {
     )
     .join("")
 
-  const html = `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"/></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;">
-<tr><td align="center">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#fff;border-radius:4px;border:1px solid #e5e7eb;">
-  <tr><td style="background:#0f3325;padding:20px 32px;">
-    <div style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#c9a84c;">incantochen — 店家通知</div>
-  </td></tr>
-  <tr><td style="padding:28px 32px 0;">
-    <p style="margin:0 0 4px;font-size:13px;letter-spacing:0.14em;text-transform:uppercase;color:#c9a84c;">新訂單</p>
-    <h1 style="margin:0 0 24px;font-size:20px;font-weight:400;color:#111;">${order.order_no}</h1>
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;font-size:13px;">
+  const bodyHtml = `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;font-size:13px;">
       <tr>
         <td style="color:#6b7280;padding:4px 0;width:80px;">客人姓名</td>
         <td style="color:#111;padding:4px 0;">${safeRecipientName}</td>
@@ -122,19 +111,21 @@ export async function sendNewOrderNotification(orderId: string): Promise<void> {
       </tr></thead>
       <tbody>${itemRows}</tbody>
     </table>
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;border-top:2px solid #111;padding-top:12px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:0;border-top:2px solid #111;padding-top:12px;">
       <tr>
         <td style="font-size:14px;font-weight:600;color:#111;">總計</td>
         <td style="text-align:right;font-size:16px;font-weight:700;color:#111;">NT$${order.total_amount.toLocaleString()}</td>
       </tr>
-    </table>
-  </td></tr>
-  <tr><td style="padding:16px 32px;border-top:1px solid #e5e7eb;text-align:center;">
-    <p style="margin:0;font-size:12px;color:#9ca3af;">後台訂單管理功能於 M2 上線前，請至 Supabase Dashboard 查看訂單詳情。</p>
-  </td></tr>
-</table>
-</td></tr></table>
-</body></html>`
+    </table>`
+
+  const html = renderEmailShell({
+    headerLabel: "incantochen — 店家通知",
+    eyebrow: "新訂單",
+    title: order.order_no,
+    bodyHtml,
+    footerNote:
+      "後台訂單管理功能於 M2 上線前，請至 Supabase Dashboard 查看訂單詳情。",
+  })
 
   const { error } = await resend.emails.send({
     from: FROM_EMAIL,

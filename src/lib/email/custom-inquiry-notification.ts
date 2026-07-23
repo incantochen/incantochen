@@ -2,6 +2,7 @@ import "server-only";
 import { Resend } from "resend";
 import { serverEnv } from "@/lib/env.server";
 import {
+  FROM_EMAIL,
   renderEmailShell,
   renderLabelValueTable,
 } from "@/lib/email/email-shell";
@@ -11,8 +12,6 @@ import type {
   CustomInquiryCategory,
 } from "@/lib/custom-inquiry/schema";
 
-// TODO(T35): switch to verified custom domain before go-live
-const FROM_EMAIL = "incantochen <onboarding@resend.dev>";
 // 營運通知收件人讀 env（與 support-request-notification 同源；換信箱只改 Dashboard 一處）。
 const OWNER_EMAIL = serverEnv.ADMIN_EMAIL;
 
