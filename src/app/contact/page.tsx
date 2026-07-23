@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Link from "next/link";
 
-// T61 賣家資訊揭露＋聯絡頁。頁框與品牌 token 已就緒；法定揭露欄位（統一編號／
-// 地址／負責人／客服電話／客服時間等）先以「（待補）」佔位，使用者確認實值後
-// 替換各 TODO 值並移除下方 metadata 的 robots noindex（見 TODO(T61-facts)）。
+// T61 賣家資訊揭露＋聯絡頁。頁框與品牌 token 已就緒；賣家名稱／負責人／統編／
+// 地址／客服信箱已填實值，僅客服電話與客服時間以「（待補）」佔位。補齊後移除
+// 下方 metadata 的 robots noindex 開放索引（見 TODO(T61-facts)）。
 export const metadata: Metadata = {
   title: "聯絡我們",
   description:
@@ -21,14 +21,21 @@ const TODO = "（待補）";
 // 賣家身分與聯絡方式揭露。value 為 TODO 者代表事實待使用者確認。
 const disclosures: { term: string; value: ReactNode }[] = [
   { term: "賣家名稱", value: "辰醉金閣（incantochen）" },
-  { term: "負責人", value: TODO },
-  { term: "營業登記／統一編號", value: TODO },
-  { term: "營業地址", value: TODO },
+  { term: "負責人", value: "樂小辰" },
+  { term: "營業登記／統一編號", value: "85634292" },
+  { term: "營業地址", value: "台北市承德路一段 400 號" },
   {
     term: "客服信箱",
-    // TODO(T61-facts): 換正式客服信箱（勿用個人信箱）。
-    value: TODO,
+    value: (
+      <a
+        href="mailto:incantochen@gmail.com"
+        className="text-ink underline underline-offset-4 hover:text-secondary"
+      >
+        incantochen@gmail.com
+      </a>
+    ),
   },
+  // TODO(T61-facts): 客服電話與客服時間待補；補齊後移除 metadata robots noindex。
   { term: "客服電話", value: TODO },
   { term: "客服時間", value: TODO },
 ];
