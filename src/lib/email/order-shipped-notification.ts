@@ -3,10 +3,12 @@ import { Resend } from "resend"
 import { serverEnv } from "@/lib/env.server"
 import { createServiceRoleClient } from "@/lib/supabase/service-role"
 import { escapeHtml } from "@/lib/email/escape-html"
+import {
+  FROM_EMAIL,
+  renderCustomerEmailShell,
+  unwrapOne,
+} from "@/lib/email/email-shell"
 import { parseTracking } from "@/lib/order/shipping-tracking"
-
-// TODO(T35): switch to verified custom domain (e.g. orders@incantochen.com) before go-live
-const FROM_EMAIL = "incantochen <onboarding@resend.dev>"
 
 function buildEmailHtml(params: {
   orderNo: string
@@ -39,32 +41,7 @@ function buildEmailHtml(params: {
                 <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${safeTrackingNo}</div>
               </div>`
 
-  return `<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>訂單已出貨</title>
-</head>
-<body style="margin:0;padding:0;background:#f9f7f4;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f9f7f4;padding:40px 16px;">
-    <tr>
-      <td align="center">
-        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:4px;overflow:hidden;">
-
-          <!-- Header -->
-          <tr>
-            <td style="background:#0f3325;padding:28px 40px;text-align:center;">
-              <div style="font-size:22px;letter-spacing:0.12em;color:#c9a84c;font-weight:400;">incantochen</div>
-            </td>
-          </tr>
-
-          <!-- Body -->
-          <tr>
-            <td style="padding:40px 40px 32px;">
-
-              <p style="margin:0 0 8px;font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#c9a84c;">${isPickup ? "可安排面交" : "已出貨"}</p>
-              <h1 style="margin:0 0 20px;font-size:22px;font-weight:400;color:#111;line-height:1.3;">${isPickup ? `您的訂單已可安排面交，${safeRecipientName}` : `您的訂單已寄出，${safeRecipientName}`}</h1>
+  const bodyHtml = `
               <p style="margin:0 0 32px;font-size:15px;color:#6b7280;line-height:1.6;">
                 ${bodyText}
               </p>
@@ -74,34 +51,17 @@ function buildEmailHtml(params: {
                 <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px;">訂單號碼</div>
                 <div style="font-family:monospace;font-size:16px;font-weight:600;color:#111;">${orderNo}</div>
               </div>
-${trackingSection}
-              <!-- CTA -->
-              <div style="text-align:center;margin-bottom:8px;">
-                <a href="${loginUrl}"
-                   style="display:inline-block;padding:12px 32px;background:#0f3325;color:#fff;font-size:12px;letter-spacing:0.2em;text-transform:uppercase;text-decoration:none;border-radius:2px;">
-                  登入查看訂單
-                </a>
-              </div>
+${trackingSection}`
 
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding:24px 40px;border-top:1px solid #e5e7eb;text-align:center;">
-              <p style="margin:0;font-size:12px;color:#9ca3af;line-height:1.6;">
-                如有任何問題，請回覆此信件或聯絡我們。<br />
-                © incantochen
-              </p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`
+  return renderCustomerEmailShell({
+    title: "訂單已出貨",
+    eyebrow: isPickup ? "可安排面交" : "已出貨",
+    heading: isPickup
+      ? `您的訂單已可安排面交，${safeRecipientName}`
+      : `您的訂單已寄出，${safeRecipientName}`,
+    bodyHtml,
+    loginUrl,
+  })
 }
 
 export async function sendOrderShippedNotification(
@@ -126,10 +86,7 @@ export async function sendOrderShippedNotification(
   }
   if (!order.tracking_no) return
 
-  const memberData = order.member
-  const email = Array.isArray(memberData)
-    ? memberData[0]?.email
-    : memberData?.email
+  const email = unwrapOne(order.member)?.email
   if (!email) return
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`

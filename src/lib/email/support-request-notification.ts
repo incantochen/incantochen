@@ -3,16 +3,16 @@ import { Resend } from "resend";
 import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import {
+  FROM_EMAIL,
   renderEmailShell,
   renderLabelValueTable,
+  unwrapOne,
 } from "@/lib/email/email-shell";
 import {
   REQUEST_TYPE_LABELS,
   type SupportRequestType,
 } from "@/lib/support/support-request";
 
-// TODO(T35): switch to verified custom domain before go-live
-const FROM_EMAIL = "incantochen <onboarding@resend.dev>";
 // 營運通知收件人讀 env（消滅寫死複本，換信箱只需改 Vercel Dashboard 一處）。
 // 現況與 requireAdmin() 共用 ADMIN_EMAIL；「後台權限身分 vs 營運通知收件人」
 // 長期拆兩個 env var 屬 T09 範圍，此處不做。
@@ -38,12 +38,8 @@ export async function sendSupportRequestNotification(
 
   if (!request) return;
 
-  const orderData = request.orders;
-  const order = Array.isArray(orderData) ? orderData[0] : orderData;
-  const memberData = request.member;
-  const customerEmail = Array.isArray(memberData)
-    ? memberData[0]?.email
-    : memberData?.email;
+  const order = unwrapOne(request.orders);
+  const customerEmail = unwrapOne(request.member)?.email;
 
   const requestType = request.request_type as SupportRequestType;
   const typeLabel = REQUEST_TYPE_LABELS[requestType];
