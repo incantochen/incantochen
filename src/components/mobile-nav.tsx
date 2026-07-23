@@ -3,12 +3,7 @@
 import { Dialog } from "radix-ui"
 import Link from "next/link"
 import { Menu, X } from "lucide-react"
-
-const navLinks = [
-  { label: "COLLECTIONS", href: "/collections/ring" },
-  { label: "CUSTOM", href: "#" },
-  { label: "ABOUT", href: "#" },
-]
+import { CATEGORY_NAV } from "@/components/site-nav-links"
 
 export function MobileNav() {
   return (
@@ -39,14 +34,17 @@ export function MobileNav() {
             </Dialog.Close>
           </div>
 
-          <nav className="mt-10 flex flex-col gap-6">
-            {navLinks.map((link) => (
-              <Dialog.Close asChild key={link.label}>
+          <nav className="mt-10 flex flex-col gap-5">
+            {CATEGORY_NAV.map((link) => (
+              <Dialog.Close asChild key={link.en}>
                 <Link
                   href={link.href}
-                  className="text-sm tracking-[0.22em] text-ink uppercase hover:text-secondary-400"
+                  className="flex flex-col leading-tight text-ink hover:text-secondary-400"
                 >
-                  {link.label}
+                  <span className="text-base tracking-[0.10em]">{link.zh}</span>
+                  <span className="mt-0.5 text-[10px] tracking-[0.22em] text-ash uppercase">
+                    {link.en}
+                  </span>
                 </Link>
               </Dialog.Close>
             ))}

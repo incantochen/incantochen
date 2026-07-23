@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { addToCart } from "@/app/products/[slug]/actions";
 import { trackAddToCart } from "@/lib/analytics/gtag";
@@ -16,6 +17,8 @@ export type ConfiguratorValue = {
 export type ConfiguratorOption = {
   id: string
   name: string
+  // option_type.code：用於選項專屬 UI（如 ring_size 旁顯示量法連結）。
+  code: string
   // option_type.input_type：swatch（色點）／select（下拉）／stepper（加減器）。
   // 未預期值退回 chip（見 OptionValues 的 default 分支）。
   inputType: string
@@ -294,9 +297,20 @@ export function ProductConfigurator({
 
       {options.map((option, index) => (
         <div key={option.id} className="py-4">
-          <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
-            {String(index + 1).padStart(1, "0")}. {option.name}
-          </label>
+          <div className="flex items-baseline justify-between gap-3">
+            <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+              {String(index + 1).padStart(1, "0")}. {option.name}
+            </label>
+            {/* T54：戒圍選項旁的就近量法入口（user-flow F1：不確定戒圍→量法頁） */}
+            {option.code === "ring_size" && (
+              <Link
+                href="/ring-size"
+                className="shrink-0 text-[11px] text-primary underline underline-offset-2 hover:text-primary-700"
+              >
+                不確定尺寸？看量法
+              </Link>
+            )}
+          </div>
           <OptionValues
             option={option}
             selectedId={selected[option.id]}
