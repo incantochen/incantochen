@@ -6,7 +6,7 @@ import { escapeHtml } from "@/lib/email/escape-html"
 import {
   FROM_EMAIL,
   renderCustomerEmailShell,
-  unwrapMemberEmail,
+  unwrapOne,
 } from "@/lib/email/email-shell"
 import { parseTracking } from "@/lib/order/shipping-tracking"
 
@@ -86,7 +86,7 @@ export async function sendOrderShippedNotification(
   }
   if (!order.tracking_no) return
 
-  const email = unwrapMemberEmail(order.member)
+  const email = unwrapOne(order.member)?.email
   if (!email) return
 
   const loginUrl = `${serverEnv.NEXT_PUBLIC_SITE_URL}/login`

@@ -6,7 +6,7 @@ import { escapeHtml } from "@/lib/email/escape-html"
 import {
   FROM_EMAIL,
   renderEmailShell,
-  unwrapMemberEmail,
+  unwrapOne,
 } from "@/lib/email/email-shell"
 
 // 營運通知收件人讀 env（消滅寫死複本，換信箱只需改 Vercel Dashboard 一處）。
@@ -44,13 +44,12 @@ export async function sendNewOrderNotification(orderId: string): Promise<void> {
 
   if (!order) return
 
-  const customerEmail = unwrapMemberEmail(order.member)
+  const customerEmail = unwrapOne(order.member)?.email
 
   const items = (Array.isArray(order.order_item) ? order.order_item : []).map(
     (item) => {
-      const p = item.product
       // 快照優先（下單當下名稱）；join 現值僅供 null 窗口 fallback
-      const joinedName = Array.isArray(p) ? p[0]?.name : p?.name
+      const joinedName = unwrapOne(item.product)?.name
       const productName = item.product_name_snapshot ?? joinedName ?? "商品"
       const snap = item.config_snapshot
       const selections =

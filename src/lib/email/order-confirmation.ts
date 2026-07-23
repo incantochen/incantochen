@@ -6,7 +6,7 @@ import { escapeHtml } from "@/lib/email/escape-html"
 import {
   FROM_EMAIL,
   renderCustomerEmailShell,
-  unwrapMemberEmail,
+  unwrapOne,
 } from "@/lib/email/email-shell"
 
 const selectionSchema = {
@@ -139,16 +139,13 @@ export async function sendOrderConfirmation(orderId: string): Promise<void> {
 
   if (!order) return
 
-  const email = unwrapMemberEmail(order.member)
+  const email = unwrapOne(order.member)?.email
   if (!email) return
 
   const items = (Array.isArray(order.order_item) ? order.order_item : []).map(
     (item) => {
-      const productData = item.product
       // 快照優先（下單當下名稱）；join 現值僅供 null 窗口 fallback
-      const joinedName = Array.isArray(productData)
-        ? productData[0]?.name
-        : productData?.name
+      const joinedName = unwrapOne(item.product)?.name
       const productName = item.product_name_snapshot ?? joinedName ?? "商品"
 
       const selections = selectionSchema.parse(

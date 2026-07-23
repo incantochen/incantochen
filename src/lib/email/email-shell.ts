@@ -6,19 +6,12 @@ import { escapeHtml } from "@/lib/email/escape-html";
 // 只需改這一行、全部信件跟著換。
 export const FROM_EMAIL = "incantochen <onboarding@resend.dev>";
 
-// member join（member:member_id(email)）在 PostgREST 可能回物件或陣列——
-// 單一出處 unwrap，勿各檔手刻 Array.isArray 分支（T136）。查無 email 回 null，
-// 呼叫端以 `if (!email) return` 判斷。
-export function unwrapMemberEmail(
-  member:
-    | { email: string | null }
-    | { email: string | null }[]
-    | null
-    | undefined,
-): string | null {
-  if (!member) return null;
-  const row = Array.isArray(member) ? member[0] : member;
-  return row?.email ?? null;
+// PostgREST 巢狀 to-one 關聯（member／product／orders 等）在生成型別/回傳可能
+// 是物件或單元素陣列——單一出處解包，勿各檔手刻 Array.isArray 分支（T136）。
+// 回傳關聯列本身或 null；取欄位由呼叫端 `unwrapOne(x)?.email` / `?.name`。
+export function unwrapOne<T>(rel: T | T[] | null | undefined): T | null {
+  if (!rel) return null;
+  return Array.isArray(rel) ? (rel[0] ?? null) : rel;
 }
 
 // 客人信外殼（T136）：置中金字 logo header ＋ eyebrow ＋ 標題 ＋ body slot ＋
@@ -32,9 +25,7 @@ export function renderCustomerEmailShell(opts: {
   heading: string;
   bodyHtml: string;
   loginUrl: string;
-  ctaLabel?: string;
 }): string {
-  const ctaLabel = opts.ctaLabel ?? "登入查看訂單";
   return `<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -67,7 +58,7 @@ export function renderCustomerEmailShell(opts: {
               <div style="text-align:center;margin-bottom:8px;">
                 <a href="${opts.loginUrl}"
                    style="display:inline-block;padding:12px 32px;background:#0f3325;color:#fff;font-size:12px;letter-spacing:0.2em;text-transform:uppercase;text-decoration:none;border-radius:2px;">
-                  ${ctaLabel}
+                  登入查看訂單
                 </a>
               </div>
 

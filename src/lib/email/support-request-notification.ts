@@ -6,7 +6,7 @@ import {
   FROM_EMAIL,
   renderEmailShell,
   renderLabelValueTable,
-  unwrapMemberEmail,
+  unwrapOne,
 } from "@/lib/email/email-shell";
 import {
   REQUEST_TYPE_LABELS,
@@ -38,9 +38,8 @@ export async function sendSupportRequestNotification(
 
   if (!request) return;
 
-  const orderData = request.orders;
-  const order = Array.isArray(orderData) ? orderData[0] : orderData;
-  const customerEmail = unwrapMemberEmail(request.member);
+  const order = unwrapOne(request.orders);
+  const customerEmail = unwrapOne(request.member)?.email;
 
   const requestType = request.request_type as SupportRequestType;
   const typeLabel = REQUEST_TYPE_LABELS[requestType];
