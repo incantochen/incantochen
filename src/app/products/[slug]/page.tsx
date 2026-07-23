@@ -37,7 +37,7 @@ const getActiveProduct = cache(async (slug: string) => {
         option_type:option_type_id!inner ( id, code, name, applies_to, input_type ),
         product_option_value (
           id, price_delta, is_default,
-          option_value:option_value_id!inner ( id, code, label, sort_order )
+          option_value:option_value_id!inner ( id, code, label, sort_order, swatch_hex )
         )
       )
     `,
@@ -126,13 +126,19 @@ export default async function ProductDetailPage({
   const configuratorOptions: ConfiguratorOption[] = options.map((option) => ({
     id: option.id,
     name: option.option_type.name,
+    code: option.option_type.code,
+    inputType: option.option_type.input_type,
     values: [...option.product_option_value]
       .sort((a, b) => a.option_value.sort_order - b.option_value.sort_order)
       .map((value) => ({
         id: value.id,
         label: value.option_value.label,
         isDefault: value.is_default,
-        priceDelta: value.price_delta,
+        // §6：PostgREST 對 numeric 欄位可能回字串——在資料進 client 元件的
+        // 邊界統一 Number()（對齊 start-price.ts），否則配置器的 basePrice+Σ
+        // 會變字串串接、可見價格與 add_to_cart value 全錯。
+        priceDelta: Number(value.price_delta),
+        swatchHex: value.option_value.swatch_hex,
       })),
   }));
 
@@ -216,7 +222,8 @@ export default async function ProductDetailPage({
           <div className="mt-4">
             <ProductConfigurator
               productId={product.id}
-              basePrice={product.base_price}
+              productName={product.name}
+              basePrice={Number(product.base_price)}
               options={configuratorOptions}
               unavailable={unavailable}
             />

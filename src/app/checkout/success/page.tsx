@@ -13,6 +13,7 @@ import { RateLimitedNotice } from "../rate-limited-notice";
 import { SystemBusyNotice } from "../system-busy-notice";
 import { OrderCancelledNotice } from "@/components/order-cancelled-notice";
 import { OrderStatusCheck } from "./order-status-check";
+import { PurchaseTracker } from "@/components/analytics/purchase-tracker";
 
 export default async function CheckoutSuccessPage({
   searchParams,
@@ -34,7 +35,7 @@ export default async function CheckoutSuccessPage({
     serviceRole
       .from("orders")
       .select(
-        "order_no, status, total_amount, member_id, invoice_no, invoice_status, invoice_meta, member:member_id(email)",
+        "order_no, status, total_amount, member_id, invoice_no, invoice_status, invoice_meta, member:member_id(email), order_item(product_id, product_name_snapshot, unit_price_snapshot, quantity, product:product_id(name))",
       )
       .eq("order_no", orderNo)
       .maybeSingle(),
@@ -90,6 +91,23 @@ export default async function CheckoutSuccessPage({
   if (order.status === "paid") {
     return (
       <main className="min-h-screen bg-paper flex items-center justify-center px-4">
+        {/* T60：GA4 purchase（once-only，tracker 內以 localStorage 依 orderNo
+            去重）。名稱快照優先、join 現值僅 null 窗口 fallback（同 email 模板）；
+            numeric 欄位過 Number()——PostgREST 對 numeric 可能回字串（§6）。 */}
+        <PurchaseTracker
+          orderNo={order.order_no}
+          value={Number(order.total_amount)}
+          items={order.order_item.map((item) => {
+            const p = item.product;
+            const joinedName = Array.isArray(p) ? p[0]?.name : p?.name;
+            return {
+              item_id: item.product_id,
+              item_name: item.product_name_snapshot ?? joinedName ?? "商品",
+              price: Number(item.unit_price_snapshot),
+              quantity: item.quantity,
+            };
+          })}
+        />
         <div className="max-w-md w-full text-center">
           <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 mx-auto">
             <svg

@@ -10,6 +10,7 @@ import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { JsonLd } from "@/components/json-ld";
+import { AnalyticsRoot } from "@/components/analytics/analytics-root";
 import { getSiteUrl, isIndexingEnabled } from "@/lib/seo/site-url";
 import { SITE_NAME, SITE_TITLE, SITE_DESCRIPTION } from "@/lib/seo/site-meta";
 
@@ -51,9 +52,7 @@ export const metadata: Metadata = {
     template: `%s｜${SITE_NAME}`,
   },
   description: SITE_DESCRIPTION,
-  ...(isIndexingEnabled()
-    ? {}
-    : { robots: { index: false, follow: false } }),
+  ...(isIndexingEnabled() ? {} : { robots: { index: false, follow: false } }),
   openGraph: {
     type: "website",
     locale: "zh_TW",
@@ -104,6 +103,7 @@ export default function RootLayout({
         <SiteHeader />
         <main className="flex-1">{children}</main>
         <SiteFooter />
+        <AnalyticsRoot />
       </body>
     </html>
   );

@@ -13,9 +13,9 @@
 -- 資料集：
 --   1 款戒指商品（emerald-solitaire-ring，底價 NT$25,000）
 --   OptionType × 3：gem_color / metal_color / ring_size
---   OptionValue × 8：3 寶石色 / 2 金屬色 / 3 戒圍
+--   OptionValue × 10：3 寶石色 / 4 金屬色 / 3 戒圍
 --   ProductOption × 3：全數掛到此款戒指
---   ProductOptionValue × 8：白名單＋加價（部分有 default）
+--   ProductOptionValue × 10：白名單＋加價（部分有 default）
 -- =============================================================================
 
 
@@ -53,7 +53,9 @@ WITH
   ids_metal AS (
     SELECT
       '33333333-0000-4000-a000-000000000011'::uuid AS yellow_id,
-      '33333333-0000-4000-a000-000000000012'::uuid AS white_id
+      '33333333-0000-4000-a000-000000000012'::uuid AS white_id,
+      '33333333-0000-4000-a000-000000000013'::uuid AS rose_id,
+      '33333333-0000-4000-a000-000000000014'::uuid AS silver_id
   ),
 
   -- ── OptionValue（戒圍）──
@@ -116,31 +118,40 @@ WITH
 -- =============================================================================
 -- § 3. 選項值（option_value）
 --   寶石色：祖母綠 / 藍寶石 / 紅寶石
---   金屬色：18K 黃金 / 18K 白金
+--   金屬色：18K 黃金 / 18K 白金 / 玫瑰金 / 銀
 --   戒圍：10 / 11 / 12（台灣常見尺寸）
 -- =============================================================================
   inserted_option_values AS (
-    INSERT INTO public.option_value (id, option_type_id, code, label, sort_order)
-    SELECT id, option_type_id, code, label, sort_order
+    -- swatch_hex（T120/T12）：swatch 型選項的色點底色，前端據此畫彩色圓點、
+    -- 由 CSS 疊高光/內陰影（單一底色即可，不存漸層）。金屬用網路標準珠寶色碼：
+    -- 18K黃金 #d4af37 / 18K白金 #e5e4e2 / 玫瑰金 #b76e79 / 銀 #d7d7d7。
+    -- 寶石色暫留 NULL（待日後 tune，swatch 分支缺色碼會 fallback chip）；
+    -- 戒圍為 select 型、無色點故 NULL。
+    INSERT INTO public.option_value (id, option_type_id, code, label, sort_order, swatch_hex)
+    SELECT id, option_type_id, code, label, sort_order, swatch_hex
     FROM (
-      -- 寶石色
-      SELECT emerald_id  AS id, gem_color_id AS option_type_id, 'emerald'  AS code, '祖母綠' AS label, 1 AS sort_order FROM ids_gem, ids_option_type
+      -- 寶石色（swatch_hex 待 tune，先 NULL）
+      SELECT emerald_id  AS id, gem_color_id AS option_type_id, 'emerald'  AS code, '祖母綠' AS label, 1 AS sort_order, NULL AS swatch_hex FROM ids_gem, ids_option_type
       UNION ALL
-      SELECT sapphire_id AS id, gem_color_id AS option_type_id, 'sapphire' AS code, '藍寶石' AS label, 2 AS sort_order FROM ids_gem, ids_option_type
+      SELECT sapphire_id AS id, gem_color_id AS option_type_id, 'sapphire' AS code, '藍寶石' AS label, 2 AS sort_order, NULL AS swatch_hex FROM ids_gem, ids_option_type
       UNION ALL
-      SELECT ruby_id     AS id, gem_color_id AS option_type_id, 'ruby'     AS code, '紅寶石' AS label, 3 AS sort_order FROM ids_gem, ids_option_type
+      SELECT ruby_id     AS id, gem_color_id AS option_type_id, 'ruby'     AS code, '紅寶石' AS label, 3 AS sort_order, NULL AS swatch_hex FROM ids_gem, ids_option_type
       -- 金屬色
       UNION ALL
-      SELECT yellow_id   AS id, metal_color_id AS option_type_id, '18k-yellow' AS code, '18K 黃金' AS label, 1 AS sort_order FROM ids_metal, ids_option_type
+      SELECT yellow_id   AS id, metal_color_id AS option_type_id, '18k-yellow' AS code, '18K 黃金' AS label, 1 AS sort_order, '#d4af37' AS swatch_hex FROM ids_metal, ids_option_type
       UNION ALL
-      SELECT white_id    AS id, metal_color_id AS option_type_id, '18k-white'  AS code, '18K 白金' AS label, 2 AS sort_order FROM ids_metal, ids_option_type
-      -- 戒圍
+      SELECT white_id    AS id, metal_color_id AS option_type_id, '18k-white'  AS code, '18K 白金' AS label, 2 AS sort_order, '#e5e4e2' AS swatch_hex FROM ids_metal, ids_option_type
       UNION ALL
-      SELECT size10_id   AS id, ring_size_id AS option_type_id, 'size-10' AS code, '#10' AS label, 1 AS sort_order FROM ids_size, ids_option_type
+      SELECT rose_id     AS id, metal_color_id AS option_type_id, '18k-rose'   AS code, '玫瑰金'   AS label, 3 AS sort_order, '#b76e79' AS swatch_hex FROM ids_metal, ids_option_type
       UNION ALL
-      SELECT size11_id   AS id, ring_size_id AS option_type_id, 'size-11' AS code, '#11' AS label, 2 AS sort_order FROM ids_size, ids_option_type
+      SELECT silver_id   AS id, metal_color_id AS option_type_id, 'silver'     AS code, '銀'       AS label, 4 AS sort_order, '#d7d7d7' AS swatch_hex FROM ids_metal, ids_option_type
+      -- 戒圍（select 型，無色點）
       UNION ALL
-      SELECT size12_id   AS id, ring_size_id AS option_type_id, 'size-12' AS code, '#12' AS label, 3 AS sort_order FROM ids_size, ids_option_type
+      SELECT size10_id   AS id, ring_size_id AS option_type_id, 'size-10' AS code, '#10' AS label, 1 AS sort_order, NULL AS swatch_hex FROM ids_size, ids_option_type
+      UNION ALL
+      SELECT size11_id   AS id, ring_size_id AS option_type_id, 'size-11' AS code, '#11' AS label, 2 AS sort_order, NULL AS swatch_hex FROM ids_size, ids_option_type
+      UNION ALL
+      SELECT size12_id   AS id, ring_size_id AS option_type_id, 'size-12' AS code, '#12' AS label, 3 AS sort_order, NULL AS swatch_hex FROM ids_size, ids_option_type
     ) AS t
     ON CONFLICT (id) DO NOTHING
     RETURNING id
@@ -179,6 +190,8 @@ WITH
 --   metal_color（掛 po_metal_id）：
 --     18k-yellow  +0    default
 --     18k-white   +1000
+--     18k-rose    +0
+--     silver      +0
 --
 --   ring_size（掛 po_size_id）：
 --     size-10  +0  default（常見起始尺寸）
@@ -200,6 +213,10 @@ WITH
       SELECT po_metal_id AS product_option_id, yellow_id AS option_value_id, 0    AS price_delta, true  AS is_default FROM ids_product_option, ids_metal
       UNION ALL
       SELECT po_metal_id AS product_option_id, white_id  AS option_value_id, 1000 AS price_delta, false AS is_default FROM ids_product_option, ids_metal
+      UNION ALL
+      SELECT po_metal_id AS product_option_id, rose_id   AS option_value_id, 0    AS price_delta, false AS is_default FROM ids_product_option, ids_metal
+      UNION ALL
+      SELECT po_metal_id AS product_option_id, silver_id AS option_value_id, 0    AS price_delta, false AS is_default FROM ids_product_option, ids_metal
       -- 戒圍
       UNION ALL
       SELECT po_size_id AS product_option_id, size10_id AS option_value_id, 0 AS price_delta, true  AS is_default FROM ids_product_option, ids_size
@@ -226,8 +243,8 @@ SELECT
 -- =============================================================================
 -- seed.sql 結束
 -- 預期輸出（首次執行）：
---   products_inserted=1, option_types=3, option_values=8,
---   product_options=3, product_option_values=8
+--   products_inserted=1, option_types=3, option_values=10,
+--   product_options=3, product_option_values=10
 -- 重複執行：全部為 0（ON CONFLICT DO NOTHING，冪等）
 -- -----------------------------------------------------------------------------
 -- 下一步：T15 戒指商品詳情頁（前置 T43 ✅、T39 進行中）

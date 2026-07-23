@@ -52,8 +52,9 @@
 - **T30a** Email 下單確認（基本） · ✅完成 — 付款成功寄客人確認信｜✅ 完成（2026-06-27）：resend 安裝；env.server.ts 加 RESEND_API_KEY；src/lib/email/order-confirmation.ts（查 order+items…
 - **T49** 新訂單通知店家 · ✅完成 — 有新單即 email／LINE 通知你本人｜✅ 完成（2026-06-27）：src/lib/email/new-order-notification.ts（sendNewOrderNotification：查 orders+items…
 
-## M2（46）
+## M2（47）
 
+- **T120** ◆ 配置器依 input_type 渲染 · ✅完成 · PR #124 — product-configurator.tsx 抽 OptionValues，依 option_type.input_type 分支：swatch→彩色圓點（swatch_hex＋CSS 高光/內陰影 basic 漸層；任一值缺色碼整組退回 chip；選中態 Emerald 框＋金 ring §7.5）、select→原生下拉（focus Emerald／radius 11px §7.6）、stepper→加減器（排序後值清單前後移動）、default/未知→chip 不破版。PDP page.tsx 查詢補撈 option_value.swatch_hex、mapping 帶 inputType/swatchHex；送出仍 option_value id，計價鏈/後台/addToCart/verify-prices 未動。seed 金屬補色並擴為 4 色（黃金/白金/玫瑰金/銀），寶石色暫留 NULL 待 tune。進階金屬/寶石质感（深色台反光級高光/culet 折射）留 T44。⚠️ 已知限制：stepper 切換不顯示 price_delta（swatch/select 會顯示）——計價正常、僅缺即時價差提示，日後若把會加價選項設為 stepper 需補（見 product-configurator.tsx stepper 分支註解）。驗收：本機 db reset 通過＋雲端實測三分支渲染正確、lint/typecheck 綠。
 - **T28** 訂單狀態機 · ✅完成 — 狀態定義與合法轉換
 - **T29** 狀態紀錄（OrderStatusLog） · ✅完成 — 狀態變更寫 log
 - **T08** 會員中心框架 · ✅完成 — 版面、個人資料頁｜✅ 完成（2026-07-01）：`/account` layout（側邊 nav：訂單／個人資料／登出）＋`account-nav.tsx`（active 判斷）；`/account/profile`（唯讀 Emai…
@@ -112,11 +113,14 @@
 - **T111** ◆ 後台代客建立訂單（付款連結） · ✅完成 · PR #57 — /admin/orders/new 頁面（email 輸入＋商品選配 UI，可沿用/抽取 product-configurator.tsx 邏輯）＋ server action 建會員（如需）→建 cart/cart_item 或直接建…
 - **T113** ◆ createOrderFromCart 的 orderItemPayloadSchema.parse 補 try/catch · ✅完成 · PR #95 — parse 包 try/catch，例外轉 {ok:false, error:'訂單資料格式錯誤，請稍後再試'}；契約漂移屬靜默破口故補 console.error＋Sentry.captureException（extra 僅 car…
 
-## M4（4）
+## M4（7）
 
+- **T54** 🚀戒圍尺寸對照／量法說明頁 · ✅完成 · PR #125 — 新增公開內容頁 /ring-size（IA §/ring-size，補上 footer 既有連結的落地頁）：兩種在家量法（量現有戒指內徑／紙條量指圍周長）＋國際圍對照表 4–21（內徑/內周長/公制/港/美/日/歐，內周長＝內徑×π 單一出處計算）＋量測小提醒＋CTA；品牌 token、SEO metadata、麵包屑 JSON-LD。配置器 ring_size 選項旁加「不確定尺寸？看量法」就近入口（user-flow F1；ConfiguratorOption 帶 option_type.code，code==='ring_size' 才顯示）。戒圍系統定案見 decisions #15：本店＝國際圍（台灣）；半客製訂製、尺寸可依需求製作、不限號數（故不標「本店可選」）。對照數值採使用者提供之 Secret Summer 對照表＋另一份 .md 交叉驗證一致（國際圍 4–19 內徑與日圍完全相同）。
+- **T60** 🚀◆ 網站分析＋Cookie 同意 · ✅完成 · PR #121 — GA4（Consent Mode v2，預設全 denied、cookieless ping，同意才 grant analytics_storage）＋Cookie 同意 banner（cookie_consent 1yr／SameSite=Lax／非 httpOnly，useSyncExternalStore 驅動）＋三漏斗事件（add_to_cart／begin_checkout／purchase，共用 GaItem 型別）。GA bootstrap 改 server 端渲染帶 nonce 的 inline `<script>`（parse 時同步、早於 tracker effect）＋外部 loader；purchase 以 localStorage 依 order_no 去重。CSP 僅 img-src／connect-src 放行 GA 端點（script-src 走 nonce＋strict-dynamic 不動），另 dev-only 分支放行 www.googletagmanager.com 供本機端到端測。本地 ULTRA 替代（4 代理對抗）審查收斂 CONFIRMED：①purchase 於直接載入 paid 頁漏送且被 localStorage 永久鎖死（gtag bootstrap effect 晚於 tracker effect）②回訪已同意者 landing page_view cookieless（grant 落在 config 後）③④begin_checkout／add_to_cart 送字串價格（§6 numeric 未過 Number()，一併修正可見 PDP 價格）。UI 端到端實測全綠（三事件送出＋Network en=purchase＋去重＋F2 價格）。NEXT_PUBLIC_GA_ID 未設＝全關。測試假單 INC-20260722-9PNKF3 已翻 paid，待上線前清理。
 - **T59** ◆ SEO 基礎 · ✅完成 · PR #115 — metadata（metadataBase／title template／canonical／OG＋Twitter）＋sitemap.ts＋robots.ts＋manifest.ts＋生成式 icon/OG 卡＋PDP/collections generateMetadata；GEO：Product(AggregateOffer/lowPrice/availability=MadeToOrder)／BreadcrumbList／ItemList／Organization／WebSite JSON-LD＋llms.txt；抽 computeStartPrice/site-meta/site-url/breadcrumb-json-ld 單一出處；preview 一律 noindex（VERCEL_ENV 判定，robots/sitemap force-dynamic 防 promote 凍結）。兩輪 /code-review max＋一輪深度對抗審查（ultra 替代方案）收斂 CONFIRMED：BreadcrumbList 中間項無 href 致無效標記、llms.txt 自擬七天鑑賞期用詞（違 §8）、sitemap 無 limit 靜默截斷、OG 淺層覆蓋遺失 site_name/locale/type、單一 Offer→AggregateOffer、InStock→MadeToOrder。soft-404 依拍板記錄為已知限制（not-found.tsx）。上線後 production 驗證掛 T38 checklist。
 - **T14** 商品目錄頁（多品類框架） · ✅完成 · PR #61 — /collections/[category] 品類列表頁，tabs 依實際上架資料自動點亮／顯示「即將推出」；輕量排序（推薦／價格高低／最新，CollectionSortSelect 用 useTransition＋router.re…
 - **T40** 🚀RWD 與互動打磨 · ✅完成 · PR #58 — SiteHeader 新增 MobileNav（radix-ui Dialog 抽屜，COLLECTIONS/CUSTOM/ABOUT），修補手機版導覽連結完全消失且無替代入口的缺口；products/[slug]／cart／check…
+- **T62** 🚀◆ 客製錯誤頁＋圖片效能優化 · ✅完成 · PR #87 PR #120 — 客製 404（not-found.tsx）＋500（error.tsx，回報 Sentry＋reset），品牌 token 沿用 SystemBusyCard；next.config images 加 formats=[avif,webp]（對齊 T17 手機下載 AVIF）。後台圖片已 fill+sizes+預設 lazy；前台商品圖仍為 PlaceholderImage，元件層 next/image 替換卡真圖（T116）歸屬 T17。soft-404（notFound 動態渲染狀態碼 200）為既有 SEO 課題併入 T59。
 - **T117** ◆ PDP 對「必選選項全隱藏」商品的販售狀態呈現 · ✅完成 · PR #62 PR #97 — 新增 src/lib/product/check-product-availability.ts（isProductUnavailable，server role 查 required 選項，類別隱藏／值全隱藏／無值即 true），PD…
 
 ## M5（13）
