@@ -202,11 +202,11 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 
 **觸發本節的四個 Sentry 訊號**（成因不同，裁決流程相同）：
 
-| Sentry 訊息                                                            | summary 計數            | 成因                                                                                                                                 | 復發偵測                              |
-| ---------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
-| `reconcile: money received on closed order`                            | `promotedOnClosedOrder` | 對帳（主臂或漂移臂）向綠界／依財務事實推進時，重查發現訂單已 cancelled／refunded                                                     | 單次（payment 已 paid，隔日不再入選） |
-| `transitionOrder: money received on order cancelled during transition` | —                       | 取消守衛的 TOCTOU 毫秒窄窗：pre-guard 查無 paid、CAS 取消 commit 後才查到 payment 已 paid                                            | 單次（取消當下發）                    |
-| `reconcile: paid payment on cancelled order`                           | `paidOnCancelled`       | **durable 稽核臂**：每日掃 `payment=paid ∧ orders=cancelled`——上面兩種單次訊號漏看、或 T127 部署前既有列，都會被這支每日重新撈到告警 | **每日重複**直到處理                  |
+| Sentry 訊息                                                            | summary 計數            | 成因                                                                                                                                                                                         | 復發偵測                              |
+| ---------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `reconcile: money received on closed order`                            | `promotedOnClosedOrder` | 對帳（主臂或漂移臂）向綠界／依財務事實推進時，重查發現訂單已 cancelled／refunded                                                                                                             | 單次（payment 已 paid，隔日不再入選） |
+| `transitionOrder: money received on order cancelled during transition` | —                       | 取消守衛的 TOCTOU 毫秒窄窗：pre-guard 查無 paid、CAS 取消 commit 後才查到 payment 已 paid                                                                                                    | 單次（取消當下發）                    |
+| `reconcile: paid payment on cancelled order`                           | `paidOnCancelled`       | **durable 稽核臂**：每日掃 `payment=paid ∧ orders=cancelled`——上面兩種單次訊號漏看、或 T127 部署前既有列，都會被這支每日重新撈到告警                                                         | **每日重複**直到處理                  |
 | `reconcile: paid payment on refunded order`                            | `paidOnRefunded`        | **durable 稽核臂（T47）**：每日掃 `payment=paid ∧ orders=refunded`——成因＝Admin Override 直接把訂單改 refunded（逃生口，不翻 payment）。裁決＝回退款區塊按「補登記退款」補翻 payment＋補寄信 | **每日重複**直到處理                  |
 
 **成因總述**：逾期自動取消／人工取消後客人才完成付款，或取消與 webhook 結算的窄窗競態。payment 照翻／維持 `paid`（`gateway_trade_no`／`raw_callback` 已落地＝日後退款的依據），訂單維持 cancelled／refunded。**不自癒**——錢收了但訂單不會自動復活，必須人工裁決。
@@ -219,6 +219,7 @@ update payment set status = 'refunded' where merchant_trade_no = '<被退那筆>
 2. **恢復訂單**：客人仍要商品且交期可接受 → `/admin/orders/[id]` Admin Override 把訂單改 `paid`（reason 寫明「取消後付款成立，經客人確認恢復訂單」），再依 §4 補寄確認信。
 
 ⚠️ 前兩個訊號是**單次**的——收到當日就要處理，別等第二封。後兩個（`paid payment on cancelled order`、`paid payment on refunded order`）是 durable 兜底，會**每日重複告警**直到你把該列裁決掉，是「還沒處理」的每日催辦，不是新事件。`paid payment on refunded order` 兩種成因，處置不同：
+
 - **Admin Override 逃生口**留下的「訂單已退款、payment 仍 paid」半套——回退款區塊按「補登記退款」即補翻 payment＋補寄通知信。
 - **重複付款的兄弟交易在退款後才成立**（§5 情境：客人重刷留下一筆 pending，你依已付款那筆退款結案後，綠界才回報這筆 pending 也成功→翻成 paid 掛在已退款單上）——客人實際被扣兩次、你只退了一筆。**去綠界後台把第二筆也退刷**，再回退款區塊補登記（payment 同步翻 refunded）。這是**刻意不在程式端自動壓掉**的：pending 兄弟收到成功回呼＝真錢已入帳，把它標 failed 會讓真金流在系統裡隱形，比告警更糟；webhook 翻面當下就會發 `money received on closed order` 單次訊號，本臂每日催辦到你處理完。
 
@@ -255,3 +256,107 @@ and created_at < now() - interval '2 days' and last_reconciled_at is null;
 - 對帳結果與後台顯示不一致。
 
 準備資訊：MerchantID、MerchantTradeNo（19 碼）、綠界 TradeNo、交易日期與金額。
+
+---
+
+## 10. 個資權利請求處理（T63）
+
+當事人（會員本人）依《個資法》來信要求**查詢／更正／刪除**自己的個資。MVP 為人工受理（email）＋管理員手動處置，無前台自助表單。
+
+> ⚠️ **刪除＝匿名化，非真刪**：`orders.member_id → member` 為 FK RESTRICT、`member.id → auth.users cascade`——有訂單的會員無法實體刪除。刪除請求一律以匿名化落地：洗去可識別個資、**保留帳務鏈**（金額／`order_no`／發票號／金流交易號）以符稅務與對帳保存義務（§8 紅線「帳務表禁 DELETE」）。
+
+### 10.0 前置：身分驗證（未驗證不處置）
+
+請求者須證明為帳號本人，擇一：
+
+- 從註冊 email 發信往返確認；或
+- 引導其以該 email 走 OTP 登入、於已登入狀態提出。
+
+冒名請求會導致把他人個資揭露／洗掉，**驗不過一律不處置**。
+
+### 10.1 查詢（資料可攜／查閱）
+
+> 🛡️ **先寫存取稽核再匯出**：App 端揭露完整個資都會落 `pii_access_log`（fail-closed）。本流程是風險最高的整包匯出，**須先補稽核列**，否則「誰在何時匯出客人 X 全部個資」在系統稽核表查無紀錄。先跑（每張訂單一列）：
+
+```sql
+insert into public.pii_access_log (actor_id, actor_email, order_id, fields)
+select '<admin_auth_id>', '<admin_email>', id,
+       array['subject_access_export']
+  from public.orders where member_id = '<member_id>';
+```
+
+再以 service role 匯出該會員**全部** PII 來源（勿遺漏 `payment.raw_callback` 與 `order_status_log.note`，兩者皆可能含收件個資）：
+
+```sql
+select * from public.member where id = '<member_id>';
+select id, order_no, status, recipient_name, recipient_phone, shipping_address,
+       zip_code, tracking_no, invoice_no, invoice_meta, total_amount, created_at
+  from public.orders where member_id = '<member_id>';
+select oi.* from public.order_item oi
+  join public.orders o on o.id = oi.order_id
+ where o.member_id = '<member_id>';
+select * from public.support_request where member_id = '<member_id>';
+-- 綠界回拋內嵌收件姓名/電話/地址
+select p.order_id, p.raw_callback from public.payment p
+  join public.orders o on o.id = p.order_id
+ where o.member_id = '<member_id>' and p.raw_callback is not null;
+-- 狀態紀錄 note 可能夾帶客人姓名/電話（如面交出貨備註）
+select id, order_id, note from public.order_status_log
+ where order_id in (select id from public.orders where member_id = '<member_id>')
+   and note is not null;
+```
+
+### 10.2 更正
+
+更正 `member` profile：
+
+```sql
+update public.member set name = '<新值>' where id = '<member_id>';
+```
+
+> **已成立訂單快照為契約凍結、不回寫**：`orders` 的 `recipient_*`／`config_snapshot`／`unit_price_snapshot` 是下單當下的契約，只更正 member profile 與未來訂單，不改既有訂單（對齊「訂單成立即契約」規則）。
+
+### 10.3 刪除＝匿名化
+
+以 `postgres`／service role 於 Supabase SQL 執行原子 RPC（migration 0023）：
+
+```sql
+select public.anonymize_member(
+  '<member_id>',        -- 目標會員
+  '<admin_auth_id>'     -- 管理員的 auth.users id（稽核 actor；email 由 RPC 反查）
+);
+```
+
+- `<admin_auth_id>` **須為有效 auth.users id**，否則回 `U0013`、整筆 rollback（`actor_email` 由 RPC 反查 `auth.users`，不需也不接受手填）。
+- **`U0012`＝會員有未完成（非終態）訂單**：RPC 不洗任何資料。《個資法》容許對進行中契約延後執行——待該訂單 `completed`／`cancelled`／`refunded` 後再跑。先查：`select order_no, status from public.orders where member_id='<member_id>' and status not in ('completed','cancelled','refunded');`
+- 冪等：已匿名的會員再呼叫回 `U0011`；查無會員回 `U0010`。
+- RPC 洗：`member.email/name`、`orders` 收件四欄＋面交 `tracking_no` 備註＋`invoice_meta` 的 `carrier_num`（手機載具；**買方統編 `customer_identifier` 保留**＝公司識別碼＋發票法定保存）＋**`order_status_log.note` 的面交備註**、`payment.raw_callback`、`support_request.description`；保留帳務欄位、宅配單號、發票稅務結果與統編。
+
+> ⚠️ **送禮訂單的已知限制**：匿名化只及 `member_id = <當事人>` 的訂單。若當事人是「他人代寄」訂單的**收件人**，其姓名/電話/地址存在**下單者**的 `orders.recipient_*`、本 RPC 不會涵蓋。此類殘留需個案 `select ... where recipient_phone = '<當事人電話>'` 人工比對處置——`pii_erasure_log` 僅記錄本人訂單範圍。
+
+**接著手動處置 RPC 碰不到的兩處：**
+
+1. **auth.users**（RPC 只動 public schema）：Supabase Dashboard → Authentication → 該用戶 → **Ban user**（停用登入）＋將 auth email 覆寫為匿名值（best-effort 抹除真實 email）。因 orders RESTRICT，auth 帳號永遠無法實體刪除，離線紀錄保留、僅停用——為接受取捨。（app 層另有 `findOrCreateMember` 守衛拒絕已匿名會員建單，堵住 ban 前的窗口，但 ban 仍應盡快執行。）
+2. **order_status_log.note 的「非面交」PII**：面交出貨備註已由 RPC 自動截斷；此步僅逐列檢視**管理員自由輸入**的 note（override 理由等）是否夾帶客人姓名/電話，發現才個案處置：
+
+```sql
+select id, order_id, note from public.order_status_log
+ where order_id in (select id from public.orders where member_id = '<member_id>')
+   and note is not null;
+```
+
+提醒團隊：日後勿在 note 打客人個資。
+
+**驗證：**
+
+```sql
+select id, email, name, anonymized_at from public.member where id = '<member_id>';
+select * from public.pii_erasure_log where target_member_id = '<member_id>';
+```
+
+`member.anonymized_at` 應有值、`pii_erasure_log` 應有一列。
+
+### 10.4 紅線與登錄
+
+- **帳務欄位保留、匿名化非真刪、禁 DELETE**（引 §8）。
+- 於**人工個資請求記錄簿**登錄本次處理：日期／請求類型（查詢/更正/刪除）／身分驗證結果／處置範圍（member_id、受影響訂單數）。

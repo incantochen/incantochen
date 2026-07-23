@@ -31,4 +31,13 @@ describe("shipping-tracking 單一出處", () => {
     expect(parsed.isPickup).toBe(false)
     expect(parsed.pickupNote).toBe("")
   })
+
+  // T63 漂移防呆：migration 0023 的 anonymize_member RPC 在 SQL 端寫死
+  // `tracking_no like '面交%' then '面交'` 來洗除面交備註 PII（SQL 無法 import
+  // 此常數）。若改動 PICKUP_PREFIX 的字面值，務必同步
+  // supabase/migrations/0023_pii_erasure_log_and_anonymize_member.sql，否則面交訂單
+  // 夾帶的自取備註（客人姓名/時間/地點）會逃過刪除請求的匿名化。改名時此測試立刻變紅。
+  it("PICKUP_PREFIX 與 migration 0023 寫死的 '面交' 字面量同步", () => {
+    expect(PICKUP_PREFIX).toBe("面交")
+  })
 })

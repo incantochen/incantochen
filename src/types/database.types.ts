@@ -7,11 +7,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -160,6 +155,7 @@ export type Database = {
       }
       member: {
         Row: {
+          anonymized_at: string | null
           created_at: string
           email: string
           id: string
@@ -167,6 +163,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          anonymized_at?: string | null
           created_at?: string
           email: string
           id: string
@@ -174,6 +171,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          anonymized_at?: string | null
           created_at?: string
           email?: string
           id?: string
@@ -568,6 +566,41 @@ export type Database = {
           },
         ]
       }
+      pii_erasure_log: {
+        Row: {
+          actor_email: string
+          actor_id: string
+          created_at: string
+          fields: string[]
+          id: string
+          target_member_id: string
+        }
+        Insert: {
+          actor_email: string
+          actor_id: string
+          created_at?: string
+          fields: string[]
+          id?: string
+          target_member_id: string
+        }
+        Update: {
+          actor_email?: string
+          actor_id?: string
+          created_at?: string
+          fields?: string[]
+          id?: string
+          target_member_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pii_erasure_log_target_member_id_fkey"
+            columns: ["target_member_id"]
+            isOneToOne: false
+            referencedRelation: "member"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       product: {
         Row: {
           base_price: number
@@ -782,6 +815,23 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      anonymize_member: {
+        Args: { p_actor_id: string; p_member_id: string }
+        Returns: {
+          anonymized_at: string | null
+          created_at: string
+          email: string
+          id: string
+          name: string | null
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "member"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       create_order_with_items: {
         Args: {
           p_cart_id: string
@@ -1104,3 +1154,4 @@ export const Constants = {
     },
   },
 } as const
+

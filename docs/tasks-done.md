@@ -125,7 +125,7 @@
 - **T62** 🚀◆ 客製錯誤頁＋圖片效能優化 · ✅完成 · PR #87 PR #120 — 客製 404（not-found.tsx）＋500（error.tsx，回報 Sentry＋reset），品牌 token 沿用 SystemBusyCard；next.config images 加 formats=[avif,webp]（對齊 T17 手機下載 AVIF）。後台圖片已 fill+sizes+預設 lazy；前台商品圖仍為 PlaceholderImage，元件層 next/image 替換卡真圖（T116）歸屬 T17。soft-404（notFound 動態渲染狀態碼 200）為既有 SEO 課題併入 T59。
 - **T117** ◆ PDP 對「必選選項全隱藏」商品的販售狀態呈現 · ✅完成 · PR #62 PR #97 — 新增 src/lib/product/check-product-availability.ts（isProductUnavailable，server role 查 required 選項，類別隱藏／值全隱藏／無值即 true），PD…
 
-## M5（13）
+## M5（14）
 
 - **T42** 🚀電子發票串接（ECPay） · ✅完成 · PR #68 — B2C AES-JSON 協議、結帳三選一（個人綠界載具／公司統編／手機條碼），webhook after() 背景自動開立＋reconcile cron 未開票 sweep＋後台手動補開；統編/條碼結帳前打 ECPay 驗證（僅明確無…
 - **T47** 退換貨流程＋綠界金流退刷 · ✅完成 · PR #86 — 實際刷退仍走綠界廠商後台人工，系統負責退刷後一致性——refund_order 原子 RPC（migration 0020：翻 paid payment＋CAS 轉 orders refunded＋寫 log 單一交易，CAS 未命中 …
@@ -140,6 +140,7 @@
 - **T97** ◆ Production CSP 改 nonce-based（F-010） · ✅完成 · PR #70 — CSP 改由 proxy.ts 每請求 nonce＋strict-dynamic（production 無 unsafe-inline）＋圖檔／favicon 靜態最小 CSP（script-src 'none'）；本機 product…
 - **T98** ◆ createOrder 防重複提交（F-011） · ✅完成 · PR #51 — 建單前對 cart 做原子性 CAS claim（條件式 UPDATE 搶鎖，0 列命中回「訂單處理中」），或併入 T76 RPC 交易化時以 cart id 上 advisory lock 一次解決
 - **T102** ◆ 清理批次：對帳 cron 容量邊界＋OWNER_EMAIL 收斂（G-04/G-05） · ✅完成 · PR #94 — ①maxDuration=300 先前已存在未動；補 CANDIDATE_LIMIT 容量假設檔頭註解＋主候選撈滿時 Sentry warning（reconcile: candidate list saturated）＋summary…
+- **T63** 🚀◆ 當事人個資權利處理流程 · ✅完成 · PR #127 — 刪除＝匿名化（orders.member_id FK RESTRICT 無法實體刪）；anonymize_member 原子 RPC（migration 0023）洗 member/orders/payment/support_request＋面交 note＋invoice carrier_num，留帳務＋買方統編；U0012 終態守衛（進行中契約延後）、actor_email 由 DB 反查、pii_erasure_log（第18張破例表，決策#17）稽核；app 層 findOrCreateMember 拒絕已匿名會員建單；ops-runbook §10 人工受理流程；max review 13 findings 修完（含 drift 測試/送禮限制）
 
 ## 後續（1）
 

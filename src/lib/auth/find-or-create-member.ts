@@ -13,7 +13,7 @@ export async function findOrCreateMember(userId: string, email: string) {
 
   const { data: existing, error: lookupError } = await serviceRole
     .from("member")
-    .select("id")
+    .select("id, anonymized_at")
     .eq("id", userId)
     .maybeSingle();
 
@@ -21,6 +21,15 @@ export async function findOrCreateMember(userId: string, email: string) {
     throw new Error(`findOrCreateMember: 查詢會員失敗 - ${lookupError.message}`);
   }
   if (existing) {
+    // T63：已依個資刪除請求匿名化的會員不得再建單，否則會在這個「法定已刪除」的
+    // 帳號上重新累積 PII（新訂單的 recipient_*）。匿名化後 auth 帳號改由 runbook
+    // 手動 ban，本檢查是 RPC 與 ban 之間窗口（或 ban 疏漏）的 app 層 fail-closed
+    // 防線。當事人若要重新往來，走原 email 重新註冊會是另一個全新 member id。
+    if (existing.anonymized_at) {
+      throw new Error(
+        "findOrCreateMember: 此帳號已依個資刪除請求匿名化，無法建立新訂單",
+      );
+    }
     return;
   }
 

@@ -6,6 +6,9 @@
 // 此模組為該格式的單一出處，禁止各處手刻字面量（CLAUDE.md §6 識別碼格式互轉
 // 單一出處；F-015，與 T67 slice 複本失同步同型）。
 
+// ⚠️ 另一份「無法 import 此常數」的複本：migration 0023 anonymize_member RPC 以
+//    `tracking_no like '面交%'` 洗除面交備註 PII（SQL 端）。改字面值必須同步該 migration；
+//    shipping-tracking.test.ts 有 assert 會在改名時變紅。
 export const PICKUP_PREFIX = "面交"
 
 /**
