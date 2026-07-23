@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { Plus, Minus } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -18,17 +18,9 @@ export function FooterColumn({
   links: FooterLink[]
   isDesktop: boolean
 }) {
-  // 預設展開：SSR／停用 JS／hydration 前連結恆可見（漸進增強，不讓頁尾連結在
-  // 手機無法點）；掛載後手機才收合為手風琴，桌機由 md:flex 恆顯示。
-  const [open, setOpen] = useState(true)
-  useEffect(() => {
-    // 延到 rAF，不在 effect body 同步 setState（cascading render）。一次性判斷、
-    // 非訂閱（跨斷點的響應交給父層 isDesktop）。
-    const raf = requestAnimationFrame(() => {
-      if (!window.matchMedia("(min-width: 768px)").matches) setOpen(false)
-    })
-    return () => cancelAnimationFrame(raf)
-  }, [])
+  // 手機預設收合（無展開→收合閃爍）；點 +/− 展開。桌機由 md:flex 恆顯示，
+  // 與 open 無關。（放棄無 JS 可見的漸進增強——全站本就依賴 JS，取捨一致。）
+  const [open, setOpen] = useState(false)
   // 桌機連結恆可見，disclosure 語意應為展開；手機才反映實際開合。
   const expanded = isDesktop || open
 
