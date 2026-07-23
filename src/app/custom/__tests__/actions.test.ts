@@ -4,6 +4,7 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 vi.mock("server-only", () => ({}));
 vi.mock("next/headers", () => ({ headers: async () => new Map() }));
 vi.mock("@/lib/get-client-ip", () => ({ getClientIp: () => "203.0.113.1" }));
+vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
 const state = {
   rateLimitSuccess: true,
@@ -35,10 +36,22 @@ vi.mock("@/lib/supabase/service-role", () => ({
           return chain;
         },
         select: () => chain,
+        // insert().select().single() 現在取回整列供寄信用（不再只回 id）
         single: async () =>
           state.insertError
             ? { data: null, error: state.insertError }
-            : { data: { id: "ci-1" }, error: null },
+            : {
+                data: {
+                  id: "ci-1",
+                  category: "ring",
+                  budget_band: "3-5",
+                  idea: "想要一顆祖母綠、日常好戴的戒指",
+                  email: "alice@example.com",
+                  phone: "0912345678",
+                  preferred_time: "平日晚上",
+                },
+                error: null,
+              },
       };
       return chain;
     },
@@ -80,8 +93,13 @@ describe("createCustomInquiry", () => {
       phone: "0912345678",
       preferred_time: "平日晚上",
     });
-    expect(sendNotification).toHaveBeenCalledWith("ci-1");
-    expect(sendConfirmation).toHaveBeenCalledWith("ci-1");
+    // 寄信函式收到 insert 回傳的整列（不再各自依 id 重查 DB）
+    expect(sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ci-1", email: "alice@example.com" }),
+    );
+    expect(sendConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ci-1", email: "alice@example.com" }),
+    );
   });
 
   it("honeypot 命中 → 靜默丟棄：回 ok 但不打 DB、不寄信", async () => {
@@ -125,6 +143,8 @@ describe("createCustomInquiry", () => {
 
     expect(result).toEqual({ ok: true });
     // 通知信 throw 不影響確認信仍被嘗試
-    expect(sendConfirmation).toHaveBeenCalledWith("ci-1");
+    expect(sendConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ci-1" }),
+    );
   });
 });

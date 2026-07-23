@@ -59,7 +59,8 @@ export async function createCustomInquiry(
       phone: values.phone ?? null,
       preferred_time: values.preferredTime ?? null,
     })
-    .select("id")
+    // 一次取回整列供寄信用，兩支寄信函式不再各自依 id 重查 DB（省 2 次 round-trip）。
+    .select("id, category, budget_band, idea, email, phone, preferred_time")
     .single();
 
   // §6：SDK 錯誤必檢查——insert 失敗不可靜默當成功。
@@ -71,7 +72,7 @@ export async function createCustomInquiry(
   //    try/catch 吞錯不擋送出（DB 已有紀錄，可人工補救）——但一律記 Sentry
   //    （§6：Sentry 必須覆蓋寄信的靜默失敗點），否則店家漏接高價值 lead 卻無告警。
   try {
-    await sendCustomInquiryNotification(inserted.id);
+    await sendCustomInquiryNotification(inserted);
   } catch (e) {
     Sentry.captureException(e, {
       tags: { area: "custom-inquiry-email", kind: "owner-notification" },
@@ -79,7 +80,7 @@ export async function createCustomInquiry(
     });
   }
   try {
-    await sendCustomInquiryConfirmation(inserted.id);
+    await sendCustomInquiryConfirmation(inserted);
   } catch (e) {
     Sentry.captureException(e, {
       tags: { area: "custom-inquiry-email", kind: "customer-confirmation" },
