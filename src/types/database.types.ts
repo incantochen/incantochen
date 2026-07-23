@@ -400,6 +400,7 @@ export type Database = {
           consent_at: string | null
           created_at: string
           custom_consent: boolean
+          delivery_method: string
           id: string
           invoice_meta: Json | null
           invoice_no: string | null
@@ -422,6 +423,7 @@ export type Database = {
           consent_at?: string | null
           created_at?: string
           custom_consent?: boolean
+          delivery_method?: string
           id?: string
           invoice_meta?: Json | null
           invoice_no?: string | null
@@ -444,6 +446,7 @@ export type Database = {
           consent_at?: string | null
           created_at?: string
           custom_consent?: boolean
+          delivery_method?: string
           id?: string
           invoice_meta?: Json | null
           invoice_no?: string | null
@@ -837,6 +840,7 @@ export type Database = {
           p_cart_id: string
           p_consent_at: string
           p_custom_consent: boolean
+          p_delivery_method: string
           p_items: Json
           p_member_id: string
           p_order_no: string
@@ -853,6 +857,7 @@ export type Database = {
           consent_at: string | null
           created_at: string
           custom_consent: boolean
+          delivery_method: string
           id: string
           invoice_meta: Json | null
           invoice_no: string | null
@@ -922,6 +927,7 @@ export type Database = {
           consent_at: string | null
           created_at: string
           custom_consent: boolean
+          delivery_method: string
           id: string
           invoice_meta: Json | null
           invoice_no: string | null
@@ -968,6 +974,7 @@ export type Database = {
           consent_at: string | null
           created_at: string
           custom_consent: boolean
+          delivery_method: string
           id: string
           invoice_meta: Json | null
           invoice_no: string | null

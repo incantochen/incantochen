@@ -44,8 +44,13 @@ export async function createAdminOrderFromCart(
   if (!parsed.success) {
     return { ok: false, error: "表單資料有誤，請重新填寫" };
   }
-  const { recipientName, recipientPhone, zipCode, shippingAddress } =
-    parsed.data;
+  const {
+    recipientName,
+    recipientPhone,
+    zipCode,
+    shippingAddress,
+    deliveryMethod,
+  } = parsed.data;
   const email = normalizeEmail(parsed.data.email);
 
   const serviceRole = createServiceRoleClient();
@@ -104,7 +109,7 @@ export async function createAdminOrderFromCart(
     serviceRole,
     cartId,
     cart.updated_at,
-    { recipientName, recipientPhone, zipCode, shippingAddress },
+    { recipientName, recipientPhone, zipCode, shippingAddress, deliveryMethod },
     memberId,
   );
   if (pending.kind === "error") {
@@ -128,6 +133,7 @@ export async function createAdminOrderFromCart(
       recipientPhone,
       zipCode,
       shippingAddress,
+      deliveryMethod,
     },
   );
 

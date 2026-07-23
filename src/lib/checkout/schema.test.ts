@@ -63,3 +63,59 @@ describe("checkoutFormSchema：長度上限（T72）", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("checkoutFormSchema：配送方式與條件式地址驗證（T137）", () => {
+  it("缺省 deliveryMethod → 視同宅配（delivery）", () => {
+    const result = checkoutFormSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.deliveryMethod).toBe("delivery");
+  });
+
+  it("宅配缺郵遞區號被拒絕", () => {
+    const result = checkoutFormSchema.safeParse({
+      ...validBase,
+      deliveryMethod: "delivery",
+      zipCode: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("宅配空地址被拒絕", () => {
+    const result = checkoutFormSchema.safeParse({
+      ...validBase,
+      deliveryMethod: "delivery",
+      shippingAddress: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("面交（pickup）空地址＋空郵遞區號通過", () => {
+    const result = checkoutFormSchema.safeParse({
+      ...validBase,
+      deliveryMethod: "pickup",
+      zipCode: "",
+      shippingAddress: "",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("面交仍必填姓名與電話", () => {
+    const result = checkoutFormSchema.safeParse({
+      ...validBase,
+      deliveryMethod: "pickup",
+      zipCode: "",
+      shippingAddress: "",
+      recipientName: "",
+      recipientPhone: "",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("不合法的 deliveryMethod 被拒絕", () => {
+    const result = checkoutFormSchema.safeParse({
+      ...validBase,
+      deliveryMethod: "carrier_pigeon",
+    });
+    expect(result.success).toBe(false);
+  });
+});

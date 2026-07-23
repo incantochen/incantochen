@@ -21,6 +21,7 @@ import {
   PaidOrderCancelBlockedError,
 } from "@/lib/order/state-machine";
 import type { Json } from "@/types/database.types";
+import type { DeliveryMethod } from "@/lib/order/delivery-method";
 import { z } from "zod";
 
 export type CreateOrderFromCartResult =
@@ -51,6 +52,8 @@ type RecipientInput = {
   recipientPhone: string;
   zipCode: string;
   shippingAddress: string;
+  // T137：配送方式。面交（pickup）時 zipCode／shippingAddress 為空字串。
+  deliveryMethod: DeliveryMethod;
 };
 
 // T42：發票去向（型別與 jsonb 對映的單一出處在 invoice-meta.ts），結帳時收集、
@@ -119,7 +122,7 @@ export async function resolvePendingOrderForCart(
   const { data: existingPendingOrder, error: dedupError } = await serviceRole
     .from("orders")
     .select(
-      "id, order_no, created_at, member_id, recipient_name, recipient_phone, zip_code, shipping_address",
+      "id, order_no, created_at, member_id, recipient_name, recipient_phone, zip_code, shipping_address, delivery_method",
     )
     .eq("cart_id", cartId)
     .eq("status", "pending_payment")
@@ -142,7 +145,10 @@ export async function resolvePendingOrderForCart(
     existingPendingOrder.recipient_name === recipient.recipientName &&
     existingPendingOrder.recipient_phone === recipient.recipientPhone &&
     existingPendingOrder.zip_code === recipient.zipCode &&
-    existingPendingOrder.shipping_address === recipient.shippingAddress;
+    existingPendingOrder.shipping_address === recipient.shippingAddress &&
+    // T137：改配送方式（宅配↔面交）重送＝視為收件資訊變更，取消重建——
+    // 沿用舊單等於把新選的配送方式丟掉（面交單被當宅配出貨）。
+    existingPendingOrder.delivery_method === recipient.deliveryMethod;
 
   if (
     sameMember &&
@@ -213,7 +219,13 @@ export async function createOrderFromCart(
   recipient: RecipientInput,
   invoiceTarget?: InvoiceTargetInputType,
 ): Promise<CreateOrderFromCartResult> {
-  const { recipientName, recipientPhone, zipCode, shippingAddress } = recipient;
+  const {
+    recipientName,
+    recipientPhone,
+    zipCode,
+    shippingAddress,
+    deliveryMethod,
+  } = recipient;
 
   // 伺服器端驗價（T41 安全紅線：絕不信任 cart 快照價）
   let verifiedItems: VerifiedItem[];
@@ -264,7 +276,7 @@ export async function createOrderFromCart(
     (sum, item) => sum + item.verifiedUnitPrice * item.quantity,
     0,
   );
-  const shippingFee = 0; // T48 暫緩
+  const shippingFee = 0; // T48 暫緩（面交／宅配皆 0；宅配運費計算留 T48）
   const totalAmount = subtotal + shippingFee;
 
   // Insert order + order_items in one transaction (retry once on order_no
@@ -307,6 +319,7 @@ export async function createOrderFromCart(
       p_recipient_phone: recipientPhone,
       p_zip_code: zipCode,
       p_shipping_address: shippingAddress,
+      p_delivery_method: deliveryMethod,
       p_subtotal: subtotal,
       p_shipping_fee: shippingFee,
       p_total_amount: totalAmount,

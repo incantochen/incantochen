@@ -56,6 +56,8 @@ export function AdminCheckoutForm() {
         recipientPhone,
         zipCode,
         shippingAddress,
+        // T137：admin 代客建單暫不收配送方式 UI，固定宅配（面交於出貨時處理）。
+        deliveryMethod: "delivery",
         customConsent: customConsent as true,
         invoiceTarget: "personal",
       });

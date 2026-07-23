@@ -9,6 +9,11 @@ import {
   type OrderStatus,
 } from "@/lib/order/order-status";
 import {
+  DELIVERY_METHOD_LABELS,
+  type DeliveryMethod,
+} from "@/lib/order/delivery-method";
+import { parseTracking } from "@/lib/order/shipping-tracking";
+import {
   REQUEST_TYPE_LABELS,
   SUPPORT_STATUS_LABELS,
   SUPPORT_STATUS_PILL_STYLES,
@@ -70,6 +75,13 @@ export default async function OrderDetailPage({
   }
 
   const status = order.status as OrderStatus;
+  const deliveryMethod = order.delivery_method as DeliveryMethod;
+  const isPickup = deliveryMethod === "pickup";
+  // 面交單的 tracking_no 是「面交 [備註]」——取備註文字（可能為空）；宅配則
+  // tracking_no 即物流單號本身。修既有把「面交」raw 字串當物流單號顯示的瑕疵。
+  const pickupNote = order.tracking_no
+    ? parseTracking(order.tracking_no).pickupNote
+    : "";
   const eligibleForSupport = canRequestSupport(status);
   const latestSupportRequest = (supportRequests ?? [])[0];
 
@@ -128,15 +140,40 @@ export default async function OrderDetailPage({
             <p className="text-sm text-ash">尚無狀態紀錄</p>
           )}
 
-          <div className="mt-4 rounded-lg border border-border bg-cloud px-4 py-3 text-sm">
-            物流單號：
-            {order.tracking_no ? (
-              <span className="ml-1 font-mono text-ink">
-                {order.tracking_no}
+          <div className="mt-4 space-y-2">
+            <div className="rounded-lg border border-border bg-cloud px-4 py-3 text-sm">
+              配送方式：
+              <span className="ml-1 text-ink">
+                {DELIVERY_METHOD_LABELS[deliveryMethod]}
               </span>
-            ) : (
-              <span className="ml-1 text-ash">尚未出貨</span>
-            )}
+            </div>
+            <div className="rounded-lg border border-border bg-cloud px-4 py-3 text-sm">
+              {isPickup ? (
+                <>
+                  面交狀態：
+                  {order.tracking_no ? (
+                    <span className="ml-1 text-ink">
+                      面交自取{pickupNote ? `（${pickupNote}）` : ""}
+                    </span>
+                  ) : (
+                    <span className="ml-1 text-ash">
+                      備貨中，將由專人聯繫安排
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  物流單號：
+                  {order.tracking_no ? (
+                    <span className="ml-1 font-mono text-ink">
+                      {order.tracking_no}
+                    </span>
+                  ) : (
+                    <span className="ml-1 text-ash">尚未出貨</span>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
 

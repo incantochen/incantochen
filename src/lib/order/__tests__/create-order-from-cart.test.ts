@@ -19,26 +19,29 @@ vi.mock("@/lib/quote/verify-prices", () => ({
   PriceVerificationUnavailableError,
 }));
 
-const { transitionOrder, OrderTransitionRaceError, PaidOrderCancelBlockedError } =
-  vi.hoisted(() => {
-    class OrderTransitionRaceError extends Error {
-      constructor(message: string) {
-        super(message);
-        this.name = "OrderTransitionRaceError";
-      }
+const {
+  transitionOrder,
+  OrderTransitionRaceError,
+  PaidOrderCancelBlockedError,
+} = vi.hoisted(() => {
+  class OrderTransitionRaceError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = "OrderTransitionRaceError";
     }
-    class PaidOrderCancelBlockedError extends Error {
-      constructor(orderId: string) {
-        super(`訂單已有已收款 payment，不得取消：${orderId}`);
-        this.name = "PaidOrderCancelBlockedError";
-      }
+  }
+  class PaidOrderCancelBlockedError extends Error {
+    constructor(orderId: string) {
+      super(`訂單已有已收款 payment，不得取消：${orderId}`);
+      this.name = "PaidOrderCancelBlockedError";
     }
-    return {
-      transitionOrder: vi.fn(),
-      OrderTransitionRaceError,
-      PaidOrderCancelBlockedError,
-    };
-  });
+  }
+  return {
+    transitionOrder: vi.fn(),
+    OrderTransitionRaceError,
+    PaidOrderCancelBlockedError,
+  };
+});
 vi.mock("@/lib/order/state-machine", () => ({
   transitionOrder: (...a: unknown[]) => transitionOrder(...a),
   OrderTransitionRaceError,
@@ -77,6 +80,7 @@ const state = {
     recipient_phone: string;
     zip_code: string;
     shipping_address: string;
+    delivery_method: string;
   } | null,
   dedupError: null as { message?: string } | null,
   racedOrder: null as { order_no: string } | null,
@@ -91,6 +95,7 @@ const RECIPIENT = {
   recipientPhone: "0912345678",
   zipCode: "106",
   shippingAddress: "台北市大安區測試路 1 號",
+  deliveryMethod: "delivery" as const,
 };
 
 // existingPendingOrder 的收件欄位對齊 RECIPIENT，模擬「內容完全沒變」；
@@ -100,6 +105,7 @@ const SAME_RECIPIENT_ROW = {
   recipient_phone: RECIPIENT.recipientPhone,
   zip_code: RECIPIENT.zipCode,
   shipping_address: RECIPIENT.shippingAddress,
+  delivery_method: RECIPIENT.deliveryMethod,
 };
 
 const VERIFIED_OK = [
@@ -251,6 +257,32 @@ describe("resolvePendingOrderForCart", () => {
       recipient_phone: RECIPIENT.recipientPhone,
       zip_code: RECIPIENT.zipCode,
       shipping_address: "台北市大安區舊地址 999 號", // 跟 RECIPIENT 不同
+      delivery_method: RECIPIENT.deliveryMethod,
+    };
+
+    const result = await resolvePendingOrderForCart(
+      makeServiceRole(),
+      "cart-1",
+      "2026-07-10T00:00:00+00:00",
+      RECIPIENT,
+    );
+
+    expect(transitionOrder).toHaveBeenCalledWith(
+      "order-old",
+      "cancelled",
+      expect.objectContaining({ note: expect.any(String) }),
+    );
+    expect(result).toEqual({ kind: "proceed" });
+  });
+
+  it("配送方式跟舊單不同（宅配↔面交重送）→ 即使 cart 與收件其餘欄位都沒變也取消重建", async () => {
+    state.existingPendingOrder = {
+      id: "order-old",
+      order_no: "INC-EXISTING-1",
+      created_at: "2026-07-11T00:00:00+00:00",
+      member_id: "member-1",
+      ...SAME_RECIPIENT_ROW,
+      delivery_method: "pickup", // 舊單面交；本次以 RECIPIENT（宅配）重送
     };
 
     const result = await resolvePendingOrderForCart(
@@ -437,6 +469,7 @@ describe("resolvePendingOrderForCart", () => {
       recipient_phone: "0900000000",
       zip_code: "100",
       shipping_address: "舊地址",
+      delivery_method: "delivery",
     };
     transitionOrder.mockRejectedValue(
       new PaidOrderCancelBlockedError("order-old"),
@@ -646,6 +679,7 @@ describe("交易化與清車（T76／T75）", () => {
     expect(call).toBeTruthy();
     expect(call.values.p_cart_id).toBe("cart-1");
     expect(call.values.p_member_id).toBe("member-1");
+    expect(call.values.p_delivery_method).toBe("delivery");
     expect(call.values.p_items[0]).toMatchObject({
       product_name_snapshot: "祖母綠戒指",
       unit_price_snapshot: 25000,

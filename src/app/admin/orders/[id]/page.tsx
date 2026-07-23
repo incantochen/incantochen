@@ -7,6 +7,10 @@ import {
   STATUS_LABELS,
   type OrderStatus,
 } from "@/lib/order/order-status";
+import {
+  DELIVERY_METHOD_LABELS,
+  type DeliveryMethod,
+} from "@/lib/order/delivery-method";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import { parseInvoiceTargetFromMeta } from "@/lib/order/invoice-meta";
 import { maskAddress, maskEmail, maskName, maskPhone } from "@/lib/pii/mask";
@@ -132,6 +136,16 @@ export default async function AdminOrderDetailPage({
               <div>
                 <dt className="text-gray-500">運費</dt>
                 <dd>{formatCurrency(Number(order.shipping_fee))}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">配送方式</dt>
+                <dd>
+                  {
+                    DELIVERY_METHOD_LABELS[
+                      order.delivery_method as DeliveryMethod
+                    ]
+                  }
+                </dd>
               </div>
               <div>
                 <dt className="text-gray-500">總金額</dt>
@@ -301,7 +315,9 @@ export default async function AdminOrderDetailPage({
           <RefundSection
             orderId={order.id}
             orderStatus={order.status as OrderStatus}
-            hasPaidPayment={paidPayment !== "query-failed" && Boolean(paidPayment)}
+            hasPaidPayment={
+              paidPayment !== "query-failed" && Boolean(paidPayment)
+            }
             paymentQueryFailed={paidPayment === "query-failed"}
             invoiceStatus={order.invoice_status}
           />
@@ -374,6 +390,7 @@ export default async function AdminOrderDetailPage({
               orderId={order.id}
               currentStatus={order.status as OrderStatus}
               currentTrackingNo={order.tracking_no}
+              deliveryMethod={order.delivery_method as DeliveryMethod}
             />
           </div>
         </div>

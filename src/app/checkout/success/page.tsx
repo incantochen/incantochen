@@ -14,6 +14,10 @@ import { SystemBusyNotice } from "../system-busy-notice";
 import { OrderCancelledNotice } from "@/components/order-cancelled-notice";
 import { OrderStatusCheck } from "./order-status-check";
 import { PurchaseTracker } from "@/components/analytics/purchase-tracker";
+import {
+  DELIVERY_METHOD_LABELS,
+  type DeliveryMethod,
+} from "@/lib/order/delivery-method";
 
 export default async function CheckoutSuccessPage({
   searchParams,
@@ -35,7 +39,7 @@ export default async function CheckoutSuccessPage({
     serviceRole
       .from("orders")
       .select(
-        "order_no, status, total_amount, member_id, invoice_no, invoice_status, invoice_meta, member:member_id(email), order_item(product_id, product_name_snapshot, unit_price_snapshot, quantity, product:product_id(name))",
+        "order_no, status, total_amount, delivery_method, member_id, invoice_no, invoice_status, invoice_meta, member:member_id(email), order_item(product_id, product_name_snapshot, unit_price_snapshot, quantity, product:product_id(name))",
       )
       .eq("order_no", orderNo)
       .maybeSingle(),
@@ -146,6 +150,18 @@ export default async function CheckoutSuccessPage({
               </p>
               <p className="text-base font-medium text-ink">
                 NT${order.total_amount.toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] tracking-[0.16em] text-ash uppercase mb-0.5">
+                配送方式
+              </p>
+              <p className="text-base font-medium text-ink">
+                {
+                  DELIVERY_METHOD_LABELS[
+                    order.delivery_method as DeliveryMethod
+                  ]
+                }
               </p>
             </div>
             {showInvoice && (

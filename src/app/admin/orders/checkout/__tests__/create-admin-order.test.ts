@@ -105,6 +105,7 @@ const FORM = {
   recipientPhone: "0912345678",
   zipCode: "106",
   shippingAddress: "台北市大安區測試路 1 號",
+  deliveryMethod: "delivery" as const,
   customConsent: true as const,
   invoiceTarget: "personal" as const,
 };

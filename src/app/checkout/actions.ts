@@ -62,8 +62,13 @@ export async function createOrder(
   if (!parsed.success) {
     return { ok: false, error: "表單資料有誤，請重新填寫" };
   }
-  const { recipientName, recipientPhone, zipCode, shippingAddress } =
-    parsed.data;
+  const {
+    recipientName,
+    recipientPhone,
+    zipCode,
+    shippingAddress,
+    deliveryMethod,
+  } = parsed.data;
   // T71：正規化，避免大小寫變體繞過既有會員比對。
   const email = normalizeEmail(parsed.data.email);
 
@@ -164,7 +169,7 @@ export async function createOrder(
     serviceRole,
     cartId,
     cart.updated_at,
-    { recipientName, recipientPhone, zipCode, shippingAddress },
+    { recipientName, recipientPhone, zipCode, shippingAddress, deliveryMethod },
   );
   if (pending.kind === "error") {
     return { ok: false, error: pending.error };
@@ -279,6 +284,7 @@ export async function createOrder(
       recipientPhone,
       zipCode,
       shippingAddress,
+      deliveryMethod,
     },
     invoiceTarget,
   );

@@ -6,6 +6,11 @@ import { useRouter } from "next/navigation";
 import { checkoutFormSchema } from "@/lib/checkout/schema";
 import { createOrder } from "@/app/checkout/actions";
 import { flattenFieldErrors } from "@/lib/zod/flatten-field-errors";
+import {
+  DELIVERY_METHODS,
+  DELIVERY_METHOD_LABELS,
+  type DeliveryMethod,
+} from "@/lib/order/delivery-method";
 
 export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const router = useRouter();
@@ -14,6 +19,9 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [recipientPhone, setRecipientPhone] = useState("");
   const [zipCode, setZipCode] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
+  // T137：配送方式（面交／宅配），預設宅配。面交隱藏地址欄、免郵遞區號。
+  const [deliveryMethod, setDeliveryMethod] =
+    useState<DeliveryMethod>("delivery");
   const [customConsent, setCustomConsent] = useState(false);
   // T42：發票去向——個人（綠界載具）／公司統編／手機條碼載具三選一
   const [invoiceTarget, setInvoiceTarget] = useState<
@@ -30,13 +38,20 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [showCartLink, setShowCartLink] = useState(false);
   const [isPending, startTransition] = useTransition();
 
+  // T137：面交免地址——送出前把郵遞區號／地址正規化成空字串，避免使用者先
+  // 填了地址再切面交、殘值被送出（伺服器端 schema 也不會驗，但前端不該送髒值）。
+  const isPickup = deliveryMethod === "pickup";
+  const outgoingZipCode = isPickup ? "" : zipCode;
+  const outgoingShippingAddress = isPickup ? "" : shippingAddress;
+
   function validate() {
     const result = checkoutFormSchema.safeParse({
       email,
       recipientName,
       recipientPhone,
-      zipCode,
-      shippingAddress,
+      zipCode: outgoingZipCode,
+      shippingAddress: outgoingShippingAddress,
+      deliveryMethod,
       customConsent,
       invoiceTarget,
       taxId,
@@ -62,8 +77,9 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         email,
         recipientName,
         recipientPhone,
-        zipCode,
-        shippingAddress,
+        zipCode: outgoingZipCode,
+        shippingAddress: outgoingShippingAddress,
+        deliveryMethod,
         customConsent: customConsent as true,
         invoiceTarget,
         taxId,
@@ -143,52 +159,74 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         )}
       </div>
 
-      <div className="mb-4 grid grid-cols-[120px_1fr] gap-3">
-        <div>
-          <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
-            郵遞區號
-          </label>
-          <input
-            type="text"
-            inputMode="numeric"
-            maxLength={5}
-            value={zipCode}
-            onChange={(e) => setZipCode(e.target.value.replace(/\D/g, ""))}
-            onBlur={validate}
-            className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
-          />
-          {errors.zipCode && (
-            <p className="mt-1 text-sm text-destructive">{errors.zipCode}</p>
-          )}
-        </div>
-        <div>
-          <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
-            地址
-          </label>
-          <input
-            type="text"
-            maxLength={200}
-            value={shippingAddress}
-            onChange={(e) => setShippingAddress(e.target.value)}
-            onBlur={validate}
-            className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
-          />
-          {errors.shippingAddress && (
-            <p className="mt-1 text-sm text-destructive">
-              {errors.shippingAddress}
-            </p>
-          )}
-        </div>
-      </div>
-
+      {/* T137：配送方式（面交／宅配）——選面交時隱藏地址欄，改由專人聯繫 */}
       <div className="mb-4">
         <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
           配送方式
         </label>
-        <div className="mt-2 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
-          黑貓宅配（保價＋本人簽收）
+        <div className="mt-2 flex flex-wrap gap-4">
+          {DELIVERY_METHODS.map((method) => (
+            <label
+              key={method}
+              className="flex cursor-pointer items-center gap-1.5 text-sm"
+            >
+              <input
+                type="radio"
+                name="deliveryMethod"
+                value={method}
+                checked={deliveryMethod === method}
+                onChange={() => setDeliveryMethod(method)}
+                className="accent-primary"
+              />
+              {DELIVERY_METHOD_LABELS[method]}
+            </label>
+          ))}
         </div>
       </div>
+
+      {isPickup ? (
+        <div className="mb-4 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm text-ash">
+          面交的時間與地點，將由專人於備貨完成後與您聯繫確認。
+        </div>
+      ) : (
+        <div className="mb-4 grid grid-cols-[120px_1fr] gap-3">
+          <div>
+            <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+              郵遞區號
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={5}
+              value={zipCode}
+              onChange={(e) => setZipCode(e.target.value.replace(/\D/g, ""))}
+              onBlur={validate}
+              className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
+            />
+            {errors.zipCode && (
+              <p className="mt-1 text-sm text-destructive">{errors.zipCode}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
+              地址
+            </label>
+            <input
+              type="text"
+              maxLength={200}
+              value={shippingAddress}
+              onChange={(e) => setShippingAddress(e.target.value)}
+              onBlur={validate}
+              className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
+            />
+            {errors.shippingAddress && (
+              <p className="mt-1 text-sm text-destructive">
+                {errors.shippingAddress}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="mb-5 rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm">
         ⓘ <strong>下單後為妳訂製</strong>，交期至少 <strong>XX</strong>{" "}

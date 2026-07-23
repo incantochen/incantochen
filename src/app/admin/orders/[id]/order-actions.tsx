@@ -8,6 +8,7 @@ import {
   type OrderStatus,
 } from "@/lib/order/order-status";
 import { buildPickupTracking } from "@/lib/order/shipping-tracking";
+import type { DeliveryMethod } from "@/lib/order/delivery-method";
 import {
   changeStatus,
   shipOrder,
@@ -29,18 +30,18 @@ export function OrderActions({
   orderId,
   currentStatus,
   currentTrackingNo,
+  deliveryMethod,
 }: {
   orderId: string;
   currentStatus: OrderStatus;
   currentTrackingNo: string | null;
+  deliveryMethod: DeliveryMethod;
 }) {
   const [isPending, startTransition] = useTransition();
   const { message, notify } = useAdminNotify();
 
-  // 出貨表單狀態
-  const [shipMethod, setShipMethod] = useState<"delivery" | "pickup">(
-    "delivery",
-  );
+  // 出貨表單狀態。T137：初值對齊客人結帳時選的配送方式（admin 仍可改）。
+  const [shipMethod, setShipMethod] = useState<DeliveryMethod>(deliveryMethod);
   const [trackingInput, setTrackingInput] = useState("");
   const [pickupNote, setPickupNote] = useState("");
 
