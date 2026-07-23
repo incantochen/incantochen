@@ -1,12 +1,13 @@
-import Link from "next/link"
 import type { Metadata } from "next"
 import { notFound } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { CATEGORY_LABELS, ALL_CATEGORIES } from "@/lib/product/category-labels"
 import type { CategoryCode } from "@/lib/product/category-labels"
 import { ALL_SORT_KEYS, type SortKey } from "@/lib/product/collection-sort"
-import { GEM_COLOR_OPTION_CODE, METAL_COLOR_OPTION_CODE } from "@/lib/product/option-type-codes"
-import { computeStartPrice } from "@/lib/product/start-price"
+import {
+  PRODUCT_CARD_SELECT,
+  mapProductRowToCardData,
+} from "@/lib/product/product-card-query"
 import { buildBreadcrumbJsonLd } from "@/lib/seo/breadcrumb-json-ld"
 import { getSiteUrl } from "@/lib/seo/site-url"
 import { pageOpenGraph } from "@/lib/seo/site-meta"
@@ -64,24 +65,10 @@ export default async function CollectionPage({
 
   const supabase = await createClient()
 
-  // option_type / option_value 的 !inner 必要（同 PDP 查詢，T12/0014）：RLS 會
-  // 濾掉 is_active=false 的列，非 inner 的多對一 embed 會變 null——下面
-  // `o.option_type.code` 直接取值會炸；!inner 讓隱藏項目整列從陣列消失，
-  // find 撈不到就自然略過，「起」價的預設加價總和也只算客人實際選得到的選項
+  // select 與卡片對應共用 product-card-query（!inner／「起」價語意見該檔註解）。
   let productQuery = supabase
     .from("product")
-    .select(
-      `
-      slug, name, base_price,
-      product_option (
-        option_type!inner ( code ),
-        product_option_value (
-          is_default, price_delta,
-          option_value!inner ( label, swatch_hex )
-        )
-      )
-    `,
-    )
+    .select(PRODUCT_CARD_SELECT)
     .eq("status", "active")
     .eq("category", categoryCode)
     .limit(MAX_PRODUCTS_PER_CATEGORY)
@@ -95,54 +82,15 @@ export default async function CollectionPage({
     productQuery = productQuery.order("created_at", { ascending: false })
   }
 
-  // 品類 tab 是否可點：後台上架該品類任一商品後自動點亮。用每品類各一次
-  // .limit(1) 存在性探測（命中 (category,status) 複合索引即可回答，不需要
-  // 撈出全站所有上架商品的 category 欄位再在 JS 端數）。
-  const [{ data: products, error }, ...categoryChecks] = await Promise.all([
-    productQuery,
-    ...ALL_CATEGORIES.map((c) =>
-      supabase.from("product").select("id").eq("status", "active").eq("category", c).limit(1),
-    ),
-  ])
+  // 品類切換已移至全站上方導覽（site-nav-links），本頁不再重複品類 tab，
+  // 故也不需要逐品類的存在性探測，只撈本品類商品即可。
+  const { data: products, error } = await productQuery
 
   if (error) {
     throw new Error(`載入商品列表失敗：${error.message}`)
   }
 
-  const categoriesWithProducts = new Set<CategoryCode>()
-  ALL_CATEGORIES.forEach((c, i) => {
-    const check = categoryChecks[i]
-    if (check?.error) {
-      throw new Error(`載入品類狀態失敗：${check.error.message}`)
-    }
-    if ((check?.data?.length ?? 0) > 0) {
-      categoriesWithProducts.add(c)
-    }
-  })
-
-  const cards: ProductCardData[] = products.map((product) => {
-    const gemOption = product.product_option.find((o) => o.option_type.code === GEM_COLOR_OPTION_CODE)
-    const metalOption = product.product_option.find(
-      (o) => o.option_type.code === METAL_COLOR_OPTION_CODE,
-    )
-    const gemDefault = (
-      gemOption?.product_option_value.find((v) => v.is_default) ?? gemOption?.product_option_value[0]
-    )?.option_value
-    const metalDefault = (
-      metalOption?.product_option_value.find((v) => v.is_default) ??
-      metalOption?.product_option_value[0]
-    )?.option_value
-    const metaParts = [metalDefault?.label, gemDefault?.label].filter((v): v is string => Boolean(v))
-
-    return {
-      slug: product.slug,
-      name: product.name,
-      // 「起」價算法抽至 computeStartPrice（T59 起與 PDP metadata／JSON-LD 共用）
-      basePrice: computeStartPrice(product.base_price, product.product_option),
-      meta: metaParts.length > 0 ? metaParts.join(" · ") : null,
-      gemColor: gemDefault?.swatch_hex ?? null,
-    }
-  })
+  const cards: ProductCardData[] = products.map(mapProductRowToCardData)
 
   const breadcrumbItems = [
     { label: "首頁", href: "/" },
@@ -165,65 +113,29 @@ export default async function CollectionPage({
     })),
   }
 
-  function buildCategoryHref(c: CategoryCode) {
-    return sortKey !== "featured" ? `/collections/${c}?sort=${sortKey}` : `/collections/${c}`
-  }
-
   return (
     <div className="mx-auto max-w-[1240px] px-6 py-8">
       <JsonLd data={buildBreadcrumbJsonLd(breadcrumbItems)} />
       <JsonLd data={itemListJsonLd} />
       <Breadcrumb items={breadcrumbItems} />
 
-      <div className="mt-6">
-        <div className="eyebrow">COLLECTIONS</div>
-        <h1 className="mt-2 font-heading text-[34px] text-ink">{CATEGORY_LABELS[categoryCode]}</h1>
-        <p className="mt-2 max-w-[46ch] text-sm text-ash">
-          以彩色寶石為主角的半客製作品。選妳的顏色、金屬與尺寸，下單後專屬訂製。
-        </p>
-      </div>
-
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-b border-border pb-3.5">
-        <div className="flex flex-wrap gap-6">
-          {ALL_CATEGORIES.map((c) => {
-            const isActive = c === categoryCode
-            const hasProducts = categoriesWithProducts.has(c)
-            const label = hasProducts ? CATEGORY_LABELS[c] : `${CATEGORY_LABELS[c]}（即將推出）`
-
-            if (!hasProducts && !isActive) {
-              return (
-                <span key={c} className="text-xs tracking-[0.22em] text-stone uppercase">
-                  {label}
-                </span>
-              )
-            }
-
-            return (
-              <Link
-                key={c}
-                href={buildCategoryHref(c)}
-                aria-current={isActive ? "page" : undefined}
-                className={
-                  isActive
-                    ? "border-b-2 border-secondary-400 pb-1 text-xs tracking-[0.22em] text-primary uppercase"
-                    : "pb-1 text-xs tracking-[0.22em] text-ink/80 uppercase hover:text-secondary-400"
-                }
-              >
-                {label}
-              </Link>
-            )
-          })}
+      <div className="mt-6 flex flex-wrap items-end justify-between gap-4 border-b border-border pb-4">
+        <div>
+          <div className="eyebrow">COLLECTIONS</div>
+          <h1 className="mt-2 font-heading text-[34px] text-ink">{CATEGORY_LABELS[categoryCode]}</h1>
+          <p className="mt-2 max-w-[46ch] text-sm text-ash">
+            以彩色寶石為主角的半客製作品。選妳的顏色、金屬與尺寸，下單後專屬訂製。
+          </p>
         </div>
-
         <CollectionSortSelect value={sortKey} />
       </div>
 
       {cards.length === 0 ? (
-        <div className="mt-10 rounded-lg border border-border bg-cloud px-6 py-10 text-center text-ash">
+        <div className="mt-8 rounded-lg border border-border bg-cloud px-6 py-10 text-center text-ash">
           此品類即將推出，敬請期待。
         </div>
       ) : (
-        <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-8 grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
           {cards.map((product) => (
             <ProductCard key={product.slug} product={product} />
           ))}

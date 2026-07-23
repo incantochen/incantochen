@@ -1,21 +1,32 @@
-import Link from "next/link"
+import { FooterColumns } from "@/components/footer-columns"
 
+// 版式與配色對齊 demo indexV2 footer：emerald-900 深底、大 wordmark＋三欄、
+// 金色欄標、底部版權列。連結接真實路由；未建頁走占位（見 coming-soon）。
 const columns = [
   {
-    heading: "商品",
-    links: [{ label: "戒指", href: "/collections/ring" }],
-  },
-  {
-    heading: "支援",
+    heading: "選購",
     links: [
-      { label: "戒圍量法", href: "/ring-size" },
-      { label: "售後說明", href: "/after-sales" },
-      { label: "預約訂製", href: "/custom" },
+      { label: "戒指", href: "/collections/ring" },
+      { label: "耳環", href: "/collections/earring" },
+      { label: "手鍊", href: "/collections/bracelet" },
+      { label: "項鍊", href: "/collections/necklace" },
+      { label: "所有產品", href: "/collections/ring" },
     ],
   },
   {
-    heading: "法規",
+    heading: "服務",
     links: [
+      { label: "尺寸與量法", href: "/ring-size" },
+      { label: "預約訂製", href: "/custom" },
+      { label: "退換與售後", href: "/after-sales" },
+      { label: "訂單查詢", href: "/account/orders" },
+    ],
+  },
+  {
+    heading: "關於",
+    links: [
+      { label: "品牌故事", href: "/#story" },
+      { label: "聯絡我們", href: "/contact" },
       { label: "隱私權政策", href: "/privacy" },
       { label: "服務條款", href: "/terms" },
     ],
@@ -24,31 +35,27 @@ const columns = [
 
 export function SiteFooter() {
   return (
-    <footer className="mt-16 bg-primary text-primary-foreground/80">
-      <div className="mx-auto grid max-w-[1240px] grid-cols-1 gap-8 px-6 py-12 sm:grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr]">
-        <div>
-          <div className="font-heading text-base tracking-[0.26em] text-primary-foreground uppercase">
-            INCANTOCHEN
+    <footer className="bg-primary-900 text-paper/75">
+      <div className="mx-auto max-w-[1240px] px-6 pt-16 pb-8">
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
+          <div>
+            <div className="font-heading text-2xl tracking-[0.24em] text-paper uppercase">
+              INCANTOCHEN
+            </div>
+            <p className="mt-4 max-w-[34ch] text-[12.5px] leading-relaxed text-paper/60">
+              以彩色寶石為主角的半客製珠寶。低調，有故事。
+            </p>
+            <p className="mt-3.5 max-w-[34ch] text-[12.5px] leading-relaxed text-paper/60">
+              下單後為妳訂製，交期將於商品頁與結帳時告知。
+            </p>
           </div>
-          <p className="mt-3 max-w-[30ch] text-sm">
-            天然彩色寶石與細膩工藝，融入日常、令人回味的珠寶。
-          </p>
+
+          <FooterColumns columns={columns} />
         </div>
 
-        {columns.map((col) => (
-          <div key={col.heading}>
-            <h4 className="text-[10.5px] tracking-[0.2em] text-secondary-400 uppercase">
-              {col.heading}
-            </h4>
-            <div className="mt-3 flex flex-col gap-1">
-              {col.links.map((link) => (
-                <Link key={link.label} href={link.href} className="py-1 text-sm hover:text-primary-foreground">
-                  {link.label}
-                </Link>
-              ))}
-            </div>
-          </div>
-        ))}
+        <div className="mt-10 border-t border-paper/15 pt-5 text-xs text-paper/50">
+          © 2026 INCANTOCHEN · 辰醉金閣
+        </div>
       </div>
     </footer>
   )
