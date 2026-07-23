@@ -25,6 +25,7 @@
 | 2026-07-16 | code+schema+flow             | opus-4-8 | 無（覆蓋輪替結案）                                |
 | 2026-07-21 | security-foundation 漂移檢核 | opus-4-8 | 無（1 條清單失同步已就地修）                      |
 | 2026-07-22 | code+schema+flow             | opus-4-8 | F-025～F-026（皆 P2；PR #86～#115 大 delta 複核） |
+| 2026-07-23 | code+schema+flow             | opus-4-8 | F-027～F-028（皆 P2；PR #119～#132 delta 複核）   |
 
 ---
 
@@ -49,9 +50,25 @@
 - 修法：`pnpm remove shadcn && pnpm add -D shadcn`（移到 devDependencies）。CLI 用法不受影響（dev 環境仍可 `pnpm dlx shadcn add`）。移除後 `pnpm audit --prod` 應只剩 `next>sharp`（見下）。
 - 記錄：2026-07-22 首次發現（flow 範圍依賴安全 `pnpm audit`）。順帶更正舊記錄：review-findings 2026-07-15 註記稱「`pnpm audit` 端點已退役（410）無法執行」——本輪實測**端點已恢復**、可正常執行（10 筆 advisory，餘 6 筆 high 皆 dev/build-only：`eslint`→brace-expansion/js-yaml、`@sentry/nextjs`→`@sentry/webpack-plugin`→fast-uri〔build-time〕；1 筆 `next>sharp` libvips 屬 runtime 但僅處理後台上傳的可信商品圖，非客人輸入，低可利用性）。此三類皆與既有 T91〔Dependabot／定期 audit 機制〕同根，建議 T91 落地時一併以 toolchain 升版消化，不另開任務。
 
+### F-027 [P2] 三支寄信函式（order-confirmation／new-order／support-request）重查 DB 時忽略 Supabase `{error}`：暫時性 DB 故障→信件靜默略過；付款確認信與新單通知經 sendOnce 更被永久標記已寄、不再重試（F-008 同根、未列舉位置）
+
+- 狀態：待確認
+- 位置：`src/lib/email/order-confirmation.ts:130`（`const { data: order } = await serviceRole.from("orders")…; if (!order) return`——**未解構 `error`**）、`src/lib/email/new-order-notification.ts:33`（同式）、`src/lib/email/support-request-notification.ts:27`（同式）。對照組：`src/lib/email/order-shipped-notification.ts:73`／`src/lib/email/order-refunded-notification.ts:51` **已正確**解構 `queryError`、`PGRST116`→return、其餘 throw——同模組內不對稱。
+- 失敗情境：付款成功後 `settlePaid`（`src/lib/order/ensure-paid.ts:81-87`）以 `sendOnce` 包裝 `sendOrderConfirmation`／`sendNewOrderNotification`。這兩支在函式內重查 `orders`（join member／order_item）組信。若該重查遇暫時性故障（timeout／連線池耗盡），supabase-js **resolve `{data:null,error}` 不 throw**——因未解構 `error`，`order` 為 null 走 `if (!order) return`，函式**正常返回、不拋例外**。`sendOnce.attemptSend`（`src/lib/notification/send-once.ts:214-244`）視「`send()` 未 throw」為成功→把 notification 標 `status='sent'`→回 true。結果：客人付了款卻**永遠收不到訂單確認信**、店家**永遠收不到新單通知**；且因已標 sent，每日 reconcile 的 failed-sweep（只撿 `status='failed'`）不會重試——**永久靜默遺失、無告警**。support-request 版非經 sendOnce（`support/actions.ts:108` try/catch 呼叫），影響較輕（店家漏接一筆售後通知、support_request 列仍在後台），但同屬「查詢失敗誤判成查無」而靜默跳過。此為 F-008／T68／T69 同一根因（§6「查詢失敗 ≠ 查無資料」）；T95〔F-008〕當時列舉的讀取路徑未涵蓋這三支寄信函式的內部重查點，屬部分重疊的新位置。
+- 修法：三支比照 `order-shipped`／`order-refunded` 的已修範式——`const { data, error } = await …; if (error) { if (error.code === "PGRST116") return; throw new Error(…) }`。confirmation／new-order 走 sendOnce，throw 會讓 `attemptSend` 標 failed→webhook 對 ECPay 回錯觸發重送＋每日 sweep 補寄，信件不再遺失。屬 §6 已知範式、修法機械化、與現有兩支正確實作對稱收斂；建議三支同批一併修。
+- 記錄：2026-07-23 首次發現（PR #119～#132 delta 複核；T136 email 外殼重構複核時，第一遍對抗性問題集 §7「不對稱：A 處修了的 bug，B 處修了嗎」——同模組 order-shipped/refunded 已修、confirmation/new-order/support 未修）。**非 T136 引入**（T136 只換 HTML 外殼、未動查詢區塊，`git show c274259` 確認查詢/錯誤處理行不在 diff 內；屬 pre-existing）。
+
+### F-028 [P2] 個資刪除（匿名化）流程未涵蓋 custom_inquiry：anonymize_member 以 member_id 為錨、custom_inquiry 無 member_id（Email 即身分），當事人 custom_inquiry 的 email／idea／phone PII 在匿名化後殘留，runbook §10 亦無對應人工步驟
+
+- 狀態：待確認
+- 位置：`supabase/migrations/0023_pii_erasure_log_and_anonymize_member.sql`（RPC 洗 member／orders／payment／support_request，`fields` 陣列與 UPDATE 範圍**未含** custom_inquiry）；`supabase/migrations/0022_add_custom_inquiry.sql`（custom_inquiry **無 member_id** 欄位、Email 即身分）；`docs/ops-runbook.md §10.3`（列舉 RPC 洗除範圍＋「送禮訂單收件人」人工限制，但**未提** custom_inquiry）。
+- 失敗情境：客人 Alice 先在 /custom 送全客製預約（custom_inquiry：`email`＝alice@…、`idea`＝自由文字可能含可識別細節、`phone`），日後以同 email OTP 登入成為會員並下單，之後行使《個資法》刪除權。runbook §10.3 執行 `anonymize_member(<member_id>)`——洗 member.email／name＋orders 收件個資＋payment＋support_request，但 custom_inquiry **無 member_id 欄位、RPC 以 member_id 為錨查不到**，Alice 的 custom_inquiry 列（email＋idea＋phone）**原封殘留**。CLAUDE.md §8 明列「個資刪除走匿名化」為上線必備；此為刪除權未完整履行的邊界殘留，且無任何自動或文件化人工步驟兜底（現有 runbook 僅記錄「送禮訂單收件人」一種殘留人工個案，未及此表）。
+- 修法（擇一或並行）：①runbook §10 補一條人工步驟——匿名化時一併以 `update public.custom_inquiry set email='anonymized-…', idea='已匿名', phone=null, preferred_time=null where lower(email)=<當事人 email>`（custom_inquiry 禁 delete、走 update 洗值；email 是唯一連結鍵）；②日後做「email 維度匿名化」路徑時把 custom_inquiry 一併納入（與 anonymize_member 的 member 維度並存）。傾向先做 ①（純 runbook 文件、最小成本、上線前可完成），②列後續。屬個資完整性/流程缺口，非程式 bug。
+- 記錄：2026-07-23 首次發現（T63 匿名化 RPC〔PR #127〕與 T104 custom_inquiry〔PR #126〕同批落地，交叉檢視發現刪除範圍未覆蓋新表；第二遍 schema checklist S10「資料清理/個資刪除路徑」）。
+
 ---
 
-## 發現索引（F-001～F-026）
+## 發現索引（F-001～F-028）
 
 > 一行一筆：編號·嚴重度·標題·狀態·PR#/T#。**全文敘事＋失敗情境＋修法見 `review-findings-archive.md`**。回歸驗證＝依 PR#/T# 去看程式與 PR。
 
@@ -81,13 +98,15 @@
 - **F-024 [P2]** T42 統編／手機條碼驗證 API 在限流與購物車讀取之前呼叫：未認證即可無限打 ECPay 發票驗證端點＋把本站當成統… · ✅已修復 · PR #80 T129
 - **F-025 [P2]** addToCart lineUnitPrice 以未 `Number()` 的 numeric base_price／price_delta 直接相加，違反 §6（latent，反證顯示目前回 number 故不觸發） · 待確認 · —
 - **F-026 [P2]** `shadcn` 誤列 dependencies：把 `@modelcontextprotocol/sdk`→`hono`（4 筆 XSS/path-traversal advisory）拉進 production 依賴樹（CLI 從不在 runtime 執行） · 待確認 · —
+- **F-027 [P2]** order-confirmation／new-order／support-request 三支寄信函式重查 DB 忽略 `{error}`：暫時性故障→信件靜默略過，付款確認信與新單通知經 sendOnce 更被永久標記已寄不再重試（F-008 同根、order-shipped/refunded 已修的不對稱位置） · 待確認 · —
+- **F-028 [P2]** 匿名化流程未涵蓋 custom_inquiry：anonymize_member 以 member_id 為錨、custom_inquiry 無 member_id，當事人 email／idea／phone PII 匿名化後殘留，runbook §10 亦無人工步驟 · 待確認 · —
 
 ---
 
 ## 老化提醒
 
-- **待確認超過 14 天的發現**：無（F-025／F-026 為 2026-07-22 新增，待使用者裁決；皆 P2、非上線阻擋）。
-- **從未審查過的檔案（覆蓋次數＝0）**：覆蓋母集 backlog 已於 2026-07-16 清空，僅 `src/types/database.types.ts`（生成檔）免審。本輪（2026-07-22）PR #86～#115 帶入的新業務檔已補審主力（見下方 2026-07-22 註）；少數新 SEO／error-boundary 展示層與純 helper（`seo/{site-meta,breadcrumb-json-ld}`／`json-ld.tsx`／`system-busy-*.tsx`／`order-cancelled-notice.tsx`／`redis.ts`／`timing-safe-equal.ts`／`postgres-error-codes.ts`／各 `error.tsx`／`manifest.ts`／`opengraph-image.ts`／`icon.tsx`／`refund-section.tsx`）尚未逐行入表，留下輪輪替（低風險：展示層與小型 helper，核心金流／退款／狀態機／併發路徑本輪已逐行覆蓋）。
+- **待確認超過 14 天的發現**：無（F-025／F-026〔2026-07-22〕、F-027／F-028〔2026-07-23〕皆待使用者裁決，均未滿 14 天；四筆皆 P2、非上線阻擋）。
+- **從未審查過的檔案（覆蓋次數＝0）**：覆蓋母集 backlog 已於 2026-07-16 清空，僅 `src/types/database.types.ts`（生成檔）免審。本輪（2026-07-23）PR #119～#132 帶入的新業務檔已補審主力（見下方 2026-07-23 註）；少數新展示層／純 helper 與內容頁（`analytics/{analytics-root,begin-checkout-tracker,cookie-consent-banner,google-analytics,purchase-tracker}`／`header-chrome.tsx`／`footer-column(s).tsx`／`legal-page.tsx`／`coming-soon.tsx`／`site-nav-links.ts`／`privacy|terms|contact|ring-size|after-sales/page.tsx`／`custom/page.tsx`／`custom-inquiry-form.tsx`／`gtag.d.ts`）已首次入表；先前輪替遺留（`seo/*`／`system-busy-*.tsx`／`redis.ts`／各 `error.tsx`／`manifest.ts`／`opengraph-image.ts`／`icon.tsx`／`refund-section.tsx` 等）仍待逐行輪替（低風險：展示層與小型 helper，核心金流／退款／狀態機／併發／PII 路徑本輪已逐行覆蓋）。
 
 ---
 
@@ -95,203 +114,235 @@
 
 > 母集＝`git ls-files` 排除純資產。「審查次數」自本檔首建（2026-07-02）起計；先前 2026-07-02 產生 T67–T83 的審查未留覆蓋表，故未計入。本輪實際逐行讀過者標日期＋1，其餘暫記 0（＝正式輪替尚未覆蓋，非零風險）。
 
-| 路徑                                                                 | 最後審查日期                     | 審查次數 |
-| -------------------------------------------------------------------- | -------------------------------- | -------- |
-| src/app/api/ecpay/notify/route.ts                                    | 2026-07-22                       | 6        |
-| src/app/api/cron/ecpay-reconcile/route.ts                            | 2026-07-22                       | 3        |
-| src/lib/ecpay/query-trade-info.ts                                    | 2026-07-07                       | 1        |
-| src/lib/order/ensure-paid.ts                                         | 2026-07-22                       | 4        |
-| src/lib/notification/send-once.ts                                    | 2026-07-22                       | 4        |
-| src/app/api/ecpay/order-result/route.ts                              | 2026-07-07                       | 3        |
-| src/app/checkout/actions.ts                                          | 2026-07-22                       | 6        |
-| src/app/checkout/pay/page.tsx                                        | 2026-07-15                       | 6        |
-| src/lib/quote/verify-prices.ts                                       | 2026-07-22                       | 4        |
-| src/lib/email/order-confirmation.ts                                  | 2026-07-04                       | 2        |
-| src/lib/email/new-order-notification.ts                              | 2026-07-04                       | 2        |
-| src/lib/email/support-request-notification.ts                        | 2026-07-04                       | 2        |
-| src/lib/email/order-shipped-notification.ts                          | 2026-07-13                       | 2        |
-| src/lib/email/escape-html.ts                                         | 2026-07-07                       | 1        |
-| src/app/account/orders/[id]/support/actions.ts                       | 2026-07-10                       | 2        |
-| src/lib/support/support-request.ts                                   | 2026-07-10                       | 2        |
-| src/lib/support/schema.ts                                            | 2026-07-02                       | 1        |
-| src/app/admin/orders/[id]/actions.ts                                 | 2026-07-22                       | 7        |
-| src/lib/auth/require-admin.ts                                        | 2026-07-13                       | 4        |
-| supabase/migrations/0004_add_actor_to_order_status_log.sql           | 2026-07-02                       | 1        |
-| supabase/migrations/0005_add_product_name_snapshot_to_order_item.sql | 2026-07-02                       | 1        |
-| supabase/migrations/0006_add_support_request.sql                     | 2026-07-02                       | 1        |
-| supabase/migrations/0007_add_payment_last_reconciled_at.sql          | 2026-07-07（平行 session 逐行）  | 1        |
-| supabase/migrations/0008_cart_guest_token_unique.sql                 | 2026-07-09（首次，T70）          | 1        |
-| supabase/migrations/0009_add_pii_access_log.sql                      | 2026-07-09（首次，T80）          | 1        |
-| src/lib/ecpay/aio-payment.ts                                         | 2026-07-07                       | 3        |
-| src/lib/ecpay/check-mac-value.ts                                     | 2026-07-10                       | 2        |
-| src/lib/ecpay/merchant-trade-no.ts                                   | 2026-07-07                       | 2        |
-| src/app/checkout/success/page.tsx                                    | 2026-07-07                       | 2        |
-| src/app/checkout/success/order-status-check.tsx                      | 2026-07-07                       | 1        |
-| src/app/checkout/failed/page.tsx                                     | 2026-07-03                       | 1        |
-| src/app/checkout/page.tsx                                            | 2026-07-07（平行 session）       | 1        |
-| src/app/cart/actions.ts                                              | 2026-07-10                       | 3        |
-| src/app/cart/page.tsx                                                | 2026-07-08                       | 1        |
-| src/app/products/[slug]/actions.ts                                   | 2026-07-22                       | 6        |
-| src/app/products/[slug]/page.tsx                                     | 2026-07-08                       | 1        |
-| src/app/login/actions.ts                                             | 2026-07-10                       | 2        |
-| src/app/login/page.tsx                                               | 2026-07-09                       | 2        |
-| src/lib/auth/safe-redirect.ts                                        | 2026-07-09（首次，T86）          | 1        |
-| src/app/auth/confirm/actions.ts                                      | 2026-07-07                       | 1        |
-| src/app/auth/confirm/page.tsx                                        | 2026-07-07                       | 1        |
-| src/app/account/actions.ts                                           | 2026-07-07                       | 1        |
-| src/app/account/layout.tsx                                           | 2026-07-08                       | 1        |
-| src/app/account/page.tsx                                             | 2026-07-08                       | 1        |
-| src/app/account/orders/page.tsx                                      | 2026-07-13                       | 3        |
-| src/app/account/orders/[id]/page.tsx                                 | 2026-07-08                       | 2        |
-| src/app/account/orders/[id]/support/page.tsx                         | 2026-07-08                       | 1        |
-| src/app/account/profile/actions.ts                                   | 2026-07-07                       | 1        |
-| src/app/account/profile/page.tsx                                     | 2026-07-08                       | 1        |
-| src/app/admin/orders/page.tsx                                        | 2026-07-03                       | 1        |
-| src/app/admin/orders/[id]/page.tsx                                   | 2026-07-03                       | 1        |
-| src/app/admin/orders/[id]/customer-info.tsx                          | 2026-07-08                       | 1        |
-| src/app/admin/orders/[id]/order-actions.tsx                          | 2026-07-13                       | 2        |
-| src/app/admin/orders/[id]/support-requests.tsx                       | 2026-07-08                       | 1        |
-| src/app/layout.tsx                                                   | 2026-07-09（純 UI 版面）         | 1        |
-| src/app/page.tsx                                                     | 2026-07-08（骨架＝T105）         | 1        |
-| src/app/ui/page.tsx                                                  | 2026-07-09（UI kit 展示）        | 1        |
-| src/app/global-error.tsx                                             | 2026-07-07（平行 session）       | 1        |
-| src/instrumentation.ts                                               | 2026-07-07（平行 session）       | 1        |
-| src/instrumentation-client.ts                                        | 2026-07-07（平行 session）       | 1        |
-| src/proxy.ts                                                         | 2026-07-22                       | 2        |
-| src/lib/auth/require-user.ts                                         | 2026-07-03                       | 1        |
-| src/lib/auth/find-or-create-member.ts                                | 2026-07-13                       | 3        |
-| src/lib/cart/read-cart.ts                                            | 2026-07-22                       | 2        |
-| src/lib/cart/get-cart-count.ts                                       | 2026-07-22                       | 2        |
-| src/lib/checkout/schema.ts                                           | 2026-07-15                       | 3        |
-| src/lib/account/schema.ts                                            | 2026-07-07                       | 1        |
-| src/lib/order/state-machine.ts                                       | 2026-07-22                       | 4        |
-| src/lib/order/order-status.ts                                        | 2026-07-04                       | 1        |
-| src/lib/pii/audit.ts                                                 | 2026-07-09（T80 落表複核）       | 2        |
-| src/lib/pii/mask.ts                                                  | 2026-07-07                       | 1        |
-| src/lib/rate-limit.ts                                                | 2026-07-15                       | 3        |
-| src/lib/get-client-ip.ts                                             | 2026-07-10（首次，T78）          | 1        |
-| src/lib/cart/touch-cart-updated-at.ts                                | 2026-07-10（首次，T78）          | 1        |
-| src/app/api/cron/cart-cleanup/route.ts                               | 2026-07-10（首次，T78）          | 1        |
-| src/lib/env.server.ts                                                | 2026-07-15                       | 3        |
-| src/lib/env.ts                                                       | 2026-07-07                       | 1        |
-| src/lib/supabase/client.ts                                           | 2026-07-08                       | 1        |
-| src/lib/supabase/server.ts                                           | 2026-07-07                       | 1        |
-| src/lib/supabase/service-role.ts                                     | 2026-07-07                       | 1        |
-| src/lib/utils.ts                                                     | 2026-07-08                       | 1        |
-| src/components/checkout-form.tsx                                     | 2026-07-07                       | 1        |
-| src/components/product-configurator.tsx                              | 2026-07-08                       | 2        |
-| src/components/support-request-form.tsx                              | 2026-07-08                       | 1        |
-| src/components/cart-item-row.tsx                                     | 2026-07-08                       | 1        |
-| src/components/profile-form.tsx                                      | 2026-07-08                       | 1        |
-| src/components/account-nav.tsx                                       | 2026-07-08                       | 1        |
-| src/components/ecpay-auto-submit.tsx                                 | 2026-07-07                       | 1        |
-| src/components/site-header.tsx                                       | 2026-07-08                       | 1        |
-| src/components/site-footer.tsx                                       | 2026-07-08                       | 1        |
-| src/components/ui/button.tsx                                         | 2026-07-09（純 UI 元件）         | 1        |
-| src/types/database.types.ts                                          | 未審查（生成檔）                 | 0        |
-| types/supabase.ts                                                    | 2026-07-07（發現為殘留檔→F-013） | 1        |
-| supabase/migrations/0001_initial_schema.sql                          | 2026-07-08（首次逐行）           | 1        |
-| supabase/migrations/0002_enable_rls_and_policies.sql                 | 2026-07-08（首次逐行）           | 1        |
-| supabase/migrations/0003_add_zip_code_to_orders.sql                  | 2026-07-08                       | 1        |
-| supabase/seed.sql                                                    | 2026-07-08                       | 1        |
-| next.config.ts                                                       | 2026-07-13                       | 2        |
-| vercel.json                                                          | 2026-07-13                       | 3        |
-| src/app/admin/orders/checkout/actions.ts                             | 2026-07-13（首次，T111）         | 1        |
-| src/app/admin/orders/checkout/page.tsx                               | 2026-07-13（首次，T111）         | 1        |
-| src/lib/order/create-order-from-cart.ts                              | 2026-07-15                       | 2        |
-| src/lib/cron/require-cron-auth.ts                                    | 2026-07-13（首次，T78/T111）     | 1        |
-| src/lib/admin/action-result.ts                                       | 2026-07-13（首次，T09）          | 1        |
-| src/lib/concurrency-message.ts                                       | 2026-07-13（首次，T92）          | 1        |
-| src/app/admin/layout.tsx                                             | 2026-07-13（首次，T09）          | 1        |
-| src/app/admin/products/actions.ts                                    | 2026-07-15                       | 2        |
-| src/lib/product/schema.ts                                            | 2026-07-13（首次，T10）          | 1        |
-| src/lib/product/product-status.ts                                    | 2026-07-13（首次，T10）          | 1        |
-| src/lib/product/category-labels.ts                                   | 2026-07-13（首次，T10）          | 1        |
-| src/app/admin/products/[id]/images/actions.ts                        | 2026-07-13（首次，T11）          | 1        |
-| src/lib/storage/product-images.ts                                    | 2026-07-13（首次，T11）          | 1        |
-| src/lib/storage/constants.ts                                         | 2026-07-13（首次，T11）          | 1        |
-| src/lib/auth/normalize-email.ts                                      | 2026-07-13（首次，T71）          | 1        |
-| src/app/api/cron/pending-payment-expire/route.ts                     | 2026-07-13（首次，T66）          | 1        |
-| supabase/migrations/0010_orders_cart_id_and_create_order_rpc.sql     | 2026-07-13（首次，T75/T76）      | 1        |
-| supabase/migrations/0011_order_payment_hardening.sql                 | 2026-07-13（首次）               | 1        |
-| supabase/migrations/0012_product_images.sql                          | 2026-07-13（首次，T11）          | 1        |
-| supabase/migrations/0013_product_image_sort_integrity.sql            | 2026-07-13（首次，T11）          | 1        |
-| src/lib/ecpay/aes-payload.ts                                         | 2026-07-15（首次，T42）          | 1        |
-| src/lib/ecpay/invoice/invoice-client.ts                              | 2026-07-15（首次，T42）          | 1        |
-| src/lib/ecpay/invoice/issue.ts                                       | 2026-07-15（首次，T42）          | 1        |
-| src/lib/ecpay/invoice/validate.ts                                    | 2026-07-15（首次，T42）          | 1        |
-| src/lib/ecpay/invoice/relate-number.ts                               | 2026-07-15（首次，T42）          | 1        |
-| src/lib/order/issue-invoice.ts                                       | 2026-07-15（首次，T42）          | 1        |
-| src/lib/order/invoice-meta.ts                                        | 2026-07-15（首次，T42）          | 1        |
-| src/lib/order/order-access-token.ts                                  | 2026-07-15（首次，T73）          | 1        |
-| src/lib/notification/senders.ts                                      | 2026-07-22                       | 2        |
-| src/lib/option/schema.ts                                             | 2026-07-15（首次，T12）          | 1        |
-| src/lib/product/product-option-schema.ts                             | 2026-07-15（首次，T13）          | 1        |
-| src/app/admin/options/actions.ts                                     | 2026-07-15（首次，T12）          | 1        |
-| src/app/admin/products/[id]/options/actions.ts                       | 2026-07-15（首次，T13）          | 1        |
-| src/app/collections/[category]/page.tsx                              | 2026-07-15（首次，T14）          | 1        |
-| supabase/migrations/0014_option_crud_support.sql                     | 2026-07-15（首次，T12）          | 1        |
-| supabase/migrations/0015_product_option_crud_support.sql             | 2026-07-15（首次，T13）          | 1        |
-| supabase/migrations/0016_order_invoice_meta.sql                      | 2026-07-15（首次，T42）          | 1        |
-| src/app/admin/page.tsx                                               | 2026-07-16（首次，T09）          | 1        |
-| src/app/admin/products/page.tsx                                      | 2026-07-16（首次，T10）          | 1        |
-| src/app/admin/products/new/page.tsx                                  | 2026-07-16（首次，T10）          | 1        |
-| src/app/admin/products/[id]/page.tsx                                 | 2026-07-16（首次，T10）          | 1        |
-| src/app/admin/products/[id]/images/page.tsx                          | 2026-07-16（首次，T11）          | 1        |
-| src/app/admin/products/[id]/images/image-manager.tsx                 | 2026-07-16（首次，T11）          | 1        |
-| src/app/admin/products/[id]/options/page.tsx                         | 2026-07-16（首次，T13）          | 1        |
-| src/app/admin/products/[id]/options/product-options-manager.tsx      | 2026-07-16（首次，T13）          | 1        |
-| src/app/admin/options/page.tsx                                       | 2026-07-16（首次，T12）          | 1        |
-| src/app/admin/options/[id]/page.tsx                                  | 2026-07-16（首次，T12）          | 1        |
-| src/app/admin/options/[id]/option-type-detail.tsx                    | 2026-07-16（首次，T12）          | 1        |
-| src/app/admin/options/create-option-type-form.tsx                    | 2026-07-16（首次，T12）          | 1        |
-| src/app/admin/orders/[id]/invoice-section.tsx                        | 2026-07-16（首次，T42）          | 1        |
-| src/app/collections/page.tsx                                         | 2026-07-16（首次，T14）          | 1        |
-| src/app/checkout/rate-limited-notice.tsx                             | 2026-07-16（首次，T73）          | 1        |
-| src/app/account/orders/loading.tsx                                   | 2026-07-16（首次）               | 1        |
-| src/app/account/orders/[id]/loading.tsx                              | 2026-07-16（首次）               | 1        |
-| src/app/cart/loading.tsx                                             | 2026-07-16（首次）               | 1        |
-| src/app/checkout/loading.tsx                                         | 2026-07-16（首次）               | 1        |
-| src/app/collections/[category]/loading.tsx                           | 2026-07-16（首次）               | 1        |
-| src/app/products/[slug]/loading.tsx                                  | 2026-07-16（首次）               | 1        |
-| src/components/admin-checkout-form.tsx                               | 2026-07-16（首次，T111）         | 1        |
-| src/components/admin-product-form.tsx                                | 2026-07-16（首次，T10）          | 1        |
-| src/components/admin-nav.tsx                                         | 2026-07-16（首次，T09）          | 1        |
-| src/components/admin-notify.tsx                                      | 2026-07-16（首次，T12）          | 1        |
-| src/components/admin-pill.tsx                                        | 2026-07-16（首次，T11）          | 1        |
-| src/components/admin-filter-pills.tsx                                | 2026-07-16（首次，T10）          | 1        |
-| src/components/product-card.tsx                                      | 2026-07-16（首次，T14）          | 1        |
-| src/components/breadcrumb.tsx                                        | 2026-07-16（首次，T14）          | 1        |
-| src/components/collection-sort-select.tsx                            | 2026-07-16（首次，T14）          | 1        |
-| src/components/placeholder-image.tsx                                 | 2026-07-16（首次）               | 1        |
-| src/components/mobile-nav.tsx                                        | 2026-07-16（首次，T40）          | 1        |
-| src/components/saved-banner.tsx                                      | 2026-07-16（首次，T10）          | 1        |
-| src/components/ui/skeleton.tsx                                       | 2026-07-16（首次）               | 1        |
-| src/lib/option/labels.ts                                             | 2026-07-16（首次，T12）          | 1        |
-| src/lib/product/collection-sort.ts                                   | 2026-07-16（首次，T14）          | 1        |
-| src/lib/product/option-type-codes.ts                                 | 2026-07-16（首次，T14）          | 1        |
-| src/lib/zod/flatten-field-errors.ts                                  | 2026-07-16（首次，T10）          | 1        |
-| vitest.config.ts                                                     | 2026-07-16（首次）               | 1        |
-| supabase/migrations/0017_transition_order_status_rpc.sql             | 2026-07-22（首次，T110）         | 1        |
-| supabase/migrations/0018_cart_member_unique.sql                      | 2026-07-22（首次，T81）          | 1        |
-| supabase/migrations/0019_support_request_status_check.sql            | 2026-07-22（首次，T47）          | 1        |
-| supabase/migrations/0020_refund_order_rpc.sql                        | 2026-07-22（首次，T47）          | 1        |
-| supabase/migrations/0021_repair_refunded_payment_rpc.sql             | 2026-07-22（首次，T47）          | 1        |
-| src/lib/order/refund-order.ts                                        | 2026-07-22（首次，T47）          | 1        |
-| src/lib/order/find-paid-payment.ts                                   | 2026-07-22（首次，T47/T127）     | 1        |
-| src/lib/order/mark-pending-payments-failed.ts                        | 2026-07-22（首次，T127）         | 1        |
-| src/lib/order/shipping-tracking.ts                                   | 2026-07-22（首次，T108）         | 1        |
-| src/lib/ecpay/validate-settle-amount.ts                              | 2026-07-22（首次，T127）         | 1        |
-| src/lib/cart/resolve-cart-identity.ts                                | 2026-07-22（首次，T81）          | 1        |
-| src/lib/cart/get-or-create-member-cart.ts                            | 2026-07-22（首次，T81）          | 1        |
-| src/lib/cart/guest-token.ts                                          | 2026-07-22（首次，T133）         | 1        |
-| src/lib/cart/merge-guest-cart.ts                                     | 2026-07-22（首次，T81）          | 1        |
-| src/lib/product/check-product-availability.ts                        | 2026-07-22（首次，T117）         | 1        |
-| src/lib/product/start-price.ts                                       | 2026-07-22（首次，T59）          | 1        |
-| src/lib/email/order-refunded-notification.ts                         | 2026-07-22（首次，T47/T87）      | 1        |
-| src/lib/seo/site-url.ts                                              | 2026-07-22（首次，T59）          | 1        |
-| src/app/sitemap.ts                                                   | 2026-07-22（首次，T59）          | 1        |
-| src/app/robots.ts                                                    | 2026-07-22（首次，T59）          | 1        |
+| 路徑                                                                 | 最後審查日期                      | 審查次數 |
+| -------------------------------------------------------------------- | --------------------------------- | -------- |
+| src/app/api/ecpay/notify/route.ts                                    | 2026-07-22                        | 6        |
+| src/app/api/cron/ecpay-reconcile/route.ts                            | 2026-07-22                        | 3        |
+| src/lib/ecpay/query-trade-info.ts                                    | 2026-07-07                        | 1        |
+| src/lib/order/ensure-paid.ts                                         | 2026-07-23                        | 5        |
+| src/lib/notification/send-once.ts                                    | 2026-07-23                        | 5        |
+| src/app/api/ecpay/order-result/route.ts                              | 2026-07-07                        | 3        |
+| src/app/checkout/actions.ts                                          | 2026-07-22                        | 6        |
+| src/app/checkout/pay/page.tsx                                        | 2026-07-15                        | 6        |
+| src/lib/quote/verify-prices.ts                                       | 2026-07-22                        | 4        |
+| src/lib/email/order-confirmation.ts                                  | 2026-07-23（F-027）               | 3        |
+| src/lib/email/new-order-notification.ts                              | 2026-07-23（F-027）               | 3        |
+| src/lib/email/support-request-notification.ts                        | 2026-07-23（F-027）               | 3        |
+| src/lib/email/order-shipped-notification.ts                          | 2026-07-23（F-027 對照組）        | 3        |
+| src/lib/email/escape-html.ts                                         | 2026-07-07                        | 1        |
+| src/app/account/orders/[id]/support/actions.ts                       | 2026-07-10                        | 2        |
+| src/lib/support/support-request.ts                                   | 2026-07-10                        | 2        |
+| src/lib/support/schema.ts                                            | 2026-07-02                        | 1        |
+| src/app/admin/orders/[id]/actions.ts                                 | 2026-07-22                        | 7        |
+| src/lib/auth/require-admin.ts                                        | 2026-07-13                        | 4        |
+| supabase/migrations/0004_add_actor_to_order_status_log.sql           | 2026-07-02                        | 1        |
+| supabase/migrations/0005_add_product_name_snapshot_to_order_item.sql | 2026-07-02                        | 1        |
+| supabase/migrations/0006_add_support_request.sql                     | 2026-07-02                        | 1        |
+| supabase/migrations/0007_add_payment_last_reconciled_at.sql          | 2026-07-07（平行 session 逐行）   | 1        |
+| supabase/migrations/0008_cart_guest_token_unique.sql                 | 2026-07-09（首次，T70）           | 1        |
+| supabase/migrations/0009_add_pii_access_log.sql                      | 2026-07-09（首次，T80）           | 1        |
+| src/lib/ecpay/aio-payment.ts                                         | 2026-07-07                        | 3        |
+| src/lib/ecpay/check-mac-value.ts                                     | 2026-07-10                        | 2        |
+| src/lib/ecpay/merchant-trade-no.ts                                   | 2026-07-07                        | 2        |
+| src/app/checkout/success/page.tsx                                    | 2026-07-07                        | 2        |
+| src/app/checkout/success/order-status-check.tsx                      | 2026-07-07                        | 1        |
+| src/app/checkout/failed/page.tsx                                     | 2026-07-03                        | 1        |
+| src/app/checkout/page.tsx                                            | 2026-07-23                        | 2        |
+| src/app/cart/actions.ts                                              | 2026-07-10                        | 3        |
+| src/app/cart/page.tsx                                                | 2026-07-08                        | 1        |
+| src/app/products/[slug]/actions.ts                                   | 2026-07-22                        | 6        |
+| src/app/products/[slug]/page.tsx                                     | 2026-07-08                        | 1        |
+| src/app/login/actions.ts                                             | 2026-07-10                        | 2        |
+| src/app/login/page.tsx                                               | 2026-07-09                        | 2        |
+| src/lib/auth/safe-redirect.ts                                        | 2026-07-09（首次，T86）           | 1        |
+| src/app/auth/confirm/actions.ts                                      | 2026-07-07                        | 1        |
+| src/app/auth/confirm/page.tsx                                        | 2026-07-07                        | 1        |
+| src/app/account/actions.ts                                           | 2026-07-07                        | 1        |
+| src/app/account/layout.tsx                                           | 2026-07-08                        | 1        |
+| src/app/account/page.tsx                                             | 2026-07-08                        | 1        |
+| src/app/account/orders/page.tsx                                      | 2026-07-13                        | 3        |
+| src/app/account/orders/[id]/page.tsx                                 | 2026-07-08                        | 2        |
+| src/app/account/orders/[id]/support/page.tsx                         | 2026-07-08                        | 1        |
+| src/app/account/profile/actions.ts                                   | 2026-07-07                        | 1        |
+| src/app/account/profile/page.tsx                                     | 2026-07-08                        | 1        |
+| src/app/admin/orders/page.tsx                                        | 2026-07-03                        | 1        |
+| src/app/admin/orders/[id]/page.tsx                                   | 2026-07-03                        | 1        |
+| src/app/admin/orders/[id]/customer-info.tsx                          | 2026-07-08                        | 1        |
+| src/app/admin/orders/[id]/order-actions.tsx                          | 2026-07-13                        | 2        |
+| src/app/admin/orders/[id]/support-requests.tsx                       | 2026-07-08                        | 1        |
+| src/app/layout.tsx                                                   | 2026-07-09（純 UI 版面）          | 1        |
+| src/app/page.tsx                                                     | 2026-07-08（骨架＝T105）          | 1        |
+| src/app/ui/page.tsx                                                  | 2026-07-09（UI kit 展示）         | 1        |
+| src/app/global-error.tsx                                             | 2026-07-07（平行 session）        | 1        |
+| src/instrumentation.ts                                               | 2026-07-07（平行 session）        | 1        |
+| src/instrumentation-client.ts                                        | 2026-07-07（平行 session）        | 1        |
+| src/proxy.ts                                                         | 2026-07-23                        | 3        |
+| src/lib/auth/require-user.ts                                         | 2026-07-03                        | 1        |
+| src/lib/auth/find-or-create-member.ts                                | 2026-07-23（T63 anon 守衛）       | 4        |
+| src/lib/cart/read-cart.ts                                            | 2026-07-23                        | 3        |
+| src/lib/cart/get-cart-count.ts                                       | 2026-07-22                        | 2        |
+| src/lib/checkout/schema.ts                                           | 2026-07-15                        | 3        |
+| src/lib/account/schema.ts                                            | 2026-07-07                        | 1        |
+| src/lib/order/state-machine.ts                                       | 2026-07-22                        | 4        |
+| src/lib/order/order-status.ts                                        | 2026-07-04                        | 1        |
+| src/lib/pii/audit.ts                                                 | 2026-07-09（T80 落表複核）        | 2        |
+| src/lib/pii/mask.ts                                                  | 2026-07-07                        | 1        |
+| src/lib/rate-limit.ts                                                | 2026-07-23（T104 限流）           | 4        |
+| src/lib/get-client-ip.ts                                             | 2026-07-10（首次，T78）           | 1        |
+| src/lib/cart/touch-cart-updated-at.ts                                | 2026-07-10（首次，T78）           | 1        |
+| src/app/api/cron/cart-cleanup/route.ts                               | 2026-07-10（首次，T78）           | 1        |
+| src/lib/env.server.ts                                                | 2026-07-15                        | 3        |
+| src/lib/env.ts                                                       | 2026-07-23（T60 gaId）            | 2        |
+| src/lib/supabase/client.ts                                           | 2026-07-08                        | 1        |
+| src/lib/supabase/server.ts                                           | 2026-07-07                        | 1        |
+| src/lib/supabase/service-role.ts                                     | 2026-07-07                        | 1        |
+| src/lib/utils.ts                                                     | 2026-07-08                        | 1        |
+| src/components/checkout-form.tsx                                     | 2026-07-07                        | 1        |
+| src/components/product-configurator.tsx                              | 2026-07-23（T120 input_type）     | 3        |
+| src/components/support-request-form.tsx                              | 2026-07-08                        | 1        |
+| src/components/cart-item-row.tsx                                     | 2026-07-08                        | 1        |
+| src/components/profile-form.tsx                                      | 2026-07-08                        | 1        |
+| src/components/account-nav.tsx                                       | 2026-07-08                        | 1        |
+| src/components/ecpay-auto-submit.tsx                                 | 2026-07-07                        | 1        |
+| src/components/site-header.tsx                                       | 2026-07-08                        | 1        |
+| src/components/site-footer.tsx                                       | 2026-07-08                        | 1        |
+| src/components/ui/button.tsx                                         | 2026-07-09（純 UI 元件）          | 1        |
+| src/types/database.types.ts                                          | 未審查（生成檔）                  | 0        |
+| types/supabase.ts                                                    | 2026-07-07（發現為殘留檔→F-013）  | 1        |
+| supabase/migrations/0001_initial_schema.sql                          | 2026-07-08（首次逐行）            | 1        |
+| supabase/migrations/0002_enable_rls_and_policies.sql                 | 2026-07-08（首次逐行）            | 1        |
+| supabase/migrations/0003_add_zip_code_to_orders.sql                  | 2026-07-08                        | 1        |
+| supabase/seed.sql                                                    | 2026-07-08                        | 1        |
+| next.config.ts                                                       | 2026-07-13                        | 2        |
+| vercel.json                                                          | 2026-07-13                        | 3        |
+| src/app/admin/orders/checkout/actions.ts                             | 2026-07-13（首次，T111）          | 1        |
+| src/app/admin/orders/checkout/page.tsx                               | 2026-07-13（首次，T111）          | 1        |
+| src/lib/order/create-order-from-cart.ts                              | 2026-07-15                        | 2        |
+| src/lib/cron/require-cron-auth.ts                                    | 2026-07-13（首次，T78/T111）      | 1        |
+| src/lib/admin/action-result.ts                                       | 2026-07-13（首次，T09）           | 1        |
+| src/lib/concurrency-message.ts                                       | 2026-07-13（首次，T92）           | 1        |
+| src/app/admin/layout.tsx                                             | 2026-07-13（首次，T09）           | 1        |
+| src/app/admin/products/actions.ts                                    | 2026-07-15                        | 2        |
+| src/lib/product/schema.ts                                            | 2026-07-13（首次，T10）           | 1        |
+| src/lib/product/product-status.ts                                    | 2026-07-13（首次，T10）           | 1        |
+| src/lib/product/category-labels.ts                                   | 2026-07-13（首次，T10）           | 1        |
+| src/app/admin/products/[id]/images/actions.ts                        | 2026-07-13（首次，T11）           | 1        |
+| src/lib/storage/product-images.ts                                    | 2026-07-13（首次，T11）           | 1        |
+| src/lib/storage/constants.ts                                         | 2026-07-13（首次，T11）           | 1        |
+| src/lib/auth/normalize-email.ts                                      | 2026-07-13（首次，T71）           | 1        |
+| src/app/api/cron/pending-payment-expire/route.ts                     | 2026-07-13（首次，T66）           | 1        |
+| supabase/migrations/0010_orders_cart_id_and_create_order_rpc.sql     | 2026-07-13（首次，T75/T76）       | 1        |
+| supabase/migrations/0011_order_payment_hardening.sql                 | 2026-07-13（首次）                | 1        |
+| supabase/migrations/0012_product_images.sql                          | 2026-07-13（首次，T11）           | 1        |
+| supabase/migrations/0013_product_image_sort_integrity.sql            | 2026-07-13（首次，T11）           | 1        |
+| src/lib/ecpay/aes-payload.ts                                         | 2026-07-15（首次，T42）           | 1        |
+| src/lib/ecpay/invoice/invoice-client.ts                              | 2026-07-15（首次，T42）           | 1        |
+| src/lib/ecpay/invoice/issue.ts                                       | 2026-07-15（首次，T42）           | 1        |
+| src/lib/ecpay/invoice/validate.ts                                    | 2026-07-15（首次，T42）           | 1        |
+| src/lib/ecpay/invoice/relate-number.ts                               | 2026-07-15（首次，T42）           | 1        |
+| src/lib/order/issue-invoice.ts                                       | 2026-07-15（首次，T42）           | 1        |
+| src/lib/order/invoice-meta.ts                                        | 2026-07-15（首次，T42）           | 1        |
+| src/lib/order/order-access-token.ts                                  | 2026-07-15（首次，T73）           | 1        |
+| src/lib/notification/senders.ts                                      | 2026-07-23                        | 3        |
+| src/lib/option/schema.ts                                             | 2026-07-15（首次，T12）           | 1        |
+| src/lib/product/product-option-schema.ts                             | 2026-07-15（首次，T13）           | 1        |
+| src/app/admin/options/actions.ts                                     | 2026-07-15（首次，T12）           | 1        |
+| src/app/admin/products/[id]/options/actions.ts                       | 2026-07-15（首次，T13）           | 1        |
+| src/app/collections/[category]/page.tsx                              | 2026-07-15（首次，T14）           | 1        |
+| supabase/migrations/0014_option_crud_support.sql                     | 2026-07-15（首次，T12）           | 1        |
+| supabase/migrations/0015_product_option_crud_support.sql             | 2026-07-15（首次，T13）           | 1        |
+| supabase/migrations/0016_order_invoice_meta.sql                      | 2026-07-15（首次，T42）           | 1        |
+| src/app/admin/page.tsx                                               | 2026-07-16（首次，T09）           | 1        |
+| src/app/admin/products/page.tsx                                      | 2026-07-16（首次，T10）           | 1        |
+| src/app/admin/products/new/page.tsx                                  | 2026-07-16（首次，T10）           | 1        |
+| src/app/admin/products/[id]/page.tsx                                 | 2026-07-16（首次，T10）           | 1        |
+| src/app/admin/products/[id]/images/page.tsx                          | 2026-07-16（首次，T11）           | 1        |
+| src/app/admin/products/[id]/images/image-manager.tsx                 | 2026-07-16（首次，T11）           | 1        |
+| src/app/admin/products/[id]/options/page.tsx                         | 2026-07-16（首次，T13）           | 1        |
+| src/app/admin/products/[id]/options/product-options-manager.tsx      | 2026-07-16（首次，T13）           | 1        |
+| src/app/admin/options/page.tsx                                       | 2026-07-16（首次，T12）           | 1        |
+| src/app/admin/options/[id]/page.tsx                                  | 2026-07-16（首次，T12）           | 1        |
+| src/app/admin/options/[id]/option-type-detail.tsx                    | 2026-07-16（首次，T12）           | 1        |
+| src/app/admin/options/create-option-type-form.tsx                    | 2026-07-16（首次，T12）           | 1        |
+| src/app/admin/orders/[id]/invoice-section.tsx                        | 2026-07-16（首次，T42）           | 1        |
+| src/app/collections/page.tsx                                         | 2026-07-16（首次，T14）           | 1        |
+| src/app/checkout/rate-limited-notice.tsx                             | 2026-07-16（首次，T73）           | 1        |
+| src/app/account/orders/loading.tsx                                   | 2026-07-16（首次）                | 1        |
+| src/app/account/orders/[id]/loading.tsx                              | 2026-07-16（首次）                | 1        |
+| src/app/cart/loading.tsx                                             | 2026-07-16（首次）                | 1        |
+| src/app/checkout/loading.tsx                                         | 2026-07-16（首次）                | 1        |
+| src/app/collections/[category]/loading.tsx                           | 2026-07-16（首次）                | 1        |
+| src/app/products/[slug]/loading.tsx                                  | 2026-07-16（首次）                | 1        |
+| src/components/admin-checkout-form.tsx                               | 2026-07-16（首次，T111）          | 1        |
+| src/components/admin-product-form.tsx                                | 2026-07-16（首次，T10）           | 1        |
+| src/components/admin-nav.tsx                                         | 2026-07-16（首次，T09）           | 1        |
+| src/components/admin-notify.tsx                                      | 2026-07-16（首次，T12）           | 1        |
+| src/components/admin-pill.tsx                                        | 2026-07-16（首次，T11）           | 1        |
+| src/components/admin-filter-pills.tsx                                | 2026-07-16（首次，T10）           | 1        |
+| src/components/product-card.tsx                                      | 2026-07-16（首次，T14）           | 1        |
+| src/components/breadcrumb.tsx                                        | 2026-07-16（首次，T14）           | 1        |
+| src/components/collection-sort-select.tsx                            | 2026-07-16（首次，T14）           | 1        |
+| src/components/placeholder-image.tsx                                 | 2026-07-16（首次）                | 1        |
+| src/components/mobile-nav.tsx                                        | 2026-07-16（首次，T40）           | 1        |
+| src/components/saved-banner.tsx                                      | 2026-07-16（首次，T10）           | 1        |
+| src/components/ui/skeleton.tsx                                       | 2026-07-16（首次）                | 1        |
+| src/lib/option/labels.ts                                             | 2026-07-16（首次，T12）           | 1        |
+| src/lib/product/collection-sort.ts                                   | 2026-07-16（首次，T14）           | 1        |
+| src/lib/product/option-type-codes.ts                                 | 2026-07-16（首次，T14）           | 1        |
+| src/lib/zod/flatten-field-errors.ts                                  | 2026-07-16（首次，T10）           | 1        |
+| vitest.config.ts                                                     | 2026-07-16（首次）                | 1        |
+| supabase/migrations/0017_transition_order_status_rpc.sql             | 2026-07-22（首次，T110）          | 1        |
+| supabase/migrations/0018_cart_member_unique.sql                      | 2026-07-22（首次，T81）           | 1        |
+| supabase/migrations/0019_support_request_status_check.sql            | 2026-07-22（首次，T47）           | 1        |
+| supabase/migrations/0020_refund_order_rpc.sql                        | 2026-07-22（首次，T47）           | 1        |
+| supabase/migrations/0021_repair_refunded_payment_rpc.sql             | 2026-07-22（首次，T47）           | 1        |
+| src/lib/order/refund-order.ts                                        | 2026-07-22（首次，T47）           | 1        |
+| src/lib/order/find-paid-payment.ts                                   | 2026-07-22（首次，T47/T127）      | 1        |
+| src/lib/order/mark-pending-payments-failed.ts                        | 2026-07-22（首次，T127）          | 1        |
+| src/lib/order/shipping-tracking.ts                                   | 2026-07-23（T108；0023 面交註記） | 2        |
+| src/lib/ecpay/validate-settle-amount.ts                              | 2026-07-22（首次，T127）          | 1        |
+| src/lib/cart/resolve-cart-identity.ts                                | 2026-07-22（首次，T81）           | 1        |
+| src/lib/cart/get-or-create-member-cart.ts                            | 2026-07-22（首次，T81）           | 1        |
+| src/lib/cart/guest-token.ts                                          | 2026-07-22（首次，T133）          | 1        |
+| src/lib/cart/merge-guest-cart.ts                                     | 2026-07-22（首次，T81）           | 1        |
+| src/lib/product/check-product-availability.ts                        | 2026-07-22（首次，T117）          | 1        |
+| src/lib/product/start-price.ts                                       | 2026-07-22（首次，T59）           | 1        |
+| src/lib/email/order-refunded-notification.ts                         | 2026-07-23（F-027 對照組）        | 2        |
+| src/lib/seo/site-url.ts                                              | 2026-07-22（首次，T59）           | 1        |
+| src/app/sitemap.ts                                                   | 2026-07-22（首次，T59）           | 1        |
+| src/app/robots.ts                                                    | 2026-07-22（首次，T59）           | 1        |
+| supabase/migrations/0022_add_custom_inquiry.sql                      | 2026-07-23（首次，T104）          | 1        |
+| supabase/migrations/0023_pii_erasure_log_and_anonymize_member.sql    | 2026-07-23（首次，T63）           | 1        |
+| src/app/custom/actions.ts                                            | 2026-07-23（首次，T104）          | 1        |
+| src/app/custom/page.tsx                                              | 2026-07-23（首次，T104）          | 1        |
+| src/lib/custom-inquiry/schema.ts                                     | 2026-07-23（首次，T104）          | 1        |
+| src/lib/custom-inquiry/labels.ts                                     | 2026-07-23（首次，T104）          | 1        |
+| src/lib/email/custom-inquiry-notification.ts                         | 2026-07-23（首次，T104）          | 1        |
+| src/components/custom-inquiry-form.tsx                               | 2026-07-23（首次，T104）          | 1        |
+| src/lib/email/email-shell.ts                                         | 2026-07-23（首次，T136）          | 1        |
+| src/lib/analytics/gtag.ts                                            | 2026-07-23（首次，T60）           | 1        |
+| src/lib/analytics/consent.ts                                         | 2026-07-23（首次，T60）           | 1        |
+| src/components/analytics/google-analytics.tsx                        | 2026-07-23（首次，T60）           | 1        |
+| src/components/analytics/purchase-tracker.tsx                        | 2026-07-23（首次，T60）           | 1        |
+| src/components/analytics/begin-checkout-tracker.tsx                  | 2026-07-23（首次，T60）           | 1        |
+| src/components/analytics/cookie-consent-banner.tsx                   | 2026-07-23（首次，T60）           | 1        |
+| src/components/analytics/analytics-root.tsx                          | 2026-07-23（首次，T60）           | 1        |
+| src/types/gtag.d.ts                                                  | 2026-07-23（首次，T60）           | 1        |
+| src/lib/product/featured-products.ts                                 | 2026-07-23（首次，T44）           | 1        |
+| src/lib/product/product-card-query.ts                                | 2026-07-23（首次，T44/T14）       | 1        |
+| src/components/header-chrome.tsx                                     | 2026-07-23（首次，T44）           | 1        |
+| src/components/footer-columns.tsx                                    | 2026-07-23（首次，T44）           | 1        |
+| src/components/footer-column.tsx                                     | 2026-07-23（首次，T44）           | 1        |
+| src/components/site-nav-links.ts                                     | 2026-07-23（首次，T44）           | 1        |
+| src/components/legal-page.tsx                                        | 2026-07-23（首次，T36）           | 1        |
+| src/components/coming-soon.tsx                                       | 2026-07-23（首次，T44）           | 1        |
+| src/app/privacy/page.tsx                                             | 2026-07-23（首次，T36）           | 1        |
+| src/app/terms/page.tsx                                               | 2026-07-23（首次，T36）           | 1        |
+| src/app/contact/page.tsx                                             | 2026-07-23（首次，T61）           | 1        |
+| src/app/ring-size/page.tsx                                           | 2026-07-23（首次，T54）           | 1        |
+| src/app/after-sales/page.tsx                                         | 2026-07-23（首次）                | 1        |
+
+> 註（2026-07-23）：本輪逐行審 2026-07-22（353b9f2 上輪審查點）以來 PR #119～#132 的 delta（~3356 insertions／60 檔）——**T63 個資匿名化**（migration 0023 `anonymize_member` 原子 RPC〔actor_email 由 DB 反查、`for update` 冪等 guard、U0010-U0013 自訂 SQLSTATE、非終態訂單 U0012 進行中契約保護、洗 member/orders/payment/order_status_log 面交備註/support_request＋同交易寫 pii_erasure_log 稽核、`revoke execute`〕＋`pii_erasure_log`〔第 18 表、deny-by-default、target/actor RESTRICT〕＋`find-or-create-member.ts` 匿名帳號拒建單守衛）、**T104 全客製詢問**（migration 0022 `custom_inquiry`〔第 17 表、text+check、deny-by-default、revoke delete、updated_at trigger〕＋`custom/actions.ts`〔honeypot／Zod／IP+email fail-open 限流置於 DB 前／service role insert `{error}` 檢查／await＋Sentry〕＋`custom-inquiry-notification.ts`〔renderLabelValueTable escapeHtml〕＋schema max() 齊全）、**T136 email 外殼收斂**（`email-shell.ts` FROM_EMAIL 單一出處／`unwrapOne`／renderCustomerEmailShell；5 支客人/店家信重構後 escapeHtml 全數保留、heading 客名先 escape）、**T60 GA4**（proxy.ts CSP nonce+strict-dynamic＋GA img/connect 端點放行、`google-analytics.tsx` nonce inline bootstrap、gaId 為 env 非用戶輸入）、**T120 配置器**（swatch 用 React object-form style＝瀏覽器擋非法 CSS、swatchHex 為 admin 資料，無注入）、**T62/T44/T54/T61/T36** 內容頁與圖片格式。**核心品質高**：schema 兩支 RPC/表皆 revoke execute/delete＋釘 search_path＋RLS deny-by-default，custom inquiry 防護齊全，email escape 一致。兩遍式：第一遍對抗性問題集 §7「不對稱」揪出 **F-027**（order-confirmation/new-order/support 三支寄信重查忽略 `{error}`＝F-008 同根未列舉位置，order-shipped/refunded 已修的不對稱；confirmation/new-order 經 sendOnce 更是永久靜默遺失，P2）；第二遍 schema checklist S10「個資刪除路徑」揪出 **F-028**（anonymize_member 以 member_id 為錨、未涵蓋 custom_inquiry〔email 即身分〕PII、runbook §10 亦無人工步驟，P2）。回歸：A（GA 值僅 client、伺服器驗價紅線不變；read-cart 補 `Number()`）B（anonymize FOR UPDATE＋anonymized_at 冪等）D（custom_inquiry deny-by-default／anonymize revoke execute runbook-only／匿名帳號拒建單）E（custom schema max() 齊全）F（**F-027**；custom action 已檢查 `{error}`）G（pii_erasure_log 有寫入點、anonymized_at 有使用點）S1/S2/S4/S5/S9 全數乾淨，無 P0/P1。既有 F-025/F-026 仍待確認未修（read-cart 補了自身 Number()，addToCart:191 仍缺＝F-025 latent 續存）。測試檔（本輪 `custom/__tests__/actions.test.ts`／`custom-inquiry/schema.test.ts` 等）不計入覆蓋表。跳過 env 範圍（本環境無 supabase／vercel 憑證）。
 
 > 註（2026-07-22）：本輪逐行審 2026-07-16（b913ae9）以來 PR #86～#115 的大 delta——**T47 記錄式退款鏈**（`refund-order.ts`＋migration 0020 `refund_order` 原子 RPC〔翻 paid payment＋CAS 轉 refunded＋稽核 log 單一交易，CAS miss `raise U0002` 整筆 rollback〕＋0021 `repair_refunded_payment`〔Override 半套狀態原子補登記〕＋`find-paid-payment.ts`〔findPaidPayment／findRefundablePayment 單一出處〕＋`mark-pending-payments-failed.ts`＋`order-refunded-notification.ts`〔escapeHtml 齊全〕＋admin `refundOrderAction`）、**T110 狀態機交易化**（migration 0017 `transition_order_status` RPC＋`state-machine.ts` 三守衛：取消守衛/退款守衛〔`!findPaidPayment`〕/override to===from 擋、post-cancel TOCTOU 複查）、**T81 購物車身分重構**（`resolve-cart-identity.ts` identity invariant〔登入態絕不 fallback guest token〕＋`get-or-create-member-cart.ts`＋`merge-guest-cart.ts` 的 CAS 佔位/搬列/optimistic 刪殼 orphan-free＋migration 0018 `uq_cart_member`）、**T127 對帳鏈擴充**（`ecpay-reconcile/route.ts` 漂移臂/paid-on-cancelled/paid-on-refunded durable 稽核臂＋`validate-settle-amount.ts` 單一出處）、**notify route**（refunded 終態良性回 1|OK、T74 rescue、after() 發票）、**proxy.ts**（T133 guest_token 預簽＋CSP nonce）、**T117**（`check-product-availability.ts` service-role fail-open UX 判斷，verify-prices 必選完整性兜底已驗）、**T59 SEO**（sitemap/robots/site-url，force-dynamic 杜絕 promote-preview 凍結、§6 查詢失敗 throw）。**核心金流／退款／狀態機／併發／通知路徑品質極高**——RPC 一律 revoke execute＋釘 search_path、Supabase `{error}` 全解構、CAS SET 改動 WHERE 欄位（§6）、sendOnce 絕不 throw＋eligibleStatuses〔order_refunded=["refunded"]〕對齊 sweep、identity invariant 一致。兩遍式：第一遍對抗性問題集 §6「numeric 轉換點」揪出 F-025（addToCart 算術未 `Number()`，反證顯示目前回 number 故 latent 不觸發、結帳端 fail-safe，P2）；flow 範圍 `pnpm audit`（端點已恢復）揪出 F-026（`shadcn` 誤列 dependencies 把 hono 拉進 prod 依賴樹，P2）。第二遍 code/schema checklist 回歸：A（驗價/退款金額）B（CAS 冪等）C（tracking/trade-no 單一出處）D（requireAdmin 齊全/refund server-side 防旁路）F（{error} 處理）G（RPC 機制皆有使用點）S1〔uq_cart_member〕S4〔support_request text+check〕S7〔RPC 使用點〕S9〔新增不改舊、search_path〕全數乾淨，無 P0/P1、無 schema 新發現。測試檔（本輪新增 `refund-order.test.ts`／`merge-guest-cart.test.ts`／`resolve-cart-identity.test.ts`／`get-or-create-member-cart.test.ts`／`proxy.test.ts`／`validate-settle-amount.test.ts`／`check-product-availability.test.ts`／`find-paid-payment.test.ts` 等）不計入覆蓋表。跳過 env 範圍（本環境無 supabase／vercel 憑證）。
 
