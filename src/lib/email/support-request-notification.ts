@@ -2,7 +2,10 @@ import "server-only";
 import { Resend } from "resend";
 import { serverEnv } from "@/lib/env.server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { escapeHtml } from "@/lib/email/escape-html";
+import {
+  renderEmailShell,
+  renderLabelValueTable,
+} from "@/lib/email/email-shell";
 import {
   REQUEST_TYPE_LABELS,
   type SupportRequestType,
@@ -44,48 +47,19 @@ export async function sendSupportRequestNotification(
 
   const requestType = request.request_type as SupportRequestType;
   const typeLabel = REQUEST_TYPE_LABELS[requestType];
-  const safeRecipientName = order?.recipient_name
-    ? escapeHtml(order.recipient_name)
-    : "—";
-  const safeCustomerEmail = customerEmail ? escapeHtml(customerEmail) : null;
-  const safeDescription = escapeHtml(request.description);
 
-  const html = `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"/></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;">
-<tr><td align="center">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#fff;border-radius:4px;border:1px solid #e5e7eb;">
-  <tr><td style="background:#0f3325;padding:20px 32px;">
-    <div style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#c9a84c;">incantochen — 店家通知</div>
-  </td></tr>
-  <tr><td style="padding:28px 32px;">
-    <p style="margin:0 0 4px;font-size:13px;letter-spacing:0.14em;text-transform:uppercase;color:#c9a84c;">售後申請</p>
-    <h1 style="margin:0 0 24px;font-size:20px;font-weight:400;color:#111;">${order?.order_no ?? "—"}</h1>
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;font-size:13px;">
-      <tr>
-        <td style="color:#6b7280;padding:4px 0;width:80px;vertical-align:top;">類型</td>
-        <td style="color:#111;padding:4px 0;">${typeLabel}</td>
-      </tr>
-      <tr>
-        <td style="color:#6b7280;padding:4px 0;vertical-align:top;">客人姓名</td>
-        <td style="color:#111;padding:4px 0;">${safeRecipientName}</td>
-      </tr>
-      <tr>
-        <td style="color:#6b7280;padding:4px 0;vertical-align:top;">客人 Email</td>
-        <td style="color:#111;padding:4px 0;">${safeCustomerEmail ?? "—"}</td>
-      </tr>
-      <tr>
-        <td style="color:#6b7280;padding:4px 0;vertical-align:top;">說明</td>
-        <td style="color:#111;padding:4px 0;white-space:pre-wrap;">${safeDescription}</td>
-      </tr>
-    </table>
-  </td></tr>
-  <tr><td style="padding:16px 32px;border-top:1px solid #e5e7eb;text-align:center;">
-    <p style="margin:0;font-size:12px;color:#9ca3af;">請直接回覆本信與客人聯繫，並視需要向客人索取佐證照片。</p>
-  </td></tr>
-</table>
-</td></tr></table>
-</body></html>`;
+  const html = renderEmailShell({
+    headerLabel: "incantochen — 店家通知",
+    eyebrow: "售後申請",
+    title: order?.order_no ?? "—",
+    bodyHtml: renderLabelValueTable([
+      { label: "類型", value: typeLabel },
+      { label: "客人姓名", value: order?.recipient_name ?? "—" },
+      { label: "客人 Email", value: customerEmail ?? "—" },
+      { label: "說明", value: request.description },
+    ]),
+    footerNote: "請直接回覆本信與客人聯繫，並視需要向客人索取佐證照片。",
+  });
 
   const { error } = await resend.emails.send({
     from: FROM_EMAIL,

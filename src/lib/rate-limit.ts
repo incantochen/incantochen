@@ -123,6 +123,35 @@ export async function checkSupportRequestRateLimit(
   return safeLimit(supportRequestMemberRatelimit, memberId);
 }
 
+// T104：/custom 全客製預約是免登入公開表單，等於一個能直接灌爆店家信箱與
+// custom_inquiry 表的入口。用 IP + email 兩維度限流；門檻抓緊——正常客人一次
+// 只送一次，且客人確認信會寄到「自填、未驗證」的 email，IP 維度是唯一能擋
+// 「用不同受害者 email 逐次噴確認信（放大寄信）」的防線，故 IP 收緊到 3/10min
+// （review finding #1）。email 維度不是帳號枚舉 oracle（詢問不揭露會員是否存在）。
+// 走 safeLimit fail-open：Redis 故障不該讓合法客人送不出預約。
+const customInquiryIpRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(3, "10 m"),
+  prefix: "ratelimit:custom-inquiry-ip",
+});
+
+const customInquiryEmailRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(5, "10 m"),
+  prefix: "ratelimit:custom-inquiry-email",
+});
+
+export async function checkCustomInquiryRateLimit(
+  ip: string | null,
+  email: string,
+): Promise<boolean> {
+  const checks = [safeLimit(customInquiryEmailRatelimit, email)];
+  if (ip) checks.push(safeLimit(customInquiryIpRatelimit, ip));
+
+  const results = await Promise.all(checks);
+  return results.every((ok) => ok);
+}
+
 // T73 code-review #1：付款結果三頁把限流放進 Promise.all，一旦 Upstash Redis
 // 逾時／中斷，.limit() 會 throw、冒泡成 500——付款完成後的 success 頁與 pay
 // 頁在 Redis 故障時整段掛掉（改版前這幾頁只依賴 Postgres）。這裡對每個

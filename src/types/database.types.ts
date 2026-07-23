@@ -119,6 +119,45 @@ export type Database = {
           },
         ]
       }
+      custom_inquiry: {
+        Row: {
+          budget_band: string
+          category: string
+          created_at: string
+          email: string
+          id: string
+          idea: string
+          phone: string | null
+          preferred_time: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          budget_band: string
+          category: string
+          created_at?: string
+          email: string
+          id?: string
+          idea: string
+          phone?: string | null
+          preferred_time?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          budget_band?: string
+          category?: string
+          created_at?: string
+          email?: string
+          id?: string
+          idea?: string
+          phone?: string | null
+          preferred_time?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       member: {
         Row: {
           created_at: string
