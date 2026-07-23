@@ -1,5 +1,6 @@
 "use server";
 
+import * as Sentry from "@sentry/nextjs";
 import { headers } from "next/headers";
 import { getClientIp } from "@/lib/get-client-ip";
 import { checkCustomInquiryRateLimit } from "@/lib/rate-limit";
@@ -66,17 +67,24 @@ export async function createCustomInquiry(
     return { ok: false, error: "送出失敗，請稍後再試" };
   }
 
-  // 5. 通知店家 + 客人確認信。刻意 await（serverless 禁 fire-and-forget），
-  //    各自 try/catch 吞錯：DB 已有紀錄，任一封信失敗不擋送出，可人工補救。
+  // 5. 通知店家 + 客人確認信。刻意 await（serverless 禁 fire-and-forget），各自
+  //    try/catch 吞錯不擋送出（DB 已有紀錄，可人工補救）——但一律記 Sentry
+  //    （§6：Sentry 必須覆蓋寄信的靜默失敗點），否則店家漏接高價值 lead 卻無告警。
   try {
     await sendCustomInquiryNotification(inserted.id);
-  } catch {
-    // no-op
+  } catch (e) {
+    Sentry.captureException(e, {
+      tags: { area: "custom-inquiry-email", kind: "owner-notification" },
+      extra: { inquiryId: inserted.id },
+    });
   }
   try {
     await sendCustomInquiryConfirmation(inserted.id);
-  } catch {
-    // no-op
+  } catch (e) {
+    Sentry.captureException(e, {
+      tags: { area: "custom-inquiry-email", kind: "customer-confirmation" },
+      extra: { inquiryId: inserted.id },
+    });
   }
 
   return { ok: true };
