@@ -63,7 +63,10 @@ vi.mock("@/lib/supabase/service-role", () => ({
   createServiceRoleClient: () => makeServiceRole(),
 }));
 
-import { findOrCreateMemberByEmail } from "../find-or-create-member";
+import {
+  findOrCreateMember,
+  findOrCreateMemberByEmail,
+} from "../find-or-create-member";
 
 beforeEach(() => {
   state.memberLookups = [];
@@ -227,5 +230,28 @@ describe("findOrCreateMemberByEmail", () => {
       ok: false,
       error: "建立會員失敗，請稍後再試",
     });
+  });
+});
+
+describe("findOrCreateMember（T63 匿名化守衛）", () => {
+  it("既有會員已匿名（anonymized_at 非 null）→ 拋錯，不得再建單", async () => {
+    state.memberById = {
+      id: "member-anon",
+      anonymized_at: "2026-07-23T00:00:00Z",
+    } as any;
+
+    await expect(findOrCreateMember("member-anon", "x@example.com")).rejects.toThrow(
+      /已依個資刪除請求匿名化/,
+    );
+    expect(state.inserted).toHaveLength(0);
+  });
+
+  it("既有會員未匿名（anonymized_at 為 null）→ 正常放行，不重複建 row", async () => {
+    state.memberById = { id: "member-ok", anonymized_at: null } as any;
+
+    await expect(
+      findOrCreateMember("member-ok", "ok@example.com"),
+    ).resolves.toBeUndefined();
+    expect(state.inserted).toHaveLength(0);
   });
 });

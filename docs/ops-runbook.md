@@ -276,7 +276,16 @@ and created_at < now() - interval '2 days' and last_reconciled_at is null;
 
 ### 10.1 查詢（資料可攜／查閱）
 
-以 service role 匯出該會員個資：
+> 🛡️ **先寫存取稽核再匯出**：App 端揭露完整個資都會落 `pii_access_log`（fail-closed）。本流程是風險最高的整包匯出，**須先補稽核列**，否則「誰在何時匯出客人 X 全部個資」在系統稽核表查無紀錄。先跑（每張訂單一列）：
+
+```sql
+insert into public.pii_access_log (actor_id, actor_email, order_id, fields)
+select '<admin_auth_id>', '<admin_email>', id,
+       array['subject_access_export']
+  from public.orders where member_id = '<member_id>';
+```
+
+再以 service role 匯出該會員**全部** PII 來源（勿遺漏 `payment.raw_callback` 與 `order_status_log.note`，兩者皆可能含收件個資）：
 
 ```sql
 select * from public.member where id = '<member_id>';
@@ -287,6 +296,14 @@ select oi.* from public.order_item oi
   join public.orders o on o.id = oi.order_id
  where o.member_id = '<member_id>';
 select * from public.support_request where member_id = '<member_id>';
+-- 綠界回拋內嵌收件姓名/電話/地址
+select p.order_id, p.raw_callback from public.payment p
+  join public.orders o on o.id = p.order_id
+ where o.member_id = '<member_id>' and p.raw_callback is not null;
+-- 狀態紀錄 note 可能夾帶客人姓名/電話（如面交出貨備註）
+select id, order_id, note from public.order_status_log
+ where order_id in (select id from public.orders where member_id = '<member_id>')
+   and note is not null;
 ```
 
 ### 10.2 更正
@@ -306,19 +323,21 @@ update public.member set name = '<新值>' where id = '<member_id>';
 ```sql
 select public.anonymize_member(
   '<member_id>',        -- 目標會員
-  '<admin_auth_id>',    -- 管理員的 auth.users id（稽核 actor）
-  '<admin_email>'       -- 管理員 email
+  '<admin_auth_id>'     -- 管理員的 auth.users id（稽核 actor；email 由 RPC 反查）
 );
 ```
 
-- `<admin_auth_id>` **須為有效 auth.users id**，否則 `pii_erasure_log` FK 違反、整筆 rollback。
-- 冪等：已匿名的會員再呼叫回 `U0011`（SQLSTATE）；查無會員回 `U0010`。
-- RPC 洗：`member.email/name`、`orders` 收件四欄＋面交 `tracking_no` 備註＋`invoice_meta` 的 `carrier_num`／`customer_identifier`、`payment.raw_callback`、`support_request.description`；保留帳務欄位、宅配單號、發票稅務結果。
+- `<admin_auth_id>` **須為有效 auth.users id**，否則回 `U0013`、整筆 rollback（`actor_email` 由 RPC 反查 `auth.users`，不需也不接受手填）。
+- **`U0012`＝會員有未完成（非終態）訂單**：RPC 不洗任何資料。《個資法》容許對進行中契約延後執行——待該訂單 `completed`／`cancelled`／`refunded` 後再跑。先查：`select order_no, status from public.orders where member_id='<member_id>' and status not in ('completed','cancelled','refunded');`
+- 冪等：已匿名的會員再呼叫回 `U0011`；查無會員回 `U0010`。
+- RPC 洗：`member.email/name`、`orders` 收件四欄＋面交 `tracking_no` 備註＋`invoice_meta` 的 `carrier_num`（手機載具；**買方統編 `customer_identifier` 保留**＝公司識別碼＋發票法定保存）＋**`order_status_log.note` 的面交備註**、`payment.raw_callback`、`support_request.description`；保留帳務欄位、宅配單號、發票稅務結果與統編。
+
+> ⚠️ **送禮訂單的已知限制**：匿名化只及 `member_id = <當事人>` 的訂單。若當事人是「他人代寄」訂單的**收件人**，其姓名/電話/地址存在**下單者**的 `orders.recipient_*`、本 RPC 不會涵蓋。此類殘留需個案 `select ... where recipient_phone = '<當事人電話>'` 人工比對處置——`pii_erasure_log` 僅記錄本人訂單範圍。
 
 **接著手動處置 RPC 碰不到的兩處：**
 
-1. **auth.users**（RPC 只動 public schema）：Supabase Dashboard → Authentication → 該用戶 → **Ban user**（停用登入）＋將 auth email 覆寫為匿名值（best-effort 抹除真實 email）。因 orders RESTRICT，auth 帳號永遠無法實體刪除，離線紀錄保留、僅停用——為接受取捨。
-2. **order_status_log.note**（append-only 稽核，不機械洗）：逐列人工檢視、發現客人姓名/電話等 PII 才個案處置：
+1. **auth.users**（RPC 只動 public schema）：Supabase Dashboard → Authentication → 該用戶 → **Ban user**（停用登入）＋將 auth email 覆寫為匿名值（best-effort 抹除真實 email）。因 orders RESTRICT，auth 帳號永遠無法實體刪除，離線紀錄保留、僅停用——為接受取捨。（app 層另有 `findOrCreateMember` 守衛拒絕已匿名會員建單，堵住 ban 前的窗口，但 ban 仍應盡快執行。）
+2. **order_status_log.note 的「非面交」PII**：面交出貨備註已由 RPC 自動截斷；此步僅逐列檢視**管理員自由輸入**的 note（override 理由等）是否夾帶客人姓名/電話，發現才個案處置：
 
 ```sql
 select id, order_id, note from public.order_status_log
