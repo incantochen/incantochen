@@ -1,6 +1,11 @@
 import "server-only";
 import { escapeHtml } from "@/lib/email/escape-html";
 
+// 品牌字樣字體堆疊：對齊網站首頁的 --font-head（EB Garamond serif）。
+// email 客戶端多半不載入 webfont，故用「有就用、沒有退 Georgia serif」的堆疊
+// ——與網站自身的 fallback 一致，讓 incantochen 字樣呈現 serif 而非預設 sans。
+const BRAND_FONT = "'EB Garamond', Georgia, 'Times New Roman', serif";
+
 // 寄件人（單一出處，T136）：所有信件檔 import 此常數，勿各自宣告複本。
 // TODO(T35): 網域驗證後改 verified custom domain（例：orders@incantochen.com），
 // 只需改這一行、全部信件跟著換。
@@ -42,7 +47,7 @@ export function renderCustomerEmailShell(opts: {
           <!-- Header -->
           <tr>
             <td style="background:#0f3325;padding:28px 40px;text-align:center;">
-              <div style="font-size:22px;letter-spacing:0.12em;color:#c9a84c;font-weight:400;">incantochen</div>
+              <div style="font-family:${BRAND_FONT};font-size:22px;letter-spacing:0.12em;color:#c9a84c;font-weight:400;">incantochen</div>
             </td>
           </tr>
 
@@ -101,7 +106,7 @@ export function renderEmailShell(opts: {
 <tr><td align="center">
 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#fff;border-radius:4px;border:1px solid #e5e7eb;">
   <tr><td style="background:#0f3325;padding:20px 32px;">
-    <div style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#c9a84c;">${opts.headerLabel}</div>
+    <div style="font-family:${BRAND_FONT};font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#c9a84c;">${opts.headerLabel}</div>
   </td></tr>
   <tr><td style="padding:28px 32px;">
     <p style="margin:0 0 4px;font-size:13px;letter-spacing:0.14em;text-transform:uppercase;color:#c9a84c;">${opts.eyebrow}</p>
