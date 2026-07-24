@@ -92,7 +92,7 @@ describe("shipOrder 先驗狀態轉換再寫 tracking_no（T77）", () => {
   it("非法轉換（transitionOrder 拋錯）→ 回失敗，且絕不寫入 tracking_no", async () => {
     state.transitionThrow = new Error("illegal transition")
 
-    const result = await shipOrder("order-1", "JT1234567890")
+    const result = await shipOrder("order-1", "JT1234567890", "delivery")
 
     expect(result.ok).toBe(false)
     // 核心不變式：轉換失敗時 orders.update(tracking_no) 完全沒被呼叫
@@ -104,18 +104,21 @@ describe("shipOrder 先驗狀態轉換再寫 tracking_no（T77）", () => {
   it("競態（OrderTransitionRaceError）→ 回競態訊息，同樣不寫 tracking_no", async () => {
     state.transitionThrow = new OrderTransitionRaceError("race")
 
-    const result = await shipOrder("order-1", "JT1234567890")
+    const result = await shipOrder("order-1", "JT1234567890", "delivery")
 
     expect(result.ok).toBe(false)
     expect(trackingUpdates).toHaveLength(0)
   })
 
   it("合法路徑 → 先 transition、後寫 tracking_no、再 sendOnce，回 ok", async () => {
-    const result = await shipOrder("order-1", "JT1234567890")
+    const result = await shipOrder("order-1", "JT1234567890", "delivery")
 
     expect(result).toEqual({ ok: true })
     expect(trackingUpdates).toEqual([
-      { table: "orders", values: { tracking_no: "JT1234567890" } },
+      {
+        table: "orders",
+        values: { tracking_no: "JT1234567890", delivery_method: "delivery" },
+      },
     ])
     // 順序正確：轉換在寫單號之前
     expect(callOrder).toEqual(["transition", "update-tracking", "sendOnce"])
@@ -124,7 +127,7 @@ describe("shipOrder 先驗狀態轉換再寫 tracking_no（T77）", () => {
   it("tracking_no 寫入失敗 → 訂單已 shipped，回 warning（非 error）、不寄通知", async () => {
     state.trackingUpdateError = { message: "connection reset" }
 
-    const result = await shipOrder("order-1", "JT1234567890")
+    const result = await shipOrder("order-1", "JT1234567890", "delivery")
 
     expect(result.ok).toBe(true)
     expect((result as { warning?: string }).warning).toMatch(/物流單號寫入失敗/)

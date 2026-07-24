@@ -8,6 +8,8 @@ import type { AdminActionResult } from "@/lib/admin/action-result";
 import { logPiiAccess } from "@/lib/pii/audit";
 import { sendOrderShippedNotification } from "@/lib/email/order-shipped-notification";
 import { sendOnce } from "@/lib/notification/send-once";
+import type { DeliveryMethod } from "@/lib/order/delivery-method";
+import { parseTracking } from "@/lib/order/shipping-tracking";
 import {
   transitionOrder,
   adminOverrideStatus,
@@ -89,6 +91,7 @@ export async function changeStatus(
 export async function shipOrder(
   orderId: string,
   trackingNo: string,
+  deliveryMethod: DeliveryMethod,
 ): Promise<AdminActionResult> {
   const user = await requireAdmin();
   const supabase = createServiceRoleClient();
@@ -113,9 +116,13 @@ export async function shipOrder(
   // 已是 shipped、僅缺單號——回 warning 提示操作者用「修正物流單號」補填，
   // 不回 error（會誤導成「出貨沒成功」，實際已 shipped）。單號未寫入時通知
   // 信也不寄（sendOrderShippedNotification 見 tracking_no 為空即跳過）。
+  // T137：出貨時把實際配送方式一併寫回正規欄位 delivery_method——email／訂單
+  // 詳情頁的面交判斷改讀此欄（0024），若這裡只寫 tracking_no，admin 於出貨時
+  // 改了方向就會與客人結帳所選分裂（宅配單被當面交、或真單號被吞），重現
+  // shipping-tracking.ts 當初要防的矛盾。delivery_method 為唯一真實來源。
   const { error: trackingError } = await supabase
     .from("orders")
-    .update({ tracking_no: trackingNo })
+    .update({ tracking_no: trackingNo, delivery_method: deliveryMethod })
     .eq("id", orderId);
 
   revalidatePath(`/admin/orders/${orderId}`);
@@ -296,9 +303,16 @@ export async function saveTrackingNo(orderId: string, trackingNo: string) {
   await requireAdmin();
   const supabase = createServiceRoleClient();
 
+  // T137：「修正物流單號」是 tracking_no 的第二條寫入路徑——同樣依 tracking
+  // 內容推導配送方式並寫回 delivery_method，避免管理者把單號改成「面交…」
+  // （或反向改成真單號）後，正規欄位與實際不符再度分裂。
+  const deliveryMethod: DeliveryMethod = parseTracking(trackingNo).isPickup
+    ? "pickup"
+    : "delivery";
+
   const { error } = await supabase
     .from("orders")
-    .update({ tracking_no: trackingNo })
+    .update({ tracking_no: trackingNo, delivery_method: deliveryMethod })
     .eq("id", orderId);
 
   if (error) throw new Error(`更新物流單號失敗：${error.message}`);

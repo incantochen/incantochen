@@ -118,4 +118,23 @@ describe("checkoutFormSchema：配送方式與條件式地址驗證（T137）", 
     });
     expect(result.success).toBe(false);
   });
+
+  it("面交帶了地址／郵遞區號被拒絕（髒資料不得搭 pickup 順風車）", () => {
+    const result = checkoutFormSchema.safeParse({
+      ...validBase,
+      deliveryMethod: "pickup",
+      zipCode: "100",
+      shippingAddress: "台北市中正區重慶南路一段1號",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("超過 5 碼的郵遞區號被拒絕（信任邊界長度上限）", () => {
+    const result = checkoutFormSchema.safeParse({
+      ...validBase,
+      deliveryMethod: "delivery",
+      zipCode: "1006411",
+    });
+    expect(result.success).toBe(false);
+  });
 });

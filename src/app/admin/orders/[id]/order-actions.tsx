@@ -100,7 +100,7 @@ export function OrderActions({
 
     startTransition(async () => {
       try {
-        const result = await shipOrder(orderId, tracking);
+        const result = await shipOrder(orderId, tracking, shipMethod);
         if (!result.ok) {
           notify(result.error, true);
           return;

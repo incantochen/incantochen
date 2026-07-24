@@ -23,9 +23,11 @@ export const checkoutFormSchema = z
       .string()
       .min(1, "請輸入電話")
       .regex(/^[0-9-]{8,15}$/, "請輸入有效的電話號碼"),
-    // T137：宅配才驗郵遞區號／地址（見下方 superRefine）。面交免地址——base
-    // 放寬為可空（地址仍保留長度上限），面交時前端送空字串。
-    zipCode: z.string(),
+    // T137：宅配才驗郵遞區號／地址格式（見下方 superRefine）。面交免地址——
+    // base 放寬為可空但仍保留長度上限（郵遞區號 5 碼、地址 200 字），避免繞過
+    // UI 送 pickup＋超長 zipCode／address 灌進 orders 的 text 欄（無限長）造成
+    // 垃圾持久化——長度上限一律在信任邊界（伺服器 schema）就擋。
+    zipCode: z.string().max(5, "郵遞區號長度上限 5 碼"),
     shippingAddress: z.string().max(200, "地址長度上限 200 字"),
     customConsent: z.literal(true, { message: "請勾選同意後再繼續" }),
     // T137：配送方式（面交／宅配），型別與 enum 單一出處於 delivery-method.ts。
@@ -40,7 +42,8 @@ export const checkoutFormSchema = z
     carrierBarcode: z.string().optional(),
   })
   .superRefine((values, ctx) => {
-    // T137：宅配才驗郵遞區號＋地址；面交（pickup）免地址（允許空字串）。
+    // T137：宅配才驗郵遞區號＋地址；面交（pickup）免地址且必須為空——面交無
+    // 收件地址概念，強制空值讓髒資料無法搭 pickup 順風車寫進 DB（信任邊界）。
     if (values.deliveryMethod === "delivery") {
       if (!/^\d{3}(\d{2})?$/.test(values.zipCode)) {
         ctx.addIssue({
@@ -54,6 +57,21 @@ export const checkoutFormSchema = z
           code: "custom",
           path: ["shippingAddress"],
           message: "請輸入地址",
+        });
+      }
+    } else if (values.deliveryMethod === "pickup") {
+      if (values.zipCode !== "") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["zipCode"],
+          message: "面交無需郵遞區號",
+        });
+      }
+      if (values.shippingAddress !== "") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["shippingAddress"],
+          message: "面交無需地址",
         });
       }
     }

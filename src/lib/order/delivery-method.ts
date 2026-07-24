@@ -4,9 +4,11 @@ import { z } from "zod";
 // order-status.ts 的集中式常數慣例，避免字面量散落於 schema／元件／顯示層
 // 各處手刻後失同步（改值只改這裡，type 收斂讓新增值時各處編譯期報缺）。
 // 與 orders.delivery_method 的 CHECK 約束（migration 0024）對齊。
-export type DeliveryMethod = "delivery" | "pickup";
+// 單一出處＝DELIVERY_METHODS：type、enum 皆由它衍生，新增第三種方式只改這個
+// 陣列，型別／zod enum 自動跟上、LABELS 少一鍵即編譯期報缺（真正的單一出處）。
+export const DELIVERY_METHODS = ["delivery", "pickup"] as const;
 
-export const DELIVERY_METHODS: DeliveryMethod[] = ["delivery", "pickup"];
+export type DeliveryMethod = (typeof DELIVERY_METHODS)[number];
 
 export const DELIVERY_METHOD_LABELS: Record<DeliveryMethod, string> = {
   delivery: "宅配（黑貓保價＋本人簽收）",
@@ -15,4 +17,4 @@ export const DELIVERY_METHOD_LABELS: Record<DeliveryMethod, string> = {
 
 // checkout schema 與其他需驗證配送方式的端共用。default('delivery')：admin
 // 代客建單（T111）共用 checkoutFormSchema 但不收配送方式 UI，缺省視同宅配。
-export const deliveryMethodSchema = z.enum(["delivery", "pickup"]);
+export const deliveryMethodSchema = z.enum(DELIVERY_METHODS);
