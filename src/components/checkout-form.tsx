@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { checkoutFormSchema } from "@/lib/checkout/schema";
+import { AddressSelect } from "@/components/address-select";
 import { createOrder } from "@/app/checkout/actions";
 import { flattenFieldErrors } from "@/lib/zod/flatten-field-errors";
 
@@ -12,6 +13,10 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [email, setEmail] = useState(defaultEmail);
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
+  // T48 地址標準化：縣市／區走連動下拉，選定後自動帶郵遞區號；shippingAddress
+  // 僅存「詳細地址」（街道巷弄號樓），送出時前面串上縣市＋區組成完整寄件地址。
+  const [city, setCity] = useState("");
+  const [district, setDistrict] = useState("");
   const [zipCode, setZipCode] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [customConsent, setCustomConsent] = useState(false);
@@ -31,6 +36,10 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
   const [isPending, startTransition] = useTransition();
 
   function validate() {
+    const nextErrors: Partial<Record<string, string>> = {};
+    // 縣市／區為連動下拉，schema 不涵蓋，於此手動要求（zipCode 由選擇自動帶）。
+    if (!city) nextErrors.city = "請選擇縣市";
+    if (!district) nextErrors.district = "請選擇鄉鎮市區";
     const result = checkoutFormSchema.safeParse({
       email,
       recipientName,
@@ -42,12 +51,11 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
       taxId,
       carrierBarcode,
     });
-    if (result.success) {
-      setErrors({});
-      return true;
+    if (!result.success) {
+      Object.assign(nextErrors, flattenFieldErrors(result.error));
     }
-    setErrors(flattenFieldErrors(result.error));
-    return false;
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -63,7 +71,8 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         recipientName,
         recipientPhone,
         zipCode,
-        shippingAddress,
+        // 存完整寄件地址＝縣市＋區＋詳細地址，物流標籤／後台看得到全址。
+        shippingAddress: `${city}${district}${shippingAddress}`,
         customConsent: customConsent as true,
         invoiceTarget,
         taxId,
@@ -143,6 +152,19 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         )}
       </div>
 
+      {/* T48 地址標準化：縣市→區連動下拉，自動帶郵遞區號 */}
+      <AddressSelect
+        city={city}
+        district={district}
+        cityError={errors.city}
+        districtError={errors.district}
+        onChange={({ city: nextCity, district: nextDistrict, zip }) => {
+          setCity(nextCity);
+          setDistrict(nextDistrict);
+          setZipCode(zip);
+        }}
+      />
+
       <div className="mb-4 grid grid-cols-[120px_1fr] gap-3">
         <div>
           <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
@@ -150,12 +172,11 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
           </label>
           <input
             type="text"
-            inputMode="numeric"
-            maxLength={5}
             value={zipCode}
-            onChange={(e) => setZipCode(e.target.value.replace(/\D/g, ""))}
-            onBlur={validate}
-            className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
+            readOnly
+            aria-label="郵遞區號（由縣市與區自動帶入）"
+            placeholder="—"
+            className="mt-2 w-full rounded-lg border border-border bg-cloud px-3.5 py-3 text-sm text-ash outline-none"
           />
           {errors.zipCode && (
             <p className="mt-1 text-sm text-destructive">{errors.zipCode}</p>
@@ -163,14 +184,17 @@ export function CheckoutForm({ defaultEmail }: { defaultEmail: string }) {
         </div>
         <div>
           <label className="block text-[11px] tracking-[0.16em] text-ash uppercase">
-            地址
+            詳細地址
           </label>
           <input
             type="text"
-            maxLength={200}
+            // 上限 190：送出時前串縣市＋區（≤9 字），組出全址須 ≤ 200
+            // （server 端同一 schema 的 shippingAddress max 200，超出會拒單）。
+            maxLength={190}
             value={shippingAddress}
             onChange={(e) => setShippingAddress(e.target.value)}
             onBlur={validate}
+            placeholder="街道、巷弄、號、樓"
             className="mt-2 w-full rounded-lg border border-border px-3.5 py-3 text-sm outline-none focus:border-primary"
           />
           {errors.shippingAddress && (
